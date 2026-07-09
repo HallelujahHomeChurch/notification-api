@@ -13,7 +13,8 @@ type Sender interface {
 }
 
 type LogSender struct {
-	Logger *log.Logger
+	Logger  *log.Logger
+	LogBody bool
 }
 
 func (s LogSender) Send(_ context.Context, email Email) error {
@@ -22,6 +23,9 @@ func (s LogSender) Send(_ context.Context, email Email) error {
 		logger = log.Default()
 	}
 	logger.Printf("notification email accepted to=%s subject=%q", email.To, email.Subject)
+	if s.LogBody {
+		logger.Printf("notification email body to=%s:\n%s", email.To, email.Body)
+	}
 	return nil
 }
 

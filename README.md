@@ -16,6 +16,8 @@ go run ./cmd/server
 
 If `SMTP_ADDR` is empty, emails are logged instead of sent.
 
+Set `LOG_EMAIL_BODY=true` only for local end-to-end tests to print verification and password-reset links. It is `false` by default and must remain disabled outside local development because links contain single-use tokens.
+
 ## Azure Queue Mode
 
 Production uses Azure Service Bus:

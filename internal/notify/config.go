@@ -18,6 +18,7 @@ type Config struct {
 	RecipientDailyLimit        int
 	GlobalDailyLimit           int
 	NotificationsDisabled      bool
+	LogEmailBody               bool
 	SMTPAddr                   string
 	SMTPUsername               string
 	SMTPPassword               string
@@ -37,6 +38,7 @@ func LoadConfig() Config {
 		RecipientDailyLimit:        intEnv("EMAIL_RECIPIENT_DAILY_LIMIT", 5),
 		GlobalDailyLimit:           intEnv("EMAIL_GLOBAL_DAILY_LIMIT", 1000),
 		NotificationsDisabled:      boolEnv("NOTIFICATIONS_DISABLED", false),
+		LogEmailBody:               boolEnv("LOG_EMAIL_BODY", false),
 		SMTPAddr:                   os.Getenv("SMTP_ADDR"),
 		SMTPUsername:               os.Getenv("SMTP_USERNAME"),
 		SMTPPassword:               os.Getenv("SMTP_PASSWORD"),

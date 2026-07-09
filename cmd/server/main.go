@@ -82,7 +82,7 @@ func newLimiter(cfg notify.Config) notify.Limiter {
 
 func newSender(cfg notify.Config, logger *log.Logger) notify.Sender {
 	if cfg.SMTPAddr == "" {
-		return notify.LogSender{Logger: logger}
+		return notify.LogSender{Logger: logger, LogBody: cfg.LogEmailBody}
 	}
 	return notify.SMTPSender{
 		Addr:     cfg.SMTPAddr,
