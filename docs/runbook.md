@@ -500,8 +500,8 @@ and the controlled time window; unknown acceptance means no replay.
 
 ## Production acceptance
 
-Status: **pending SMTP configuration and first production deployment**.
-Static/local checks are not live acceptance.
+Status: **infrastructure and production migration completed; runtime and SMTP
+acceptance pending**. Static/local checks are not live acceptance.
 
 - [x] Unit tests, PostgreSQL integration tests, and vet pass.
 - [x] Bicep and release workflow static validation pass.
@@ -509,7 +509,7 @@ Static/local checks are not live acceptance.
 - [ ] `SMTP_ADDR`, `SMTP_FROM`, and
       `SMTP_AUTHENTICATION_ENABLED` production repository variables are set.
 - [ ] Required SMTP Key Vault credentials exist when authentication is enabled.
-- [ ] Production migration job succeeds.
+- [x] Production migration job succeeds.
 - [ ] Production API and worker latest revisions become ready on the exact
       immutable image.
 - [ ] Gateway Dapr invocation of notification `/ready` returns the expected
