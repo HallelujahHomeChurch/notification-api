@@ -52,10 +52,10 @@ func (s *fakeStore) markRetry(_ context.Context, claimed claim, delay time.Durat
 	return nil
 }
 
-type publisherFunc func(context.Context, string) error
+type publisherFunc func(context.Context, string, string) error
 
-func (fn publisherFunc) Publish(ctx context.Context, deliveryID string) error {
-	return fn(ctx, deliveryID)
+func (fn publisherFunc) Publish(ctx context.Context, outboxID, deliveryID string) error {
+	return fn(ctx, outboxID, deliveryID)
 }
 
 func TestDispatchMarksPublishedOnlyAfterBrokerAcknowledgement(t *testing.T) {
@@ -63,9 +63,9 @@ func TestDispatchMarksPublishedOnlyAfterBrokerAcknowledgement(t *testing.T) {
 		claim:   claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Attempt: 1},
 		claimOK: true,
 	}
-	publisher := publisherFunc(func(_ context.Context, deliveryID string) error {
-		if deliveryID != "delivery-1" {
-			t.Fatalf("delivery ID = %q", deliveryID)
+	publisher := publisherFunc(func(_ context.Context, outboxID, deliveryID string) error {
+		if outboxID != "outbox-1" || deliveryID != "delivery-1" {
+			t.Fatalf("outbox ID=%q delivery ID=%q", outboxID, deliveryID)
 		}
 		if len(store.published) != 0 {
 			t.Fatal("outbox marked published before broker acknowledgement")
@@ -88,7 +88,7 @@ func TestDispatchFailureSchedulesBoundedJitteredBackoff(t *testing.T) {
 		claimOK: true,
 	}
 	brokerErr := errors.New("broker unavailable")
-	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string) error {
+	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
 		return brokerErr
 	}))
 	dispatcher.random = func(int64) int64 { return 0 }
@@ -113,7 +113,7 @@ func TestDispatchCancelsBlockedPublishBeforeLeaseExpires(t *testing.T) {
 		claim:   claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Attempt: 1},
 		claimOK: true,
 	}
-	dispatcher := newDispatcher(store, publisherFunc(func(ctx context.Context, _ string) error {
+	dispatcher := newDispatcher(store, publisherFunc(func(ctx context.Context, _, _ string) error {
 		deadline, ok := ctx.Deadline()
 		if !ok {
 			t.Fatal("publisher context has no deadline")
@@ -140,7 +140,7 @@ func TestRunReturnsAfterPersistentDependencyFailures(t *testing.T) {
 		claim:   claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Attempt: 1},
 		claimOK: true,
 	}
-	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string) error {
+	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
 		return errors.New("broker unavailable")
 	}))
 	dispatcher.maxConsecutiveFailures = 3
@@ -159,7 +159,7 @@ func TestDispatchReturnsClaimFailureWithoutPublishing(t *testing.T) {
 	databaseErr := errors.New("database unavailable")
 	store := &fakeStore{claimErr: databaseErr}
 	published := false
-	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string) error {
+	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
 		published = true
 		return nil
 	}))
@@ -179,7 +179,7 @@ func TestRunResetsDatabaseFailuresAfterHealthyIdleCheck(t *testing.T) {
 		{err: databaseErr},
 		{},
 	}}
-	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string) error {
+	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
 		t.Fatal("publisher called without a claim")
 		return nil
 	}))
@@ -212,7 +212,7 @@ func TestRunKeepsCompletionWriteFailuresAcrossIdlePolls(t *testing.T) {
 		},
 		publishErrs: []error{databaseErr, databaseErr, databaseErr},
 	}
-	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string) error {
+	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
 		return nil
 	}))
 	dispatcher.maxConsecutiveFailures = 3
@@ -231,5 +231,48 @@ func TestRunKeepsCompletionWriteFailuresAcrossIdlePolls(t *testing.T) {
 	}
 	if len(store.published) != 3 {
 		t.Fatalf("markPublished calls = %d, want 3", len(store.published))
+	}
+}
+
+func TestDispatchKeepsTransportIDStableForRowRetriesAndDistinctForApplicationRetry(t *testing.T) {
+	store := &fakeStore{claimScript: []claimResult{
+		{claim: claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Attempt: 1}, ok: true},
+		{claim: claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Attempt: 2}, ok: true},
+		{claim: claim{OutboxID: "outbox-2", DeliveryID: "delivery-1", Attempt: 1}, ok: true},
+	}}
+	var transportIDs []string
+	brokerErr := errors.New("transport retry")
+	dispatcher := newDispatcher(store, publisherFunc(func(
+		_ context.Context,
+		outboxID string,
+		deliveryID string,
+	) error {
+		if deliveryID != "delivery-1" {
+			t.Fatalf("delivery ID = %q", deliveryID)
+		}
+		transportIDs = append(transportIDs, outboxID)
+		if len(transportIDs) == 1 {
+			return brokerErr
+		}
+		return nil
+	}))
+
+	for attempt := range 3 {
+		processed, err := dispatcher.DispatchOne(context.Background())
+		if !processed {
+			t.Fatalf("DispatchOne() processed=%v error=%v", processed, err)
+		}
+		if attempt == 0 && !errors.Is(err, brokerErr) {
+			t.Fatalf("first DispatchOne() error = %v, want transport retry", err)
+		}
+		if attempt > 0 && err != nil {
+			t.Fatalf("DispatchOne() attempt %d error = %v", attempt+1, err)
+		}
+	}
+	want := []string{"outbox-1", "outbox-1", "outbox-2"}
+	for index := range want {
+		if transportIDs[index] != want[index] {
+			t.Fatalf("transport IDs = %#v, want %#v", transportIDs, want)
+		}
 	}
 }

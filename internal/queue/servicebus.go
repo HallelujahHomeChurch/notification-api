@@ -63,7 +63,10 @@ func newServiceBus(sender messageSender, close func(context.Context) error) *Ser
 	return &ServiceBus{sender: sender, close: close}
 }
 
-func (q *ServiceBus) Publish(ctx context.Context, deliveryID string) error {
+func (q *ServiceBus) Publish(ctx context.Context, messageID, deliveryID string) error {
+	if messageID == "" {
+		return errors.New("message ID is required")
+	}
 	if deliveryID == "" {
 		return errors.New("delivery ID is required")
 	}
@@ -74,13 +77,12 @@ func (q *ServiceBus) Publish(ctx context.Context, deliveryID string) error {
 		return fmt.Errorf("encode service bus message: %w", err)
 	}
 	contentType := "application/json"
-	messageID := deliveryID
 	if err := q.sender.SendMessage(ctx, &azservicebus.Message{
 		Body:        body,
 		ContentType: &contentType,
 		MessageID:   &messageID,
 	}, nil); err != nil {
-		return fmt.Errorf("publish delivery %s: %w", deliveryID, err)
+		return fmt.Errorf("publish outbox message %s: %w", messageID, err)
 	}
 	return nil
 }

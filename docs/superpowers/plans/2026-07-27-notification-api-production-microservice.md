@@ -594,7 +594,9 @@ Cover multi-replica lease exclusion, lease expiry recovery, stable Service Bus `
 
 - Production: `azidentity.NewDefaultAzureCredential` and `azservicebus.NewClient(namespaceFQDN, credential, nil)`.
 - Development: allow `SERVICEBUS_CONNECTION_STRING` for the official emulator.
-- Queue messages contain JSON `{"deliveryId":"uuid"}` and set broker `MessageID` to the delivery UUID.
+- Queue messages contain JSON `{"deliveryId":"uuid"}` and set broker
+  `MessageID` to the outbox row UUID. Transport retries reuse that ID;
+  application retries create a new outbox row and therefore a new ID.
 
 - [ ] **Step 3: Implement leased outbox dispatch**
 
@@ -876,7 +878,7 @@ The verify job starts a PostgreSQL service container, creates
 
 ```bash
 go test ./...
-go test -tags=integration ./internal/integration -count=1
+go test -tags=integration ./... -count=1
 ```
 
 - [ ] **Step 2: Implement release order**

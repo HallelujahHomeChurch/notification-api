@@ -99,7 +99,7 @@ func TestSendCreatesEncryptedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt(payload) error = %v", err)
 	}
-	if string(payload) != `{"verifyUrl":"https://account.alive.org.tw/verify-email?token=opaque-token"}` {
+	if string(payload) != `{"locale":"zh-Hant","fields":{"verifyUrl":"https://account.alive.org.tw/verify-email?token=opaque-token"}}` {
 		t.Fatalf("decrypted payload = %s", payload)
 	}
 }

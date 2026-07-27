@@ -26,31 +26,52 @@ type Definition struct {
 	SupportedLocale map[string]bool
 }
 
-var definitions = map[string]Definition{
+var definitions = map[string]map[int]Definition{
 	"account.verify-email": {
-		ID:              "account.verify-email",
-		Version:         1,
-		Channel:         "email",
-		AllowedCallers:  set("account-api"),
-		RequiredFields:  set("verifyUrl"),
-		AllowedFields:   set("verifyUrl"),
-		SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+		1: {
+			ID:              "account.verify-email",
+			Version:         1,
+			Channel:         "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("verifyUrl"),
+			AllowedFields:   set("verifyUrl"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+		},
 	},
 	"account.reset-password": {
-		ID:              "account.reset-password",
-		Version:         1,
-		Channel:         "email",
-		AllowedCallers:  set("account-api"),
-		RequiredFields:  set("resetUrl"),
-		AllowedFields:   set("resetUrl"),
-		SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+		1: {
+			ID:              "account.reset-password",
+			Version:         1,
+			Channel:         "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("resetUrl"),
+			AllowedFields:   set("resetUrl"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+		},
 	},
 }
 
+var currentVersions = map[string]int{
+	"account.verify-email":   1,
+	"account.reset-password": 1,
+}
+
 func Resolve(templateID, channel string) (Definition, error) {
-	definition, ok := definitions[templateID]
+	version, ok := currentVersions[templateID]
 	if !ok {
 		return Definition{}, fmt.Errorf("%w: %s", ErrUnknownTemplate, templateID)
+	}
+	return ResolveVersion(templateID, version, channel)
+}
+
+func ResolveVersion(templateID string, version int, channel string) (Definition, error) {
+	versions, ok := definitions[templateID]
+	if !ok {
+		return Definition{}, fmt.Errorf("%w: %s", ErrUnknownTemplate, templateID)
+	}
+	definition, ok := versions[version]
+	if !ok {
+		return Definition{}, fmt.Errorf("%w: %s version %d", ErrUnknownTemplate, templateID, version)
 	}
 	if definition.Channel != channel {
 		return Definition{}, fmt.Errorf("%w: %s", ErrUnsupportedChannel, channel)
@@ -59,7 +80,7 @@ func Resolve(templateID, channel string) (Definition, error) {
 }
 
 func Validate(definition Definition, caller string, request contracts.SendRequest) (map[string]string, error) {
-	canonical, err := Resolve(definition.ID, definition.Channel)
+	canonical, err := ResolveVersion(definition.ID, definition.Version, definition.Channel)
 	if err != nil {
 		return nil, err
 	}

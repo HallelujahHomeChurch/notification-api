@@ -75,7 +75,7 @@ func (d *Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	publishCtx, cancel := context.WithTimeout(ctx, d.publishTimeout)
-	err = d.publisher.Publish(publishCtx, claimed.DeliveryID)
+	err = d.publisher.Publish(publishCtx, claimed.OutboxID, claimed.DeliveryID)
 	cancel()
 	if err != nil {
 		retryErr := d.store.markRetry(ctx, claimed, d.retryDelay(claimed.Attempt))

@@ -1,6 +1,9 @@
 package templates
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestRenderEmailLocalizesAccountVerification(t *testing.T) {
 	definition := mustResolve(t, "account.verify-email")
@@ -38,5 +41,45 @@ func TestRenderEmailFallsBackToEnglish(t *testing.T) {
 	}
 	if email.Body != "Use this link to reset your HHC account password:\n\nhttps://account.alive.org.tw/reset-password?token=opaque\n" {
 		t.Fatalf("RenderEmail() body = %q", email.Body)
+	}
+}
+
+func TestQueuedVersionRendersAfterNewVersionBecomesCurrent(t *testing.T) {
+	templateID := "account.verify-email"
+	originalCurrent := currentVersions[templateID]
+	originalVersions := definitions[templateID]
+	t.Cleanup(func() {
+		currentVersions[templateID] = originalCurrent
+		definitions[templateID] = originalVersions
+	})
+
+	v1, err := ResolveVersion(templateID, 1, "email")
+	if err != nil {
+		t.Fatalf("ResolveVersion(v1) error = %v", err)
+	}
+	v2 := cloneDefinition(v1)
+	v2.Version = 2
+	v2.RequiredFields = set("confirmationUrl")
+	v2.AllowedFields = set("confirmationUrl")
+	definitions[templateID] = map[int]Definition{1: v1, 2: v2}
+	currentVersions[templateID] = 2
+
+	current, err := Resolve(templateID, "email")
+	if err != nil || current.Version != 2 {
+		t.Fatalf("Resolve(current) = %#v, error = %v", current, err)
+	}
+	email, err := RenderEmail(v1, "en", "user@example.test", map[string]string{
+		"verifyUrl": "https://account.alive.org.tw/verify-email?token=queued-v1",
+	})
+	if err != nil {
+		t.Fatalf("RenderEmail(queued v1) error = %v", err)
+	}
+	if email.Subject != "Verify your HHC account" {
+		t.Fatalf("RenderEmail(queued v1) subject = %q", email.Subject)
+	}
+	if _, err := RenderEmail(v2, "en", "user@example.test", map[string]string{
+		"confirmationUrl": "https://account.alive.org.tw/verify-email?token=v2",
+	}); !errors.Is(err, ErrUnknownTemplate) {
+		t.Fatalf("RenderEmail(unimplemented v2) error = %v, want ErrUnknownTemplate", err)
 	}
 }

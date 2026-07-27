@@ -110,7 +110,13 @@ func (s *Service) Send(
 	if err != nil {
 		return Result{}, fmt.Errorf("canonicalize notification request: %w", err)
 	}
-	payload, err := json.Marshal(validatedPayload)
+	payload, err := json.Marshal(struct {
+		Locale string            `json:"locale"`
+		Fields map[string]string `json:"fields"`
+	}{
+		Locale: request.Locale,
+		Fields: validatedPayload,
+	})
 	if err != nil {
 		return Result{}, fmt.Errorf("encode notification payload: %w", err)
 	}

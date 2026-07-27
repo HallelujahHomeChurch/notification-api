@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/mail"
 	"strings"
 	"time"
+
+	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
+	"github.com/HallelujahHomeChurch/notification-api/internal/templates"
 )
 
 // Task 9 removes this compatibility surface with the legacy runtime.
@@ -48,6 +53,10 @@ type Limiter interface {
 
 type Queue interface {
 	Enqueue(context.Context, Message) error
+}
+
+type Consumer interface {
+	Consume(context.Context, func(context.Context, Message) error) error
 }
 
 type Service struct {
@@ -133,5 +142,67 @@ func (q *MemoryQueue) Consume(ctx context.Context, handle func(context.Context, 
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+}
+
+func RunWorker(ctx context.Context, consumer Consumer, provider providers.Provider, logger *log.Logger) error {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return consumer.Consume(ctx, func(ctx context.Context, message Message) error {
+		email, err := BuildEmail(message)
+		if err != nil {
+			logger.Printf("notification build failed template=%s", message.Template)
+			return err
+		}
+		if _, err := provider.Send(ctx, email); err != nil {
+			logger.Printf("notification send failed template=%s", message.Template)
+			return err
+		}
+		logger.Printf("notification sent template=%s", message.Template)
+		return nil
+	})
+}
+
+// BuildEmail preserves the legacy worker contract until Task 9 replaces this runtime.
+func BuildEmail(message Message) (providers.DeliveryPayload, error) {
+	templateID, payload, err := legacyTemplate(message)
+	if err != nil {
+		return providers.DeliveryPayload{}, err
+	}
+	definition, err := templates.Resolve(templateID, "email")
+	if err != nil {
+		return providers.DeliveryPayload{}, err
+	}
+	request := contracts.SendRequest{
+		TemplateID: templateID,
+		Channel:    "email",
+		Target:     contracts.Target{Type: "email", Address: message.To},
+		Locale:     message.Locale,
+		Payload:    payload,
+	}
+	validated, err := templates.Validate(definition, "account-api", request)
+	if err != nil {
+		return providers.DeliveryPayload{}, err
+	}
+	rendered, err := templates.RenderEmail(definition, message.Locale, message.To, validated)
+	if err != nil {
+		return providers.DeliveryPayload{}, err
+	}
+	return providers.DeliveryPayload{
+		Recipient: rendered.To,
+		Subject:   rendered.Subject,
+		Body:      rendered.Body,
+	}, nil
+}
+
+func legacyTemplate(message Message) (string, map[string]string, error) {
+	switch message.Template {
+	case TemplateEmailVerification:
+		return "account.verify-email", map[string]string{"verifyUrl": message.Data["verify_url"]}, nil
+	case TemplatePasswordReset:
+		return "account.reset-password", map[string]string{"resetUrl": message.Data["reset_url"]}, nil
+	default:
+		return "", nil, fmt.Errorf("unsupported template")
 	}
 }

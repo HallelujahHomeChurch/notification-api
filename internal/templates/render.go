@@ -9,7 +9,7 @@ type Email struct {
 }
 
 func RenderEmail(definition Definition, locale, to string, payload map[string]string) (Email, error) {
-	canonical, err := Resolve(definition.ID, definition.Channel)
+	canonical, err := ResolveVersion(definition.ID, definition.Version, definition.Channel)
 	if err != nil {
 		return Email{}, err
 	}
@@ -21,13 +21,18 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 		locale = "en"
 	}
 
-	switch canonical.ID {
-	case "account.verify-email":
+	switch {
+	case canonical.ID == "account.verify-email" && canonical.Version == 1:
 		return renderVerificationEmail(locale, to, validated["verifyUrl"]), nil
-	case "account.reset-password":
+	case canonical.ID == "account.reset-password" && canonical.Version == 1:
 		return renderPasswordResetEmail(locale, to, validated["resetUrl"]), nil
 	default:
-		return Email{}, fmt.Errorf("%w: %s", ErrUnknownTemplate, canonical.ID)
+		return Email{}, fmt.Errorf(
+			"%w: %s version %d",
+			ErrUnknownTemplate,
+			canonical.ID,
+			canonical.Version,
+		)
 	}
 }
 
