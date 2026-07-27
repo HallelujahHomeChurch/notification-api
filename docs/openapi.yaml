@@ -1,0 +1,186 @@
+openapi: 3.1.0
+info:
+  title: HHC Notification API
+  version: 1.0.0
+  description: Private Dapr-invoked notification API. It is not browser-facing.
+paths:
+  /health:
+    get:
+      operationId: health
+      responses:
+        '200':
+          description: Process is running.
+  /ready:
+    get:
+      operationId: ready
+      responses:
+        '200':
+          description: Required dependencies are ready.
+        '503':
+          description: A required dependency is unavailable.
+  /priv/notifications/send:
+    post:
+      operationId: sendNotification
+      parameters:
+        - $ref: '#/components/parameters/DaprCallerAppID'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendRequest'
+      responses:
+        '202':
+          description: Notification queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendResponse'
+        '400':
+          description: Invalid request or missing idempotency key.
+        '401':
+          description: Missing Dapr caller identity.
+        '403':
+          description: Caller is not allowed.
+        '409':
+          description: Idempotency key was reused with a different request.
+  /priv/notifications/{messageId}:
+    get:
+      operationId: getNotificationStatus
+      parameters:
+        - $ref: '#/components/parameters/DaprCallerAppID'
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Notification status for the original caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationStatusResponse'
+        '401':
+          description: Missing Dapr caller identity.
+        '403':
+          description: Caller is not allowed.
+        '404':
+          description: Message does not exist or belongs to another caller.
+components:
+  parameters:
+    DaprCallerAppID:
+      name: Dapr-Caller-App-Id
+      in: header
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 1-200 visible ASCII characters. Retained for 30 days per caller.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+        pattern: '^[\x21-\x7E]{1,200}$'
+  schemas:
+    SendRequest:
+      type: object
+      additionalProperties: false
+      required: [templateId, channel, target, locale, payload, resource]
+      properties:
+        templateId:
+          type: string
+          example: account.verify-email
+        channel:
+          type: string
+          example: email
+        target:
+          $ref: '#/components/schemas/Target'
+        locale:
+          type: string
+          example: zh-Hant
+        payload:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            verifyUrl: https://account.alive.org.tw/verify-email?token=opaque
+        resource:
+          $ref: '#/components/schemas/Resource'
+    Target:
+      type: object
+      additionalProperties: false
+      required: [type, address]
+      properties:
+        type:
+          type: string
+          example: email
+        address:
+          type: string
+          format: email
+    Resource:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          example: account
+        id:
+          type: string
+    SendResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          type: object
+          required: [messageId, status, templateVersion, replayed]
+          properties:
+            messageId:
+              type: string
+            status:
+              type: string
+              enum: [queued, sending, sent, failed, dead_lettered]
+            templateVersion:
+              type: integer
+            replayed:
+              type: boolean
+        meta:
+          type: object
+          required: [requestId]
+          properties:
+            requestId:
+              type: string
+        error:
+          type: ['null', object]
+          properties:
+            code:
+              type: string
+    NotificationStatusResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          type: object
+          required: [messageId, status]
+          properties:
+            messageId:
+              type: string
+            status:
+              type: string
+              enum: [queued, sending, sent, failed, dead_lettered]
+        meta:
+          type: object
+          required: [requestId]
+          properties:
+            requestId:
+              type: string
+        error:
+          type: ['null', object]
+          properties:
+            code:
+              type: string

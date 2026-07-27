@@ -1,5 +1,8 @@
 package notify
 
+// Deprecated: this compatibility configuration remains until Task 9 moves the
+// legacy runtime to the durable notification command. New code uses internal/config.
+
 import (
 	"os"
 	"strconv"
