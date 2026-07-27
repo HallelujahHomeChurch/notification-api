@@ -12,7 +12,8 @@ set -a && source .env && set +a
 go run ./cmd/server
 ```
 
-`QUEUE_DRIVER=memory` runs the enqueue endpoint and worker in one process. It still uses Redis for email cooldown and daily caps.
+`cmd/server` remains the legacy worker runtime until the durable `api`, `worker`,
+and `migrate` commands are assembled. It exposes process health only.
 
 If `SMTP_ADDR` is empty, emails are logged instead of sent.
 
@@ -35,25 +36,32 @@ For local Azure-compatible testing, use the official Azure Service Bus emulator 
 Internal endpoint:
 
 ```http
-POST /priv/notification/v1/email
-X-Internal-Token: <optional shared token>
+POST /priv/notifications/send
+Dapr-Caller-App-Id: account-api
+Idempotency-Key: account.verify-email:<operation-id>
 Content-Type: application/json
 ```
 
 ```json
 {
-  "template": "email_verification",
-  "to": "user@example.com",
-  "data": {
-    "verify_url": "https://account.alive.org.tw/verify-email?token=..."
+  "templateId": "account.verify-email",
+  "channel": "email",
+  "target": {
+    "type": "email",
+    "address": "user@example.com"
+  },
+  "locale": "zh-Hant",
+  "payload": {
+    "verifyUrl": "https://account.alive.org.tw/verify-email?token=..."
+  },
+  "resource": {
+    "type": "account",
+    "id": "user-id"
   }
 }
 ```
 
-Templates:
-
-- `email_verification` requires `data.verify_url`
-- `password_reset` requires `data.reset_url`
+See `docs/openapi.yaml` for the complete private contract.
 
 ## Checks
 

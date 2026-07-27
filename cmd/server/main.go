@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/notify"
-	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -23,9 +22,7 @@ func main() {
 		logger.Fatalf("queue setup failed: %v", err)
 	}
 
-	limiter := newLimiter(cfg)
 	sender := newSender(cfg, logger)
-	service := notify.NewService(limiter, queue)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -36,9 +33,13 @@ func main() {
 		}
 	}()
 
+	legacyMux := http.NewServeMux()
+	legacyMux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           notify.NewHandler(service, cfg.InternalToken),
+		Handler:           legacyMux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -67,17 +68,6 @@ func newQueue(cfg notify.Config) (interface {
 	default:
 		return nil, errors.New("QUEUE_DRIVER must be memory or servicebus")
 	}
-}
-
-func newLimiter(cfg notify.Config) notify.Limiter {
-	if cfg.NotificationsDisabled {
-		return notify.DisabledLimiter{}
-	}
-	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
-	})
-	return notify.NewRedisLimiter(client, cfg.EmailCooldown, cfg.RecipientDailyLimit, cfg.GlobalDailyLimit)
 }
 
 func newSender(cfg notify.Config, logger *log.Logger) notify.Sender {

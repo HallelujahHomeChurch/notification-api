@@ -11,7 +11,6 @@ import (
 
 type Config struct {
 	Port                       string
-	InternalToken              string
 	QueueDriver                string
 	ServiceBusConnectionString string
 	ServiceBusQueueName        string
@@ -31,7 +30,6 @@ type Config struct {
 func LoadConfig() Config {
 	return Config{
 		Port:                       env("PORT", "8081"),
-		InternalToken:              os.Getenv("INTERNAL_API_TOKEN"),
 		QueueDriver:                env("QUEUE_DRIVER", "memory"),
 		ServiceBusConnectionString: os.Getenv("SERVICEBUS_CONNECTION_STRING"),
 		ServiceBusQueueName:        env("SERVICEBUS_QUEUE_NAME", "notifications-email"),
