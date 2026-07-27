@@ -15,7 +15,7 @@ ARG TARGETARCH
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -ldflags="-w -s" -o notification-api ./cmd/server
+    go build -ldflags="-w -s" -o notification-api ./cmd/notification
 
 FROM --platform=$TARGETPLATFORM gcr.io/distroless/static-debian12:nonroot
 
@@ -28,3 +28,4 @@ USER nonroot:nonroot
 EXPOSE 8081
 
 ENTRYPOINT ["/app/notification-api"]
+CMD ["api"]

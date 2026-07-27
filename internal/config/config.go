@@ -16,7 +16,6 @@ const (
 
 type Config struct {
 	Environment                string
-	Mode                       string
 	Port                       string
 	DatabaseURL                string
 	AllowedCallers             []string
@@ -54,13 +53,12 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		Environment:                env("ENVIRONMENT", EnvironmentDevelopment),
-		Mode:                       env("NOTIFICATION_MODE", "api"),
 		Port:                       env("PORT", "8081"),
 		DatabaseURL:                os.Getenv("DATABASE_URL"),
 		AllowedCallers:             parseCallers(os.Getenv("NOTIFICATION_ALLOWED_CALLERS")),
 		AllowDevCallerHeader:       allowDevCallerHeader,
 		HashKey:                    []byte(os.Getenv("NOTIFICATION_HASH_KEY")),
-		QueueDriver:                env("QUEUE_DRIVER", "memory"),
+		QueueDriver:                env("QUEUE_DRIVER", "servicebus"),
 		ServiceBusNamespace:        os.Getenv("SERVICEBUS_NAMESPACE"),
 		ServiceBusQueueName:        env("SERVICEBUS_QUEUE_NAME", "notifications-email"),
 		ServiceBusConnectionString: os.Getenv("SERVICEBUS_CONNECTION_STRING"),
@@ -78,51 +76,70 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("NOTIFICATION_DATA_ENCRYPTION_KEY must be base64: %w", err)
 		}
 	}
-	if err := cfg.validate(); err != nil {
+	if err := cfg.validateLoaded(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-func (c Config) validate() error {
+func (c Config) validateLoaded() error {
 	if c.Environment != EnvironmentDevelopment && c.Environment != EnvironmentProduction {
 		return fmt.Errorf("ENVIRONMENT must be development or production")
 	}
-	if c.Mode != "api" && c.Mode != "worker" && c.Mode != "migrate" {
-		return fmt.Errorf("NOTIFICATION_MODE must be api, worker, or migrate")
+	return nil
+}
+
+func (c Config) Validate(mode string) error {
+	if err := c.validateLoaded(); err != nil {
+		return err
 	}
-	if c.QueueDriver != "memory" && c.QueueDriver != "servicebus" {
-		return fmt.Errorf("QUEUE_DRIVER must be memory or servicebus")
-	}
-	if c.Environment != EnvironmentProduction {
-		return nil
+	if c.Environment == EnvironmentProduction {
+		if c.ServiceBusConnectionString != "" {
+			return fmt.Errorf("SERVICEBUS_CONNECTION_STRING is development-only")
+		}
+		if c.AllowDevCallerHeader {
+			return fmt.Errorf("NOTIFICATION_ALLOW_DEV_CALLER_HEADER must be false in production")
+		}
 	}
 	if c.DatabaseURL == "" {
-		return fmt.Errorf("DATABASE_URL is required in production")
+		return fmt.Errorf("DATABASE_URL is required")
 	}
+	switch mode {
+	case "migrate":
+		return nil
+	case "api":
+		if err := c.validateEncryptionAndServiceBus(); err != nil {
+			return err
+		}
+		if len(c.HashKey) < 32 {
+			return fmt.Errorf("NOTIFICATION_HASH_KEY must contain at least 32 bytes")
+		}
+		if len(c.AllowedCallers) == 0 {
+			return fmt.Errorf("NOTIFICATION_ALLOWED_CALLERS is required")
+		}
+		return nil
+	case "worker":
+		if err := c.validateEncryptionAndServiceBus(); err != nil {
+			return err
+		}
+		if c.SMTPAddr == "" || c.SMTPFrom == "" {
+			return fmt.Errorf("SMTP_ADDR and SMTP_FROM are required")
+		}
+		return nil
+	default:
+		return fmt.Errorf("mode must be api, worker, or migrate")
+	}
+}
+
+func (c Config) validateEncryptionAndServiceBus() error {
 	if len(c.DataEncryptionKey) != 32 {
-		return fmt.Errorf("NOTIFICATION_DATA_ENCRYPTION_KEY must decode to 32 bytes in production")
-	}
-	if len(c.HashKey) < 32 {
-		return fmt.Errorf("NOTIFICATION_HASH_KEY must contain at least 32 bytes in production")
-	}
-	if len(c.AllowedCallers) == 0 {
-		return fmt.Errorf("NOTIFICATION_ALLOWED_CALLERS is required in production")
+		return fmt.Errorf("NOTIFICATION_DATA_ENCRYPTION_KEY must decode to 32 bytes")
 	}
 	if c.QueueDriver != "servicebus" {
-		return fmt.Errorf("QUEUE_DRIVER must be servicebus in production")
+		return fmt.Errorf("QUEUE_DRIVER must be servicebus")
 	}
-	if c.ServiceBusNamespace == "" {
-		return fmt.Errorf("SERVICEBUS_NAMESPACE is required in production")
-	}
-	if c.ServiceBusConnectionString != "" {
-		return fmt.Errorf("SERVICEBUS_CONNECTION_STRING is development-only")
-	}
-	if c.AllowDevCallerHeader {
-		return fmt.Errorf("NOTIFICATION_ALLOW_DEV_CALLER_HEADER must be false in production")
-	}
-	if c.SMTPAddr == "" || c.SMTPFrom == "" {
-		return fmt.Errorf("SMTP_ADDR and SMTP_FROM are required in production")
+	if c.ServiceBusNamespace == "" && c.ServiceBusConnectionString == "" {
+		return fmt.Errorf("SERVICEBUS_NAMESPACE or SERVICEBUS_CONNECTION_STRING is required")
 	}
 	return nil
 }

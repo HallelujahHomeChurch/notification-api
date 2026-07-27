@@ -11,6 +11,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
+	"github.com/HallelujahHomeChurch/notification-api/internal/queue"
 	"github.com/HallelujahHomeChurch/notification-api/internal/templates"
 	"github.com/google/uuid"
 )
@@ -29,12 +30,6 @@ const (
 )
 
 var ErrLeaseLost = errors.New("delivery lease lost")
-
-type BrokerMessage interface {
-	DeliveryID() string
-	Complete(context.Context) error
-	DeadLetter(context.Context, string) error
-}
 
 type claim struct {
 	DeliveryID        string
@@ -90,7 +85,7 @@ func newWorker(repository repository, provider providers.Provider, encryptionKey
 	}
 }
 
-func (w *Worker) Process(ctx context.Context, message BrokerMessage) error {
+func (w *Worker) Process(ctx context.Context, message queue.BrokerMessage) error {
 	result, err := w.repository.claim(ctx, message.DeliveryID(), leaseDuration)
 	if err != nil {
 		return fmt.Errorf("claim delivery: %w", err)

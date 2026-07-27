@@ -30,24 +30,9 @@ func NewServiceBus(cfg ServiceBusConfig) (*ServiceBus, error) {
 		return nil, errors.New("service bus queue name is required")
 	}
 
-	var (
-		client *azservicebus.Client
-		err    error
-	)
-	if cfg.ConnectionString != "" {
-		client, err = azservicebus.NewClientFromConnectionString(cfg.ConnectionString, nil)
-	} else {
-		if cfg.NamespaceFQDN == "" {
-			return nil, errors.New("service bus namespace is required")
-		}
-		credential, credentialErr := azidentity.NewDefaultAzureCredential(nil)
-		if credentialErr != nil {
-			return nil, fmt.Errorf("create service bus credential: %w", credentialErr)
-		}
-		client, err = azservicebus.NewClient(cfg.NamespaceFQDN, credential, nil)
-	}
+	client, err := newServiceBusClient(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create service bus client: %w", err)
+		return nil, err
 	}
 	sender, err := client.NewSender(cfg.QueueName, nil)
 	if err != nil {
@@ -92,4 +77,26 @@ func (q *ServiceBus) Close(ctx context.Context) error {
 		return nil
 	}
 	return q.close(ctx)
+}
+
+func newServiceBusClient(cfg ServiceBusConfig) (*azservicebus.Client, error) {
+	if cfg.ConnectionString != "" {
+		client, err := azservicebus.NewClientFromConnectionString(cfg.ConnectionString, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create service bus client: %w", err)
+		}
+		return client, nil
+	}
+	if cfg.NamespaceFQDN == "" {
+		return nil, errors.New("service bus namespace is required")
+	}
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("create service bus credential: %w", err)
+	}
+	client, err := azservicebus.NewClient(cfg.NamespaceFQDN, credential, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create service bus client: %w", err)
+	}
+	return client, nil
 }

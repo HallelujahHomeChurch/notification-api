@@ -151,6 +151,57 @@ func TestSMTPRejectsInvalidEndpointBeforeDial(t *testing.T) {
 	assertProviderError(t, err, ErrorInvalidEndpoint)
 }
 
+func TestValidateSMTPConfigRejectsStaticErrors(t *testing.T) {
+	valid := SMTPConfig{
+		Addr: "smtp.example.test:587",
+		From: "noreply@alive.org.tw",
+	}
+	if err := ValidateSMTPConfig(valid); err != nil {
+		t.Fatalf("ValidateSMTPConfig(valid) error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		config SMTPConfig
+	}{
+		{
+			name:   "address without port",
+			config: SMTPConfig{Addr: "smtp.example.test", From: valid.From},
+		},
+		{
+			name:   "non-numeric port",
+			config: SMTPConfig{Addr: "smtp.example.test:not-a-port", From: valid.From},
+		},
+		{
+			name:   "port out of range",
+			config: SMTPConfig{Addr: "smtp.example.test:65536", From: valid.From},
+		},
+		{
+			name:   "display name sender",
+			config: SMTPConfig{Addr: valid.Addr, From: "HHC <noreply@alive.org.tw>"},
+		},
+		{
+			name: "username without password",
+			config: SMTPConfig{
+				Addr: valid.Addr, From: valid.From, Username: "smtp-user",
+			},
+		},
+		{
+			name: "password without username",
+			config: SMTPConfig{
+				Addr: valid.Addr, From: valid.From, Password: "smtp-password",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateSMTPConfig(test.config); err == nil {
+				t.Fatal("ValidateSMTPConfig() error = nil")
+			}
+		})
+	}
+}
+
 func TestSMTPNeverAuthenticatesWithoutSTARTTLS(t *testing.T) {
 	server := newSMTPServer(t, smtpServerOptions{})
 	_, err := NewSMTP(SMTPConfig{

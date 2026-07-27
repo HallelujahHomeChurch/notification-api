@@ -13,6 +13,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,6 +40,11 @@ func NewSMTP(config SMTPConfig) *SMTP {
 		config.Timeout = defaultSMTPTimeout
 	}
 	return &SMTP{config: config, writeMessage: writeMessage}
+}
+
+func ValidateSMTPConfig(config SMTPConfig) error {
+	_, err := smtpHost(config)
+	return err
 }
 
 func (s *SMTP) Send(ctx context.Context, payload DeliveryPayload) (ProviderReceipt, error) {
@@ -117,17 +123,32 @@ func (s *SMTP) Send(ctx context.Context, payload DeliveryPayload) (ProviderRecei
 }
 
 func (s *SMTP) validate(payload DeliveryPayload) (string, error) {
-	host, port, err := net.SplitHostPort(s.config.Addr)
-	if err != nil || host == "" || port == "" {
-		return "", errors.New("invalid SMTP address")
+	host, err := smtpHost(s.config)
+	if err != nil {
+		return "", err
 	}
-	if !plainAddress(s.config.From) || !plainAddress(payload.Recipient) {
+	if !plainAddress(payload.Recipient) {
 		return "", errors.New("invalid email address")
 	}
 	if strings.ContainsAny(payload.Subject, "\r\n") {
 		return "", errors.New("invalid subject")
 	}
-	if (s.config.Username == "") != (s.config.Password == "") {
+	return host, nil
+}
+
+func smtpHost(config SMTPConfig) (string, error) {
+	host, port, err := net.SplitHostPort(config.Addr)
+	if err != nil || host == "" || port == "" {
+		return "", errors.New("invalid SMTP address")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", errors.New("invalid SMTP port")
+	}
+	if !plainAddress(config.From) {
+		return "", errors.New("invalid email address")
+	}
+	if (config.Username == "") != (config.Password == "") {
 		return "", errors.New("SMTP credentials must be provided together")
 	}
 	return strings.Trim(host, "[]"), nil

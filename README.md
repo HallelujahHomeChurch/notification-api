@@ -4,32 +4,54 @@ Internal email notification service for HHC account workflows.
 
 ## Local Development
 
-Default local mode avoids Azure:
+Run PostgreSQL migrations, then start the API and worker as separate processes:
 
 ```bash
 cp .env.example .env
 set -a && source .env && set +a
-go run ./cmd/server
+go run ./cmd/notification migrate
+go run ./cmd/notification api
+go run ./cmd/notification worker
 ```
 
-`cmd/server` remains the legacy worker runtime until the durable `api`, `worker`,
-and `migrate` commands are assembled. It exposes process health only.
-
-If `SMTP_ADDR` is empty, emails are logged instead of sent.
-
-Set `LOG_EMAIL_BODY=true` only for local end-to-end tests to print verification and password-reset links. It is `false` by default and must remain disabled outside local development because links contain single-use tokens.
+The durable runtime requires PostgreSQL and Service Bus. For local development,
+use the Azure Service Bus emulator through `SERVICEBUS_CONNECTION_STRING`.
+Worker mode also requires `SMTP_ADDR` and `SMTP_FROM`; there is no log-email
+fallback.
 
 ## Azure Queue Mode
 
-Production uses Azure Service Bus:
+Production uses managed identity:
 
 ```bash
 QUEUE_DRIVER=servicebus
-SERVICEBUS_CONNECTION_STRING='Endpoint=sb://...'
+SERVICEBUS_NAMESPACE='alive-notifications.servicebus.windows.net'
 SERVICEBUS_QUEUE_NAME=notifications-email
 ```
 
-For local Azure-compatible testing, use the official Azure Service Bus emulator and point `SERVICEBUS_CONNECTION_STRING` at the emulator. The app code is unchanged.
+Development can instead set `SERVICEBUS_CONNECTION_STRING`. The API requires
+send permission and the worker requires receive permission.
+
+## Runtime Modes
+
+```text
+notification-api api
+notification-api worker
+notification-api migrate
+```
+
+`api` serves the private HTTP API and runs outbox/retention loops. `worker`
+consumes PeekLock deliveries and serves private health endpoints. `migrate`
+runs embedded PostgreSQL migrations once and exits.
+
+Configuration is validated per command:
+
+- `migrate`: `DATABASE_URL`
+- `api`: database, encryption/hash keys, allowed callers, and Service Bus
+- `worker`: database, encryption key, Service Bus, and valid SMTP settings
+
+Production always rejects the development caller header and Service Bus
+connection strings; managed identity uses `SERVICEBUS_NAMESPACE`.
 
 ## API
 
@@ -67,5 +89,7 @@ See `docs/openapi.yaml` for the complete private contract.
 
 ```bash
 go test ./...
-go build ./cmd/server
+go vet ./...
+go build ./cmd/notification
+docker build -t notification-api:local .
 ```
