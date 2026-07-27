@@ -1,0 +1,258 @@
+name: Production Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - Dockerfile
+      - go.mod
+      - go.sum
+      - cmd/**
+      - internal/**
+      - infra/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: notification-production
+  cancel-in-progress: false
+
+env:
+  ACR_NAME: alive
+  ACR_LOGIN_SERVER: alive.azurecr.io
+  IMAGE_REPOSITORY: alive/notification-api
+  RESOURCE_GROUP: alive
+  MIGRATION_JOB_NAME: notification-migrate
+  API_APP_NAME: notification-api
+  WORKER_APP_NAME: notification-worker
+  API_GATEWAY_APP_NAME: api-gateway
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  SMTP_ADDR: ${{ vars.SMTP_ADDR }}
+  SMTP_FROM: ${{ vars.SMTP_FROM }}
+  SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
+
+jobs:
+  release:
+    name: Verify, migrate, and release
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: notification_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d notification_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/notification_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          required_vars=(
+            AZURE_CLIENT_ID
+            AZURE_TENANT_ID
+            AZURE_SUBSCRIPTION_ID
+            SMTP_ADDR
+            SMTP_FROM
+            SMTP_AUTHENTICATION_ENABLED
+          )
+          for name in "${required_vars[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required repository variable: ${name}" >&2
+              exit 1
+            fi
+          done
+          case "${SMTP_AUTHENTICATION_ENABLED}" in
+            true|false) ;;
+            *)
+              echo "SMTP_AUTHENTICATION_ENABLED must be true or false" >&2
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set image tag
+        shell: bash
+        run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "${GITHUB_ENV}"
+
+      - name: Verify
+        run: |
+          go test ./...
+          go test -tags=integration ./... -count=1
+          go vet ./...
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Build and push image to ACR
+        run: |
+          az acr build \
+            --registry "${ACR_NAME}" \
+            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+            --image "${IMAGE_REPOSITORY}:latest" \
+            --file Dockerfile \
+            .
+
+      - name: Update migration job
+        shell: bash
+        run: |
+          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          az deployment group create \
+            --name "notification-migrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/main.bicep \
+            --parameters \
+              migrationImage="${image_ref}" \
+              runtimeImage="${image_ref}" \
+              deployRuntime=false \
+              provisionPermissions=false \
+              smtpAddr="${SMTP_ADDR}" \
+              smtpFrom="${SMTP_FROM}" \
+              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+            --only-show-errors \
+            --output none
+
+      - name: Run migrations
+        shell: bash
+        run: |
+          execution_name="$(az containerapp job start \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${MIGRATION_JOB_NAME}" \
+            --query name \
+            --output tsv \
+            --only-show-errors)"
+          if [[ -z "${execution_name}" ]]; then
+            echo "Migration job did not return an execution name" >&2
+            exit 1
+          fi
+
+          for attempt in {1..60}; do
+            status="$(az containerapp job execution list \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${MIGRATION_JOB_NAME}" \
+              --query "[?name=='${execution_name}'].properties.status | [0]" \
+              --output tsv \
+              --only-show-errors)"
+            case "${status}" in
+              Succeeded)
+                echo "Migration execution ${execution_name} succeeded"
+                exit 0
+                ;;
+              Failed|Canceled|Cancelled|Stopped)
+                echo "Migration execution ${execution_name} ended with ${status}" >&2
+                exit 1
+                ;;
+            esac
+            echo "Waiting for migration execution ${execution_name}: ${status:-Pending} (${attempt}/60)"
+            sleep 10
+          done
+
+          echo "Migration execution ${execution_name} did not succeed before timeout" >&2
+          exit 1
+
+      - name: Deploy API and worker
+        shell: bash
+        run: |
+          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          az deployment group create \
+            --name "notification-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/main.bicep \
+            --parameters \
+              migrationImage="${image_ref}" \
+              runtimeImage="${image_ref}" \
+              deployRuntime=true \
+              provisionPermissions=false \
+              smtpAddr="${SMTP_ADDR}" \
+              smtpFrom="${SMTP_FROM}" \
+              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+            --only-show-errors \
+            --output none
+
+      - name: Wait for API and worker revisions
+        shell: bash
+        run: |
+          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          wait_for_revision() {
+            local app_name="$1"
+            for attempt in {1..60}; do
+              state="$(az containerapp show \
+                --resource-group "${RESOURCE_GROUP}" \
+                --name "${app_name}" \
+                --query "join('|', [properties.latestRevisionName, properties.latestReadyRevisionName])" \
+                --output tsv \
+                --only-show-errors)"
+              IFS='|' read -r latest ready <<< "${state}"
+              deployed_image=""
+              if [[ -n "${latest}" && "${latest}" == "${ready}" ]]; then
+                deployed_image="$(az containerapp revision show \
+                  --resource-group "${RESOURCE_GROUP}" \
+                  --name "${app_name}" \
+                  --revision "${ready}" \
+                  --query "properties.template.containers[0].image" \
+                  --output tsv \
+                  --only-show-errors)"
+                if [[ "${deployed_image}" == "${image_ref}" ]]; then
+                  echo "${app_name} is ready on ${ready} with ${image_ref}"
+                  return 0
+                fi
+              fi
+              echo "Waiting for ${app_name}: latest=${latest:-none} ready=${ready:-none} image=${deployed_image:-none} (${attempt}/60)"
+              sleep 10
+            done
+            echo "${app_name} did not become ready with ${image_ref}" >&2
+            return 1
+          }
+
+          wait_for_revision "${API_APP_NAME}"
+          wait_for_revision "${WORKER_APP_NAME}"
+
+      - name: Verify Dapr readiness through API gateway
+        shell: bash
+        run: |
+          dapr_url="http://localhost:3500/v1.0/invoke/notification-api/method/ready"
+          probe_exit=0
+          probe_output="$(script -q -e -c \
+            "az containerapp exec --resource-group \"${RESOURCE_GROUP}\" --name \"${API_GATEWAY_APP_NAME}\" --command \"/usr/bin/wget -S -O - ${dapr_url}\"" \
+            /dev/null 2>&1)" || probe_exit=$?
+          probe_output="${probe_output//$'\r'/}"
+          printf '%s\n' "${probe_output}"
+
+          if ! grep -Eq 'HTTP/1\.[01][[:space:]]+200' <<< "${probe_output}"; then
+            echo "Dapr readiness probe did not return HTTP 200" >&2
+            exit 1
+          fi
+          if ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' <<< "${probe_output}"; then
+            echo "Dapr readiness probe returned an unexpected body" >&2
+            exit 1
+          fi
+          if (( probe_exit != 0 )); then
+            echo "Dapr readiness probe command failed with exit ${probe_exit}" >&2
+            exit 1
+          fi

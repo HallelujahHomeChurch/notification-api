@@ -9,6 +9,7 @@ param migrationImage string
 @minLength(1)
 param runtimeImage string
 param deployRuntime bool = true
+param provisionPermissions bool = true
 param serviceBusNamespaceName string = 'alive-notifications-${uniqueString(subscription().id, resourceGroup().id)}'
 param queueName string = 'notifications-email'
 param smtpAddr string
@@ -90,7 +91,7 @@ resource migrateIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
   location: location
 }
 
-resource apiAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource apiAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
   name: guid(registry.id, apiIdentity.id, 'acr-pull')
   scope: registry
   properties: {
@@ -100,7 +101,7 @@ resource apiAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource workerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource workerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
   name: guid(registry.id, workerIdentity.id, 'acr-pull')
   scope: registry
   properties: {
@@ -110,7 +111,7 @@ resource workerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource migrateAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource migrateAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
   name: guid(registry.id, migrateIdentity.id, 'acr-pull')
   scope: registry
   properties: {
@@ -120,7 +121,7 @@ resource migrateAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource apiServiceBusSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource apiServiceBusSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
   name: guid(emailQueue.id, apiIdentity.id, 'service-bus-sender')
   scope: emailQueue
   properties: {
@@ -130,7 +131,7 @@ resource apiServiceBusSender 'Microsoft.Authorization/roleAssignments@2022-04-01
   }
 }
 
-resource workerServiceBusReceiver 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource workerServiceBusReceiver 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {
   name: guid(emailQueue.id, workerIdentity.id, 'service-bus-receiver')
   scope: emailQueue
   properties: {
@@ -141,7 +142,7 @@ resource workerServiceBusReceiver 'Microsoft.Authorization/roleAssignments@2022-
 }
 
 // alive-vault currently uses access policies. Do not switch the shared vault to RBAC in this deployment.
-resource notificationSecretAccess 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = {
+resource notificationSecretAccess 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = if (provisionPermissions) {
   parent: vault
   name: 'add'
   properties: {
