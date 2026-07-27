@@ -65,7 +65,7 @@ func newQueue(cfg notify.Config) (interface {
 	case "memory":
 		return notify.NewMemoryQueue(100), nil
 	case "servicebus":
-		return notify.NewServiceBusQueue(cfg.ServiceBusConnectionString, cfg.ServiceBusQueueName)
+		return nil, errors.New("legacy runtime supports only memory queue until durable runtime cutover")
 	default:
 		return nil, errors.New("QUEUE_DRIVER must be memory or servicebus")
 	}
