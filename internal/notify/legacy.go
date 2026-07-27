@@ -2,11 +2,45 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
 	"time"
 )
+
+// Task 9 removes this compatibility surface with the legacy runtime.
+const (
+	TemplateEmailVerification = "email_verification"
+	TemplatePasswordReset     = "password_reset"
+)
+
+var (
+	ErrInvalidRequest = errors.New("invalid request")
+	ErrRateLimited    = errors.New("rate limited")
+	ErrDisabled       = errors.New("notification sending disabled")
+)
+
+type SendEmailRequest struct {
+	Template string            `json:"template"`
+	To       string            `json:"to"`
+	Locale   string            `json:"locale,omitempty"`
+	Data     map[string]string `json:"data"`
+}
+
+type Message struct {
+	Template  string            `json:"template"`
+	To        string            `json:"to"`
+	Locale    string            `json:"locale,omitempty"`
+	Data      map[string]string `json:"data"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+type Email struct {
+	To      string
+	Subject string
+	Body    string
+}
 
 type Limiter interface {
 	Allow(context.Context, Message) error
@@ -25,17 +59,16 @@ func NewService(limiter Limiter, queue Queue) *Service {
 	return &Service{limiter: limiter, queue: queue}
 }
 
-func (s *Service) EnqueueEmail(ctx context.Context, req SendEmailRequest) error {
-	to, err := normalizeEmail(req.To)
+func (s *Service) EnqueueEmail(ctx context.Context, request SendEmailRequest) error {
+	to, err := normalizeEmail(request.To)
 	if err != nil {
 		return err
 	}
-
 	message := Message{
-		Template:  req.Template,
+		Template:  request.Template,
 		To:        to,
-		Locale:    req.Locale,
-		Data:      req.Data,
+		Locale:    request.Locale,
+		Data:      request.Data,
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := validateMessage(message); err != nil {
