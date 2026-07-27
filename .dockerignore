@@ -1,0 +1,10 @@
+.git
+.github
+.superpowers
+.env*
+bin
+coverage.out
+docs
+infra
+notification
+scripts
