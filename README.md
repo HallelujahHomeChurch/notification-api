@@ -85,6 +85,17 @@ Content-Type: application/json
 
 See `docs/openapi.yaml` for the complete private contract.
 
+## Production Operations
+
+See the [production runbook](docs/runbook.md) for incident triage, queue and
+kill-switch controls, credential rotation, DLQ replay, rollback, PostgreSQL
+PITR/DR, alerts, and log-redaction requirements.
+
+The [production acceptance checklist](docs/runbook.md#production-acceptance)
+is the release gate for the notification dependency. Do not begin the
+production `account-api` cutover until that checklist is complete. Static and
+local verification do not constitute live acceptance.
+
 ## Checks
 
 ```bash
