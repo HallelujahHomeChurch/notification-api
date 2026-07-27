@@ -4,3 +4,5 @@
 bin/
 coverage.out
 .DS_Store
+notification
+infra/main.bicepparam
