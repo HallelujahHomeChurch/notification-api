@@ -1,0 +1,229 @@
+package providers
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"mime"
+	"mime/quotedprintable"
+	"net"
+	"net/mail"
+	"net/smtp"
+	"net/textproto"
+	"strings"
+	"time"
+)
+
+const defaultSMTPTimeout = 15 * time.Second
+
+type SMTPConfig struct {
+	Addr      string
+	Username  string
+	Password  string
+	From      string
+	Timeout   time.Duration
+	TLSConfig *tls.Config
+	Logger    *log.Logger
+}
+
+type SMTP struct {
+	config       SMTPConfig
+	writeMessage func(io.Writer, string, DeliveryPayload) error
+}
+
+func NewSMTP(config SMTPConfig) *SMTP {
+	if config.Timeout <= 0 {
+		config.Timeout = defaultSMTPTimeout
+	}
+	return &SMTP{config: config, writeMessage: writeMessage}
+}
+
+func (s *SMTP) Send(ctx context.Context, payload DeliveryPayload) (ProviderReceipt, error) {
+	host, err := s.validate(payload)
+	if err != nil {
+		return ProviderReceipt{}, s.failed(ErrorInvalidEndpoint, "validate", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return ProviderReceipt{}, s.failed(ErrorTemporary, "dial", err)
+	}
+
+	conn, err := (&net.Dialer{Timeout: s.config.Timeout}).DialContext(ctx, "tcp", s.config.Addr)
+	if err != nil {
+		return ProviderReceipt{}, s.failed(classify(ctx, err), "dial", contextCause(ctx, err))
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(s.config.Timeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return ProviderReceipt{}, s.failed(ErrorTemporary, "deadline", err)
+	}
+	stopCancellation := interruptOnCancellation(ctx, conn)
+	defer stopCancellation()
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return ProviderReceipt{}, s.failed(classify(ctx, err), "greeting", contextCause(ctx, err))
+	}
+	defer client.Close()
+
+	hasSTARTTLS, _ := client.Extension("STARTTLS")
+	if !hasSTARTTLS {
+		return ProviderReceipt{}, s.failed(ErrorPermanent, "starttls", errors.New("SMTP server does not support STARTTLS"))
+	}
+	tlsConfig := cloneTLSConfig(s.config.TLSConfig, host)
+	if err := client.StartTLS(tlsConfig); err != nil {
+		return ProviderReceipt{}, s.failed(classify(ctx, err), "starttls", contextCause(ctx, err))
+	}
+
+	if s.config.Username != "" {
+		hasAUTH, mechanisms := client.Extension("AUTH")
+		if !hasAUTH || !containsWord(mechanisms, "PLAIN") {
+			return ProviderReceipt{}, s.failed(ErrorPermanent, "auth", errors.New("SMTP server does not support AUTH PLAIN"))
+		}
+		if err := client.Auth(smtp.PlainAuth("", s.config.Username, s.config.Password, host)); err != nil {
+			return ProviderReceipt{}, s.failed(classify(ctx, err), "auth", contextCause(ctx, err))
+		}
+	}
+	if err := client.Mail(s.config.From); err != nil {
+		return ProviderReceipt{}, s.failed(classify(ctx, err), "mail", contextCause(ctx, err))
+	}
+	if err := client.Rcpt(payload.Recipient); err != nil {
+		return ProviderReceipt{}, s.failed(classify(ctx, err), "recipient", contextCause(ctx, err))
+	}
+	writer, err := client.Data()
+	if err != nil {
+		return ProviderReceipt{}, s.failed(classify(ctx, err), "data", contextCause(ctx, err))
+	}
+	if err := s.writeMessage(writer, s.config.From, payload); err != nil {
+		_ = client.Close()
+		return ProviderReceipt{}, s.failed(classify(ctx, err), "message", contextCause(ctx, err))
+	}
+	if err := writer.Close(); err != nil {
+		return ProviderReceipt{}, s.failed(classify(ctx, err), "data", contextCause(ctx, err))
+	}
+
+	_ = client.Quit()
+	receipt := ProviderReceipt{Provider: "smtp", AcceptedAt: time.Now().UTC()}
+	if s.config.Logger != nil {
+		s.config.Logger.Print("smtp delivery accepted")
+	}
+	return receipt, nil
+}
+
+func (s *SMTP) validate(payload DeliveryPayload) (string, error) {
+	host, port, err := net.SplitHostPort(s.config.Addr)
+	if err != nil || host == "" || port == "" {
+		return "", errors.New("invalid SMTP address")
+	}
+	if !plainAddress(s.config.From) || !plainAddress(payload.Recipient) {
+		return "", errors.New("invalid email address")
+	}
+	if strings.ContainsAny(payload.Subject, "\r\n") {
+		return "", errors.New("invalid subject")
+	}
+	if (s.config.Username == "") != (s.config.Password == "") {
+		return "", errors.New("SMTP credentials must be provided together")
+	}
+	return strings.Trim(host, "[]"), nil
+}
+
+func (s *SMTP) failed(kind ErrorKind, operation string, cause error) error {
+	providerErr := &ProviderError{Kind: kind, Operation: operation, cause: cause}
+	if s.config.Logger != nil {
+		s.config.Logger.Printf("smtp delivery failed kind=%s operation=%s", kind, operation)
+	}
+	return providerErr
+}
+
+func classify(ctx context.Context, err error) ErrorKind {
+	if ctx.Err() != nil {
+		return ErrorTemporary
+	}
+	var smtpErr *textproto.Error
+	if errors.As(err, &smtpErr) {
+		if smtpErr.Code >= 400 && smtpErr.Code < 500 {
+			return ErrorTemporary
+		}
+		if smtpErr.Code >= 500 && smtpErr.Code < 600 {
+			return ErrorPermanent
+		}
+	}
+	return ErrorTemporary
+}
+
+func contextCause(ctx context.Context, fallback error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fallback
+}
+
+func interruptOnCancellation(ctx context.Context, conn net.Conn) func() {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.SetDeadline(time.Now())
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+func cloneTLSConfig(config *tls.Config, host string) *tls.Config {
+	if config == nil {
+		config = &tls.Config{}
+	} else {
+		config = config.Clone()
+	}
+	if config.ServerName == "" {
+		config.ServerName = host
+	}
+	if config.MinVersion < tls.VersionTLS12 {
+		config.MinVersion = tls.VersionTLS12
+	}
+	return config
+}
+
+func plainAddress(value string) bool {
+	parsed, err := mail.ParseAddress(value)
+	return err == nil && parsed.Address == value
+}
+
+func containsWord(value, word string) bool {
+	for _, candidate := range strings.Fields(value) {
+		if strings.EqualFold(candidate, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeMessage(writer io.Writer, from string, payload DeliveryPayload) error {
+	headers := strings.Join([]string{
+		"From: " + from,
+		"To: " + payload.Recipient,
+		"Subject: " + mime.QEncoding.Encode("UTF-8", payload.Subject),
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Transfer-Encoding: quoted-printable",
+		"",
+	}, "\r\n")
+	if _, err := io.WriteString(writer, headers+"\r\n"); err != nil {
+		return fmt.Errorf("write headers: %w", err)
+	}
+	body := quotedprintable.NewWriter(writer)
+	if _, err := io.WriteString(body, payload.Body); err != nil {
+		return fmt.Errorf("write body: %w", err)
+	}
+	if err := body.Close(); err != nil {
+		return fmt.Errorf("close body: %w", err)
+	}
+	return nil
+}

@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/HallelujahHomeChurch/notification-api/internal/templates"
 )
 
@@ -13,34 +14,34 @@ type Consumer interface {
 	Consume(context.Context, func(context.Context, Message) error) error
 }
 
-func RunWorker(ctx context.Context, consumer Consumer, sender Sender, logger *log.Logger) error {
+func RunWorker(ctx context.Context, consumer Consumer, provider providers.Provider, logger *log.Logger) error {
 	if logger == nil {
 		logger = log.Default()
 	}
 	return consumer.Consume(ctx, func(ctx context.Context, message Message) error {
 		email, err := BuildEmail(message)
 		if err != nil {
-			logger.Printf("notification build failed template=%s to=%s error=%v", message.Template, message.To, err)
+			logger.Printf("notification build failed template=%s", message.Template)
 			return err
 		}
-		if err := sender.Send(ctx, email); err != nil {
-			logger.Printf("notification send failed template=%s to=%s error=%v", message.Template, message.To, err)
+		if _, err := provider.Send(ctx, email); err != nil {
+			logger.Printf("notification send failed template=%s", message.Template)
 			return err
 		}
-		logger.Printf("notification sent template=%s to=%s", message.Template, message.To)
+		logger.Printf("notification sent template=%s", message.Template)
 		return nil
 	})
 }
 
 // BuildEmail preserves the legacy worker contract until Task 9 replaces this runtime.
-func BuildEmail(message Message) (Email, error) {
+func BuildEmail(message Message) (providers.DeliveryPayload, error) {
 	templateID, payload, err := legacyTemplate(message)
 	if err != nil {
-		return Email{}, err
+		return providers.DeliveryPayload{}, err
 	}
 	definition, err := templates.Resolve(templateID, "email")
 	if err != nil {
-		return Email{}, err
+		return providers.DeliveryPayload{}, err
 	}
 	request := contracts.SendRequest{
 		TemplateID: templateID,
@@ -51,13 +52,17 @@ func BuildEmail(message Message) (Email, error) {
 	}
 	validated, err := templates.Validate(definition, "account-api", request)
 	if err != nil {
-		return Email{}, err
+		return providers.DeliveryPayload{}, err
 	}
 	rendered, err := templates.RenderEmail(definition, message.Locale, message.To, validated)
 	if err != nil {
-		return Email{}, err
+		return providers.DeliveryPayload{}, err
 	}
-	return Email{To: rendered.To, Subject: rendered.Subject, Body: rendered.Body}, nil
+	return providers.DeliveryPayload{
+		Recipient: rendered.To,
+		Subject:   rendered.Subject,
+		Body:      rendered.Body,
+	}, nil
 }
 
 func legacyTemplate(message Message) (string, map[string]string, error) {

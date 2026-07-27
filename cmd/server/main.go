@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/notify"
+	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 )
 
 func main() {
@@ -22,13 +23,13 @@ func main() {
 		logger.Fatalf("queue setup failed: %v", err)
 	}
 
-	sender := newSender(cfg, logger)
+	provider := newProvider(cfg, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	go func() {
-		if err := notify.RunWorker(ctx, queue, sender, logger); err != nil && !errors.Is(err, context.Canceled) {
+		if err := notify.RunWorker(ctx, queue, provider, logger); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Printf("worker stopped: %v", err)
 		}
 	}()
@@ -70,14 +71,23 @@ func newQueue(cfg notify.Config) (interface {
 	}
 }
 
-func newSender(cfg notify.Config, logger *log.Logger) notify.Sender {
+func newProvider(cfg notify.Config, logger *log.Logger) providers.Provider {
 	if cfg.SMTPAddr == "" {
-		return notify.LogSender{Logger: logger, LogBody: cfg.LogEmailBody}
+		return localProvider{logger: logger}
 	}
-	return notify.SMTPSender{
-		Addr:     cfg.SMTPAddr,
-		Username: cfg.SMTPUsername,
-		Password: cfg.SMTPPassword,
-		From:     cfg.SMTPFrom,
-	}
+	return providers.NewSMTP(providers.SMTPConfig{
+		Addr: cfg.SMTPAddr, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
+		From: cfg.SMTPFrom, Logger: logger,
+	})
+}
+
+// localProvider preserves the no-SMTP development path until Task 9 removes
+// the legacy runtime.
+type localProvider struct {
+	logger *log.Logger
+}
+
+func (p localProvider) Send(_ context.Context, _ providers.DeliveryPayload) (providers.ProviderReceipt, error) {
+	p.logger.Print("local notification accepted")
+	return providers.ProviderReceipt{Provider: "local", AcceptedAt: time.Now().UTC()}, nil
 }
