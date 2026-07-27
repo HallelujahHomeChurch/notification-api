@@ -133,7 +133,28 @@ az containerapp update \
   --name notification-api \
   --set-env-vars NOTIFICATIONS_DISABLED=true \
   --output none
+
+api_revision="$(
+  az containerapp show \
+    --resource-group alive \
+    --name notification-api \
+    --query properties.latestRevisionName \
+    --output tsv
+)"
+az containerapp revision show \
+  --resource-group alive \
+  --name notification-api \
+  --revision "${api_revision}" \
+  --query 'properties.{a:active,h:healthState,p:provisioningState}' \
+  --output yaml
 ```
+
+Do not declare containment until this exact revision is active, healthy, and
+provisioned. Verify its effective container environment contains
+`NOTIFICATIONS_DISABLED=true`, then call `/priv/notifications/send` through an
+allowlisted Dapr caller (`account-api` or `hhc-web-api`) and require
+`503 NTF_DISABLED`. Do not use a direct ingress request or spoof
+`Dapr-Caller-App-Id`.
 
 This is not a full delivery stop. Use `ReceiveDisabled` when existing
 notifications must not reach SMTP. The current Bicep template does not persist
@@ -149,6 +170,10 @@ az containerapp update \
   --set-env-vars NOTIFICATIONS_DISABLED=false \
   --output none
 ```
+
+Repeat the exact revision readiness and effective-environment checks. Send one
+approved acceptance intent through an allowlisted Dapr caller before declaring
+the service re-enabled.
 
 ## Credential and secret rotation
 
@@ -206,13 +231,14 @@ Managed identities do not have stored credentials to rotate.
 ## DLQ inspection and safe replay
 
 The Service Bus body contains only `{"deliveryId":"<uuid>"}`. Inspect the DLQ
-with Azure Portal Service Bus Explorer in PeekLock mode. Do not use automatic
-resubmit: the old body references a terminal delivery and the worker will
-dead-letter it again.
+with Azure Portal Service Bus Explorer in non-locking **Peek** mode. Do not use
+automatic resubmit: the old body references a terminal delivery and the worker
+will dead-letter it again.
 
 Replay prerequisites:
 
-1. Pause the queue and deactivate `notification-worker`.
+1. Set the queue to `ReceiveDisabled`, deactivate `notification-worker`, and
+   verify that no worker revision is active.
 2. Confirm the DLQ body contains one valid delivery ID.
 3. Confirm the old database delivery is `failed` or `dead_lettered`.
 4. Confirm the payload has not been purged.
@@ -290,10 +316,13 @@ message using the new outbox UUID, preserving duplicate-detection semantics.
 After the transaction commits:
 
 1. Confirm the new outbox becomes `published`.
-2. In Service Bus Explorer, **Complete** the old DLQ message.
-3. Activate the saved worker revision and set the queue to `Active`.
-4. Confirm the new delivery reaches one terminal state.
-5. If any step is ambiguous, pause again; never create another replay blindly.
+2. Keep the worker inactive and set the queue to `Active`.
+3. In Service Bus Explorer, receive the exact old DLQ message in PeekLock mode,
+   verify its delivery ID again, and **Complete** it immediately. Do not hold
+   the two-minute lock while running SQL or investigating provider state.
+4. Activate the saved worker revision.
+5. Confirm the new delivery reaches one terminal state.
+6. If any step is ambiguous, pause again; never create another replay blindly.
 
 ## Database health queries
 
@@ -363,14 +392,22 @@ traffic exists.
 
 | Signal | Warning | Critical |
 | --- | --- | --- |
-| API or worker readiness | 1 failure | 2 consecutive minutes |
+| API readiness | 1 failure | 2 consecutive minutes |
 | Oldest due outbox row | 120 seconds | 600 seconds |
 | Due outbox rows | 100 for 5 minutes | 1,000 for 5 minutes |
 | Oldest due delivery | 120 seconds | 600 seconds |
 | Service Bus DLQ | 1 message | 10 messages or any sustained growth |
-| Provider terminal failure rate | 5% over 15 minutes, minimum 20 terminal attempts | 20% over 15 minutes, minimum 20 terminal attempts |
-| Worker replicas | 0 with active queue messages for 2 minutes | 0 with active queue messages for 5 minutes |
 | Migration execution | n/a | Any non-`Succeeded` terminal result |
+
+Provider terminal failure rate:
+
+- warning: 5% over 15 minutes, with at least 20 terminal attempts;
+- critical: 20% over 15 minutes, with at least 20 terminal attempts.
+
+Evaluate worker readiness and replica count only when the queue is `Active`, an
+active worker revision exists, the scaler is healthy, active message count is
+greater than zero, and no approved maintenance window is open. Warn after two
+minutes with zero replicas; page after five minutes.
 
 Also alert on a non-`Active` queue outside an approved maintenance window and
 on an API/worker latest revision that is not the latest ready revision.
@@ -436,11 +473,15 @@ restore the entire shared server over the source.
 3. From the new server, use `pg_dump --format=custom` for only the
    `notification` database. Store the dump as restricted sensitive data.
 4. Create an empty recovery database owned by the `notification` role on the
-   intended target server and use `pg_restore --no-owner --no-acl` into that
-   database. Do not overwrite another service database.
-5. Run forward notification migrations against the recovered database and
+   intended target server. Run `pg_restore --no-owner --no-acl` while connected
+   as `notification`, or add `--role=notification` when the restore operator is
+   allowed to `SET ROLE`. Do not overwrite another service database.
+5. Verify that application schemas, tables, and sequences are owned by
+   `notification`, and verify the role can select, insert, update, and use
+   sequences before continuing.
+6. Run forward notification migrations against the recovered database and
    execute the health queries.
-6. Reconcile ledger, outbox, active queue, DLQ, and SMTP/provider acceptance
+7. Reconcile ledger, outbox, active queue, DLQ, and SMTP/provider acceptance
    records before changing `notification-database-url`.
 
 Disaster-recovery sending remains disabled until all of the following are
