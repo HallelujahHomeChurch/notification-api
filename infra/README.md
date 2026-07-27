@@ -95,7 +95,7 @@ variables or secrets; when authentication is enabled, only
 are used.
 
 Each release tests the service against PostgreSQL `notification_test`, builds
-`main-<short-sha>` and optional `latest` ACR tags, and deploys in this order:
+only the immutable `main-<short-sha>` ACR tag, and deploys in this order:
 
 1. Update only `notification-migrate` with `deployRuntime=false`.
 2. Start one migration execution and require that exact execution to report
