@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -218,8 +219,28 @@ func TestSMTPNeverAuthenticatesWithoutSTARTTLS(t *testing.T) {
 	}
 }
 
-func TestSMTPRequiresPlainAuthenticationCapability(t *testing.T) {
-	for _, mechanisms := range []string{"", "LOGIN"} {
+func TestSMTPAcceptsLoginAuthentication(t *testing.T) {
+	server := newSMTPServer(t, smtpServerOptions{startTLS: true, authMechanisms: "LOGIN"})
+	provider := NewSMTP(SMTPConfig{
+		Addr:      server.addr,
+		Username:  "smtp-user",
+		Password:  "smtp-password",
+		From:      "noreply@alive.org.tw",
+		Timeout:   time.Second,
+		TLSConfig: server.clientTLS,
+	})
+
+	if _, err := provider.Send(context.Background(), validEmail()); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	server.wait(t)
+	if indexOfPrefix(server.commands(), "AUTH LOGIN") == len(server.commands()) {
+		t.Fatalf("SMTP commands = %q, want AUTH LOGIN", server.commands())
+	}
+}
+
+func TestSMTPRequiresSupportedAuthenticationCapability(t *testing.T) {
+	for _, mechanisms := range []string{"", "CRAM-MD5"} {
 		t.Run("mechanisms="+mechanisms, func(t *testing.T) {
 			server := newSMTPServer(t, smtpServerOptions{startTLS: true, authMechanisms: mechanisms})
 			_, err := NewSMTP(SMTPConfig{
@@ -359,6 +380,7 @@ func (s *smtpServer) serve(options smtpServerOptions, serverTLS *tlsConfig) {
 	writer := bufio.NewWriter(conn)
 	writeSMTP(writer, 220, "smtp.test ready")
 	tlsActive := false
+	loginStep := 0
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -392,6 +414,29 @@ func (s *smtpServer) serve(options smtpServerOptions, serverTLS *tlsConfig) {
 			reader = bufio.NewReader(conn)
 			writer = bufio.NewWriter(conn)
 			tlsActive = true
+		case command == "AUTH LOGIN":
+			if !tlsActive {
+				writeSMTP(writer, 538, "encryption required")
+			} else {
+				loginStep = 1
+				writeSMTP(writer, 334, base64.StdEncoding.EncodeToString([]byte("Username:")))
+			}
+		case loginStep == 1:
+			username, err := base64.StdEncoding.DecodeString(line)
+			if err != nil || string(username) != "smtp-user" {
+				writeSMTP(writer, 535, "authentication failed")
+			} else {
+				loginStep = 2
+				writeSMTP(writer, 334, base64.StdEncoding.EncodeToString([]byte("Password:")))
+			}
+		case loginStep == 2:
+			password, err := base64.StdEncoding.DecodeString(line)
+			if err != nil || string(password) != "smtp-password" {
+				writeSMTP(writer, 535, "authentication failed")
+			} else {
+				loginStep = 0
+				writeSMTP(writer, 235, "authenticated")
+			}
 		case strings.HasPrefix(command, "AUTH "):
 			if !tlsActive {
 				writeSMTP(writer, 538, "encryption required")

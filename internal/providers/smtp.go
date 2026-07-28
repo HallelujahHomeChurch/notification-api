@@ -89,10 +89,19 @@ func (s *SMTP) Send(ctx context.Context, payload DeliveryPayload) (ProviderRecei
 
 	if s.config.Username != "" {
 		hasAUTH, mechanisms := client.Extension("AUTH")
-		if !hasAUTH || !containsWord(mechanisms, "PLAIN") {
-			return ProviderReceipt{}, s.failed(ErrorPermanent, "auth", errors.New("SMTP server does not support AUTH PLAIN"))
+		if !hasAUTH {
+			return ProviderReceipt{}, s.failed(ErrorPermanent, "auth", errors.New("SMTP server does not support authentication"))
 		}
-		if err := client.Auth(smtp.PlainAuth("", s.config.Username, s.config.Password, host)); err != nil {
+		var auth smtp.Auth
+		switch {
+		case containsWord(mechanisms, "PLAIN"):
+			auth = smtp.PlainAuth("", s.config.Username, s.config.Password, host)
+		case containsWord(mechanisms, "LOGIN"):
+			auth = &loginAuth{username: s.config.Username, password: s.config.Password, host: host}
+		default:
+			return ProviderReceipt{}, s.failed(ErrorPermanent, "auth", errors.New("SMTP server does not support a configured authentication mechanism"))
+		}
+		if err := client.Auth(auth); err != nil {
 			return ProviderReceipt{}, s.failed(classify(ctx, err), "auth", contextCause(ctx, err))
 		}
 	}
@@ -160,6 +169,36 @@ func (s *SMTP) failed(kind ErrorKind, operation string, cause error) error {
 		s.config.Logger.Printf("smtp delivery failed kind=%s operation=%s", kind, operation)
 	}
 	return providerErr
+}
+
+type loginAuth struct {
+	username string
+	password string
+	host     string
+}
+
+func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if !server.TLS {
+		return "", nil, errors.New("unencrypted connection")
+	}
+	if server.Name != a.host {
+		return "", nil, errors.New("wrong host name")
+	}
+	return "LOGIN", nil, nil
+}
+
+func (a *loginAuth) Next(challenge []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(string(challenge))) {
+	case "username:":
+		return []byte(a.username), nil
+	case "password:":
+		return []byte(a.password), nil
+	default:
+		return nil, errors.New("unexpected SMTP authentication challenge")
+	}
 }
 
 func classify(ctx context.Context, err error) ErrorKind {
