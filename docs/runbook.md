@@ -500,24 +500,24 @@ and the controlled time window; unknown acceptance means no replay.
 
 ## Production acceptance
 
-Status: **infrastructure and production migration completed; runtime and SMTP
-acceptance pending**. Static/local checks are not live acceptance.
+Status: **runtime and Azure Communication Services SMTP deployment accepted;
+operational drills remain**. Static/local checks are not live acceptance.
 
 - [x] Unit tests, PostgreSQL integration tests, and vet pass.
 - [x] Bicep and release workflow static validation pass.
 - [x] Migration-first workflow and immutable image readiness gates exist.
-- [ ] `SMTP_ADDR`, `SMTP_FROM`, and
+- [x] `SMTP_ADDR`, `SMTP_FROM`, and
       `SMTP_AUTHENTICATION_ENABLED` production repository variables are set.
-- [ ] Required SMTP Key Vault credentials exist when authentication is enabled.
+- [x] Required SMTP Key Vault credentials exist when authentication is enabled.
 - [x] Production migration job succeeds.
-- [ ] Production API and worker latest revisions become ready on the exact
+- [x] Production API and worker latest revisions become ready on the exact
       immutable image.
-- [ ] Gateway Dapr invocation of notification `/ready` returns the expected
+- [x] Gateway Dapr invocation of notification `/ready` returns the expected
       HTTP status and body.
-- [ ] Unauthorized Dapr callers are rejected in the deployed environment.
-- [ ] Real verification and password-reset emails arrive at approved test
-      recipients.
-- [ ] Logs are reviewed and contain no target, token, URL, payload, or secret.
+- [x] Unauthorized Dapr callers are rejected in the deployed environment.
+- [x] Real verification and password-reset emails are accepted by the
+      production provider for an approved test recipient.
+- [x] Logs are reviewed and contain no target, token, URL, payload, or secret.
 - [ ] Retry, permanent failure, and DLQ behavior are exercised against the
       deployed provider.
 - [ ] Queue pause/resume and `NOTIFICATIONS_DISABLED` are exercised.
