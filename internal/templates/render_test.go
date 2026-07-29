@@ -44,6 +44,32 @@ func TestRenderEmailFallsBackToEnglish(t *testing.T) {
 	}
 }
 
+func TestRenderOAuthLinkConfirmation(t *testing.T) {
+	definition := mustResolve(t, "account.oauth-link-confirmation")
+	payload := map[string]string{
+		"confirmUrl": "https://account.alive.org.tw/oauth/link#token=opaque",
+		"provider":   "line",
+	}
+
+	for _, test := range []struct {
+		locale  string
+		subject string
+		body    string
+	}{
+		{"zh-Hant", "確認連結 LINE 登入", "如果您剛剛要求將 LINE 連結到 HHC 帳戶，請使用以下連結確認：\n\nhttps://account.alive.org.tw/oauth/link#token=opaque\n"},
+		{"zh-Hans", "确认关联 LINE 登录", "如果您刚刚要求将 LINE 关联到 HHC 帐户，请使用以下链接确认：\n\nhttps://account.alive.org.tw/oauth/link#token=opaque\n"},
+		{"en", "Confirm LINE sign-in link", "If you requested to link LINE to your HHC account, confirm it using this link:\n\nhttps://account.alive.org.tw/oauth/link#token=opaque\n"},
+	} {
+		email, err := RenderEmail(definition, test.locale, "user@example.test", payload)
+		if err != nil {
+			t.Fatalf("RenderEmail(%q) error = %v", test.locale, err)
+		}
+		if email.Subject != test.subject || email.Body != test.body {
+			t.Fatalf("RenderEmail(%q) = %#v, want subject=%q body=%q", test.locale, email, test.subject, test.body)
+		}
+	}
+}
+
 func TestQueuedVersionRendersAfterNewVersionBecomesCurrent(t *testing.T) {
 	templateID := "account.verify-email"
 	originalCurrent := currentVersions[templateID]

@@ -49,11 +49,23 @@ var definitions = map[string]map[int]Definition{
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
 		},
 	},
+	"account.oauth-link-confirmation": {
+		1: {
+			ID:              "account.oauth-link-confirmation",
+			Version:         1,
+			Channel:         "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("confirmUrl", "provider"),
+			AllowedFields:   set("confirmUrl", "provider"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+		},
+	},
 }
 
 var currentVersions = map[string]int{
-	"account.verify-email":   1,
-	"account.reset-password": 1,
+	"account.verify-email":            1,
+	"account.reset-password":          1,
+	"account.oauth-link-confirmation": 1,
 }
 
 func Resolve(templateID, channel string) (Definition, error) {
@@ -99,7 +111,14 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 		if !definition.AllowedFields[key] {
 			return nil, fmt.Errorf("%w: unexpected field %q", ErrInvalidPayload, key)
 		}
-		parsed, err := url.ParseRequestURI(value)
+		if key == "provider" {
+			if value != "google" && value != "line" && value != "microsoft" {
+				return nil, fmt.Errorf("%w: unsupported provider", ErrInvalidPayload)
+			}
+			validated[key] = value
+			continue
+		}
+		parsed, err := url.Parse(value)
 		if err != nil || parsed.Host == "" || parsed.User != nil {
 			return nil, fmt.Errorf("%w: %s must be an approved URL", ErrInvalidPayload, key)
 		}

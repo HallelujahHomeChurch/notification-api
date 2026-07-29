@@ -8,7 +8,7 @@ import (
 )
 
 func TestResolveAccountTemplates(t *testing.T) {
-	for _, templateID := range []string{"account.verify-email", "account.reset-password"} {
+	for _, templateID := range []string{"account.verify-email", "account.reset-password", "account.oauth-link-confirmation"} {
 		definition, err := Resolve(templateID, "email")
 		if err != nil {
 			t.Fatalf("Resolve(%q, email) error = %v", templateID, err)
@@ -19,6 +19,28 @@ func TestResolveAccountTemplates(t *testing.T) {
 		if definition.Channel != "email" {
 			t.Fatalf("Resolve(%q, email).Channel = %q, want email", templateID, definition.Channel)
 		}
+	}
+}
+
+func TestValidateOAuthLinkConfirmation(t *testing.T) {
+	definition := mustResolve(t, "account.oauth-link-confirmation")
+	request := verificationRequest(map[string]string{
+		"confirmUrl": "https://account.alive.org.tw/oauth/link#token=opaque",
+		"provider":   "google",
+	})
+	request.TemplateID = definition.ID
+
+	payload, err := Validate(definition, "account-api", request)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if payload["provider"] != "google" {
+		t.Fatalf("Validate() payload = %#v", payload)
+	}
+
+	request.Payload["provider"] = "untrusted"
+	if _, err := Validate(definition, "account-api", request); !errors.Is(err, ErrInvalidPayload) {
+		t.Fatalf("Validate() error = %v, want ErrInvalidPayload", err)
 	}
 }
 
@@ -82,6 +104,7 @@ func TestValidateAllowsHHCAndLocalDevelopmentOrigins(t *testing.T) {
 	for _, verifyURL := range []string{
 		"https://alive.org.tw/verify-email?token=opaque",
 		"https://account.alive.org.tw/verify-email?token=opaque",
+		"https://account.alive.org.tw/verify-email#token=opaque",
 		"http://localhost:5173/verify-email?token=opaque",
 		"http://127.0.0.1:8080/verify-email?token=opaque",
 		"http://[::1]:3000/verify-email?token=opaque",

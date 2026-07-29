@@ -26,6 +26,8 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 		return renderVerificationEmail(locale, to, validated["verifyUrl"]), nil
 	case canonical.ID == "account.reset-password" && canonical.Version == 1:
 		return renderPasswordResetEmail(locale, to, validated["resetUrl"]), nil
+	case canonical.ID == "account.oauth-link-confirmation" && canonical.Version == 1:
+		return renderOAuthLinkConfirmationEmail(locale, to, validated["confirmUrl"], validated["provider"]), nil
 	default:
 		return Email{}, fmt.Errorf(
 			"%w: %s version %d",
@@ -33,6 +35,22 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 			canonical.ID,
 			canonical.Version,
 		)
+	}
+}
+
+func renderOAuthLinkConfirmationEmail(locale, to, confirmURL, provider string) Email {
+	providerName := map[string]string{
+		"google":    "Google",
+		"line":      "LINE",
+		"microsoft": "Microsoft",
+	}[provider]
+	switch locale {
+	case "zh-Hant":
+		return Email{To: to, Subject: "確認連結 " + providerName + " 登入", Body: "如果您剛剛要求將 " + providerName + " 連結到 HHC 帳戶，請使用以下連結確認：\n\n" + confirmURL + "\n"}
+	case "zh-Hans":
+		return Email{To: to, Subject: "确认关联 " + providerName + " 登录", Body: "如果您刚刚要求将 " + providerName + " 关联到 HHC 帐户，请使用以下链接确认：\n\n" + confirmURL + "\n"}
+	default:
+		return Email{To: to, Subject: "Confirm " + providerName + " sign-in link", Body: "If you requested to link " + providerName + " to your HHC account, confirm it using this link:\n\n" + confirmURL + "\n"}
 	}
 }
 
