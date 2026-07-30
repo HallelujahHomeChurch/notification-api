@@ -15,6 +15,9 @@ param queueName string = 'notifications-email'
 param smtpAddr string
 param smtpFrom string
 param smtpAuthenticationEnabled bool = true
+@minValue(1)
+param notificationTemplateDailyLimit int = 1000
+param notificationsDisabled bool
 param smtpUsernameSecretName string = 'notification-smtp-username'
 param smtpPasswordSecretName string = 'notification-smtp-password'
 
@@ -217,6 +220,8 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'NOTIFICATION_HASH_KEY', secretRef: 'hash-key' }
             { name: 'NOTIFICATION_ALLOWED_CALLERS', value: 'account-api,hhc-web-api' }
             { name: 'NOTIFICATION_ALLOW_DEV_CALLER_HEADER', value: 'false' }
+            { name: 'NOTIFICATION_TEMPLATE_DAILY_LIMIT', value: '${notificationTemplateDailyLimit}' }
+            { name: 'NOTIFICATIONS_DISABLED', value: toLower(string(notificationsDisabled)) }
           ])
           resources: {
             cpu: json('0.5')

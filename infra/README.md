@@ -7,6 +7,7 @@ the existing `alive` resource group.
 ## Prerequisites
 
 - Existing `alive-env`, `alive` ACR, and `alive-vault`.
+- Existing enabled `RecommendedAlertRules-AG-1` action group.
 - Private PostgreSQL reachable at `172.16.68.4:5432`.
 - SMTP endpoint and sender. When SMTP authentication is enabled, create
   `notification-smtp-username` and `notification-smtp-password` in
@@ -87,23 +88,29 @@ outside this repository, then add these repository variables:
 - `SMTP_ADDR`
 - `SMTP_FROM`
 - `SMTP_AUTHENTICATION_ENABLED` (`true` or `false`)
+- `NOTIFICATION_TEMPLATE_DAILY_LIMIT` (positive integer; production starts at `1000`)
 
-The workflow fails before build or deployment when any variable is missing or
-the SMTP authentication flag is invalid. SMTP credentials are not GitHub
-variables or secrets; when authentication is enabled, only
+The workflow fails before build or deployment when any variable is missing,
+the SMTP authentication flag is invalid, the template limit is not positive,
+the action group is unavailable, or `NOTIFICATIONS_DISABLED=true` is active.
+SMTP credentials are not GitHub variables or secrets; when authentication is enabled, only
 `notification-smtp-username` and `notification-smtp-password` in `alive-vault`
 are used.
 
 Each release tests the service against PostgreSQL `notification_test`, builds
 only the immutable `main-<short-sha>` ACR tag, and deploys in this order:
 
-1. Update only `notification-migrate` with `deployRuntime=false`.
-2. Start one migration execution and require that exact execution to report
+1. Validate and deploy the independent rate-limit alert.
+2. Capture the current immutable API/worker images and emergency kill switch.
+3. Update only `notification-migrate` with `deployRuntime=false`.
+4. Start one migration execution and require that exact execution to report
    `Succeeded`.
-3. Update the API and worker with `deployRuntime=true`.
-4. Require both latest revisions to be ready with the exact immutable image.
-5. Invoke the notification API `/ready` endpoint through Dapr from
+5. Update the API and worker with `deployRuntime=true`.
+6. Require both latest revisions to be ready with the exact immutable image.
+7. Invoke the notification API `/ready` endpoint through Dapr from
    `api-gateway` and validate both HTTP 200 and the readiness response body.
 
 CI always passes `provisionPermissions=false`; permission bootstrap remains an
-explicit administrator operation.
+explicit administrator operation. If runtime deployment or smoke verification
+fails, the workflow restores both previously captured images; migrations are
+never rolled back automatically.

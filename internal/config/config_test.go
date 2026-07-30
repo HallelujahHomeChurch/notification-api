@@ -92,6 +92,36 @@ func TestLoadParsesAllowedCallers(t *testing.T) {
 	}
 }
 
+func TestLoadTemplateDailyLimit(t *testing.T) {
+	clearConfigEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TemplateDailyLimit != 1_000 {
+		t.Fatalf("TemplateDailyLimit = %d, want 1000", cfg.TemplateDailyLimit)
+	}
+
+	t.Setenv("NOTIFICATION_TEMPLATE_DAILY_LIMIT", "250")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load(custom limit) error = %v", err)
+	}
+	if cfg.TemplateDailyLimit != 250 {
+		t.Fatalf("TemplateDailyLimit = %d, want 250", cfg.TemplateDailyLimit)
+	}
+}
+
+func TestLoadRejectsNonPositiveTemplateDailyLimit(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("NOTIFICATION_TEMPLATE_DAILY_LIMIT", "0")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want non-positive template daily limit rejected")
+	}
+}
+
 func TestValidateModeRequirements(t *testing.T) {
 	base := Config{
 		Environment:                EnvironmentDevelopment,
@@ -210,7 +240,7 @@ func clearConfigEnv(t *testing.T) {
 		"NOTIFICATION_ALLOW_DEV_CALLER_HEADER", "NOTIFICATION_DATA_ENCRYPTION_KEY", "NOTIFICATION_HASH_KEY",
 		"QUEUE_DRIVER", "SERVICEBUS_NAMESPACE", "SERVICEBUS_QUEUE_NAME", "SERVICEBUS_CONNECTION_STRING",
 		"SMTP_ADDR", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM", "NOTIFICATIONS_DISABLED",
-		"SHUTDOWN_TIMEOUT_SECONDS",
+		"NOTIFICATION_TEMPLATE_DAILY_LIMIT", "SHUTDOWN_TIMEOUT_SECONDS",
 	} {
 		t.Setenv(key, "")
 	}

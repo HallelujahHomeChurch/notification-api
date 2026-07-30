@@ -198,7 +198,7 @@ func TestRateBucketKeyDoesNotContainRecipient(t *testing.T) {
 		"account-api",
 		"account.verify-email",
 		"target-hash",
-		time.Minute,
+		RateLimit{Window: time.Minute, Maximum: 1},
 		time.Unix(1_721_000_000, 0),
 	)
 	for _, plaintext := range []string{"account-api", "account.verify-email", "target-hash"} {
@@ -208,6 +208,32 @@ func TestRateBucketKeyDoesNotContainRecipient(t *testing.T) {
 	}
 	if len(key) != 64 {
 		t.Fatalf("rateBucketKey() length = %d, want 64", len(key))
+	}
+}
+
+func TestRateBucketKeyScopesTemplateLimitAcrossRecipients(t *testing.T) {
+	start := time.Unix(1_721_000_000, 0)
+	recipientLimit := RateLimit{Window: 24 * time.Hour, Maximum: 5}
+	templateLimit := RateLimit{Window: 24 * time.Hour, Maximum: 1_000, TemplateWide: true}
+
+	recipientA := rateBucketKey(
+		[]byte("hash-key"), "account-api", "account.verify-email", "target-a", recipientLimit, start,
+	)
+	recipientB := rateBucketKey(
+		[]byte("hash-key"), "account-api", "account.verify-email", "target-b", recipientLimit, start,
+	)
+	templateA := rateBucketKey(
+		[]byte("hash-key"), "account-api", "account.verify-email", "target-a", templateLimit, start,
+	)
+	templateB := rateBucketKey(
+		[]byte("hash-key"), "account-api", "account.verify-email", "target-b", templateLimit, start,
+	)
+
+	if recipientA == recipientB {
+		t.Fatal("recipient-scoped rate-limit keys must differ")
+	}
+	if templateA != templateB {
+		t.Fatal("template-wide rate-limit keys must match across recipients")
 	}
 }
 
