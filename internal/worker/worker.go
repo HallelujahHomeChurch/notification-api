@@ -207,6 +207,7 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 		Recipient: email.To,
 		Subject:   email.Subject,
 		Body:      email.Body,
+		MessageID: fmt.Sprintf("<%s@notification.alive.org.tw>", claimed.DeliveryID),
 	}, nil
 }
 
@@ -216,7 +217,7 @@ func classifyProviderError(err error) (providers.ErrorKind, bool, time.Duration)
 		return providers.ErrorTemporary, true, 0
 	}
 	switch providerErr.Kind {
-	case providers.ErrorTemporary, providers.ErrorRateLimited:
+	case providers.ErrorTemporary, providers.ErrorRateLimited, providers.ErrorAcceptanceUnknown:
 		return providerErr.Kind, true, providerErr.RetryAfter
 	case providers.ErrorPermanent, providers.ErrorInvalidEndpoint, providers.ErrorSuppressed:
 		return providerErr.Kind, false, 0

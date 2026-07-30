@@ -41,6 +41,7 @@ func TestSMTPAcceptsDeliveryOverSTARTTLS(t *testing.T) {
 		Recipient: "person@example.test",
 		Subject:   "Verify",
 		Body:      "first line\n.leading dot\n驗證完成\n",
+		MessageID: "<delivery-1@notification.alive.org.tw>",
 	}
 
 	receipt, err := provider.Send(context.Background(), payload)
@@ -61,6 +62,21 @@ func TestSMTPAcceptsDeliveryOverSTARTTLS(t *testing.T) {
 		}
 	}
 	assertSMTPData(t, server, payload)
+}
+
+func TestSMTPClassifiesLostFinalResponseAsAcceptanceUnknown(t *testing.T) {
+	server := newSMTPServer(t, smtpServerOptions{startTLS: true, dropAfterData: true})
+	_, err := NewSMTP(SMTPConfig{
+		Addr:      server.addr,
+		From:      "noreply@alive.org.tw",
+		Timeout:   time.Second,
+		TLSConfig: server.clientTLS,
+	}).Send(context.Background(), validEmail())
+
+	assertProviderError(t, err, ErrorAcceptanceUnknown)
+	if !server.accepted() {
+		t.Fatal("SMTP server did not accept DATA before dropping the response")
+	}
 }
 
 func TestSMTPReturnsCanceledContext(t *testing.T) {
@@ -293,6 +309,7 @@ func TestProviderErrorRetryBoundaries(t *testing.T) {
 	}{
 		{ErrorTemporary, true},
 		{ErrorRateLimited, true},
+		{ErrorAcceptanceUnknown, true},
 		{ErrorPermanent, false},
 		{ErrorInvalidEndpoint, false},
 		{ErrorSuppressed, false},
@@ -310,6 +327,7 @@ func validEmail() DeliveryPayload {
 		Recipient: "person@example.test",
 		Subject:   "Verify",
 		Body:      "Use the verification link.",
+		MessageID: "<delivery-1@notification.alive.org.tw>",
 	}
 }
 
@@ -331,6 +349,7 @@ type smtpServerOptions struct {
 	recipientCode      int
 	responseMessage    string
 	hangBeforeGreeting bool
+	dropAfterData      bool
 }
 
 type smtpServer struct {
@@ -468,6 +487,10 @@ func (s *smtpServer) serve(options smtpServerOptions, serverTLS *tlsConfig) {
 				}
 				s.recordData(dataLine)
 			}
+			if options.dropAfterData {
+				s.markAccepted()
+				return
+			}
 			writeSMTP(writer, 250, "queued")
 			s.markAccepted()
 		case command == "QUIT":
@@ -557,6 +580,7 @@ func assertSMTPData(t *testing.T, server *smtpServer, payload DeliveryPayload) {
 		"From: noreply@alive.org.tw",
 		"To: person@example.test",
 		"Subject: Verify",
+		"Message-ID: " + payload.MessageID,
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=UTF-8",
 		"Content-Transfer-Encoding: quoted-printable",

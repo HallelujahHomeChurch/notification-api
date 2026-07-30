@@ -9,17 +9,19 @@ import (
 type ErrorKind string
 
 const (
-	ErrorTemporary       ErrorKind = "temporary"
-	ErrorPermanent       ErrorKind = "permanent"
-	ErrorInvalidEndpoint ErrorKind = "invalid_endpoint"
-	ErrorSuppressed      ErrorKind = "suppressed"
-	ErrorRateLimited     ErrorKind = "rate_limited"
+	ErrorTemporary         ErrorKind = "temporary"
+	ErrorPermanent         ErrorKind = "permanent"
+	ErrorInvalidEndpoint   ErrorKind = "invalid_endpoint"
+	ErrorSuppressed        ErrorKind = "suppressed"
+	ErrorRateLimited       ErrorKind = "rate_limited"
+	ErrorAcceptanceUnknown ErrorKind = "acceptance_unknown"
 )
 
 type DeliveryPayload struct {
 	Recipient string
 	Subject   string
 	Body      string
+	MessageID string
 }
 
 type ProviderReceipt struct {
@@ -44,7 +46,9 @@ func (e *ProviderError) Unwrap() error {
 }
 
 func (e *ProviderError) Retryable() bool {
-	return e.Kind == ErrorTemporary || e.Kind == ErrorRateLimited
+	return e.Kind == ErrorTemporary ||
+		e.Kind == ErrorRateLimited ||
+		e.Kind == ErrorAcceptanceUnknown
 }
 
 type Provider interface {

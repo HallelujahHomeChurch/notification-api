@@ -56,6 +56,38 @@ func TestProviderSuccessStoresReceiptBeforeCompletingBrokerMessage(t *testing.T)
 	if repository.sentReceipt != provider.receipt {
 		t.Fatalf("stored receipt = %#v, want %#v", repository.sentReceipt, provider.receipt)
 	}
+	if provider.payloads[0].MessageID != "<delivery-1@notification.alive.org.tw>" {
+		t.Fatalf("Message-ID = %q", provider.payloads[0].MessageID)
+	}
+}
+
+func TestProviderSuccessWithStoreFailureRedeliversWithStableMessageID(t *testing.T) {
+	repository := deliveryRepository(t, nil, 1)
+	repository.transitionErr = errors.New("database unavailable")
+	provider := &fakeProvider{receipt: providers.ProviderReceipt{Provider: "smtp"}}
+
+	err := newWorker(repository, provider, testKey).Process(
+		context.Background(),
+		&fakeMessage{id: "delivery-1"},
+	)
+	if err == nil {
+		t.Fatal("Process() error = nil")
+	}
+	if repository.releases != 1 {
+		t.Fatalf("release calls = %d, want 1", repository.releases)
+	}
+
+	repository.transitionErr = nil
+	if err := newWorker(repository, provider, testKey).Process(
+		context.Background(),
+		&fakeMessage{id: "delivery-1"},
+	); err != nil {
+		t.Fatalf("redelivery Process() error = %v", err)
+	}
+	if len(provider.payloads) != 2 ||
+		provider.payloads[0].MessageID != provider.payloads[1].MessageID {
+		t.Fatalf("provider payloads = %#v, want stable Message-ID", provider.payloads)
+	}
 }
 
 func TestWorkerResolvesPersistedTemplateVersion(t *testing.T) {
@@ -145,6 +177,24 @@ func TestRateLimitedFailureUsesProviderRetryAfter(t *testing.T) {
 	if repository.retryDelay != 17*time.Minute ||
 		repository.retryCode != string(providers.ErrorRateLimited) {
 		t.Fatalf("retry delay=%s code=%q", repository.retryDelay, repository.retryCode)
+	}
+}
+
+func TestAcceptanceUnknownSchedulesRetry(t *testing.T) {
+	repository := deliveryRepository(t, nil, 1)
+	provider := &fakeProvider{
+		err: &providers.ProviderError{
+			Kind:      providers.ErrorAcceptanceUnknown,
+			Operation: "data",
+		},
+	}
+	message := &fakeMessage{id: "delivery-1"}
+
+	if err := newWorker(repository, provider, testKey).Process(context.Background(), message); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if repository.retryCode != string(providers.ErrorAcceptanceUnknown) {
+		t.Fatalf("retry code = %q", repository.retryCode)
 	}
 }
 
@@ -347,15 +397,17 @@ func (r *fakeRepository) release(_ context.Context, _ claim) error {
 }
 
 type fakeProvider struct {
-	calls   int
-	events  *[]string
-	receipt providers.ProviderReceipt
-	err     error
-	send    func(context.Context) (providers.ProviderReceipt, error)
+	calls    int
+	events   *[]string
+	payloads []providers.DeliveryPayload
+	receipt  providers.ProviderReceipt
+	err      error
+	send     func(context.Context) (providers.ProviderReceipt, error)
 }
 
-func (p *fakeProvider) Send(ctx context.Context, _ providers.DeliveryPayload) (providers.ProviderReceipt, error) {
+func (p *fakeProvider) Send(ctx context.Context, payload providers.DeliveryPayload) (providers.ProviderReceipt, error) {
 	p.calls++
+	p.payloads = append(p.payloads, payload)
 	if p.events != nil {
 		*p.events = append(*p.events, "provider.send")
 	}

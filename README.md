@@ -53,6 +53,10 @@ Configuration is validated per command:
 Production always rejects the development caller header and Service Bus
 connection strings; managed identity uses `SERVICEBUS_NAMESPACE`.
 
+Email delivery is at-least-once. Retries reuse a stable Internet `Message-ID`,
+while the PostgreSQL idempotency key prevents duplicate notification intents.
+SMTP does not provide an exactly-once delivery guarantee.
+
 ## API
 
 Internal endpoint:

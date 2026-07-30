@@ -5,6 +5,12 @@ PostgreSQL ledger/outbox, Azure Service Bus queue, Key Vault secrets, and SMTP
 provider. It does not record a completed production acceptance. See
 [Production acceptance](#production-acceptance) for current status.
 
+Delivery is at-least-once. Each delivery keeps one stable RFC `Message-ID`
+across retries so downstream systems can best-effort deduplicate it, but SMTP
+cannot atomically commit provider acceptance with the PostgreSQL ledger. A
+lost final SMTP response is recorded as `acceptance_unknown` and retried to
+avoid silently dropping account verification or password-reset email.
+
 ## Resources and safety rules
 
 - Resource group: `alive`
@@ -494,9 +500,10 @@ resolved:
 - the restored database uses the matching encryption key.
 
 `NOTIFICATIONS_DISABLED` alone does not stop existing work. Keep the queue
-`ReceiveDisabled` and the worker deactivated throughout reconciliation. SMTP
-currently does not provide a stored provider message ID, so use provider logs
-and the controlled time window; unknown acceptance means no replay.
+`ReceiveDisabled` and the worker deactivated throughout reconciliation. The
+stored SMTP message ID is HHC's stable Internet `Message-ID`, not a provider
+acceptance receipt. Use provider logs and the controlled time window; unknown
+acceptance means no manual replay.
 
 ## Production acceptance
 

@@ -120,11 +120,15 @@ func (s *SMTP) Send(ctx context.Context, payload DeliveryPayload) (ProviderRecei
 		return ProviderReceipt{}, s.failed(classify(ctx, err), "message", contextCause(ctx, err))
 	}
 	if err := writer.Close(); err != nil {
-		return ProviderReceipt{}, s.failed(classify(ctx, err), "data", contextCause(ctx, err))
+		return ProviderReceipt{}, s.failed(ErrorAcceptanceUnknown, "data", contextCause(ctx, err))
 	}
 
 	_ = client.Quit()
-	receipt := ProviderReceipt{Provider: "smtp", AcceptedAt: time.Now().UTC()}
+	receipt := ProviderReceipt{
+		Provider:          "smtp",
+		ProviderMessageID: payload.MessageID,
+		AcceptedAt:        time.Now().UTC(),
+	}
 	if s.config.Logger != nil {
 		s.config.Logger.Print("smtp delivery accepted")
 	}
@@ -141,6 +145,9 @@ func (s *SMTP) validate(payload DeliveryPayload) (string, error) {
 	}
 	if strings.ContainsAny(payload.Subject, "\r\n") {
 		return "", errors.New("invalid subject")
+	}
+	if !validMessageID(payload.MessageID) {
+		return "", errors.New("invalid message ID")
 	}
 	return host, nil
 }
@@ -256,6 +263,15 @@ func plainAddress(value string) bool {
 	return err == nil && parsed.Address == value
 }
 
+func validMessageID(value string) bool {
+	return len(value) >= 3 &&
+		len(value) <= 998 &&
+		strings.HasPrefix(value, "<") &&
+		strings.HasSuffix(value, ">") &&
+		!strings.ContainsAny(value, "\r\n \t") &&
+		plainAddress(value[1:len(value)-1])
+}
+
 func containsWord(value, word string) bool {
 	for _, candidate := range strings.Fields(value) {
 		if strings.EqualFold(candidate, word) {
@@ -270,6 +286,7 @@ func writeMessage(writer io.Writer, from string, payload DeliveryPayload) error 
 		"From: " + from,
 		"To: " + payload.Recipient,
 		"Subject: " + mime.QEncoding.Encode("UTF-8", payload.Subject),
+		"Message-ID: " + payload.MessageID,
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=UTF-8",
 		"Content-Transfer-Encoding: quoted-printable",
