@@ -13,11 +13,11 @@ func TestLoadParsesVersionedKeyrings(t *testing.T) {
 	clearConfigEnv(t)
 	encryptionV1 := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	encryptionV2 := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	t.Setenv("NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "legacy-v1")
+	t.Setenv("NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "enc-v2")
 	t.Setenv("NOTIFICATION_ENCRYPTION_KEYS_JSON", fmt.Sprintf(
 		`{"legacy-v1":%q,"enc-v2":%q}`, encryptionV1, encryptionV2,
 	))
-	t.Setenv("NOTIFICATION_ACTIVE_HASH_KEY_ID", "legacy-v1")
+	t.Setenv("NOTIFICATION_ACTIVE_HASH_KEY_ID", "hash-v2")
 	t.Setenv("NOTIFICATION_HASH_KEYS_JSON",
 		`{"legacy-v1":"01234567890123456789012345678901","hash-v2":"abcdefghijklmnopqrstuvwxyz012345"}`)
 
@@ -25,16 +25,16 @@ func TestLoadParsesVersionedKeyrings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.ActiveEncryptionKeyID != "legacy-v1" || len(cfg.EncryptionKeys) != 2 {
+	if cfg.ActiveEncryptionKeyID != "enc-v2" || len(cfg.EncryptionKeys) != 2 {
 		t.Fatalf("encryption keyring = %q %#v", cfg.ActiveEncryptionKeyID, cfg.EncryptionKeys)
 	}
-	if cfg.ActiveHashKeyID != "legacy-v1" || len(cfg.HashKeys) != 2 {
+	if cfg.ActiveHashKeyID != "hash-v2" || len(cfg.HashKeys) != 2 {
 		t.Fatalf("hash keyring = %q %#v", cfg.ActiveHashKeyID, cfg.HashKeys)
 	}
-	if !reflect.DeepEqual(cfg.DataEncryptionKey, cfg.EncryptionKeys["legacy-v1"]) {
+	if !reflect.DeepEqual(cfg.DataEncryptionKey, cfg.EncryptionKeys["enc-v2"]) {
 		t.Fatal("DataEncryptionKey does not preserve the active key for current callers")
 	}
-	if !reflect.DeepEqual(cfg.HashKey, cfg.HashKeys["legacy-v1"]) {
+	if !reflect.DeepEqual(cfg.HashKey, cfg.HashKeys["hash-v2"]) {
 		t.Fatal("HashKey does not preserve the active key for current callers")
 	}
 }
@@ -153,22 +153,6 @@ func TestLoadRejectsInvalidKeyrings(t *testing.T) {
 				"NOTIFICATION_ACTIVE_HASH_KEY_ID": "v1",
 			},
 			want: "must be set together",
-		},
-		{
-			name: "encryption activation before persistence wiring",
-			env: map[string]string{
-				"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID": "v2",
-				"NOTIFICATION_ENCRYPTION_KEYS_JSON":     fmt.Sprintf(`{"v2":%q}`, validEncryption),
-			},
-			want: "must remain",
-		},
-		{
-			name: "hash activation before persistence wiring",
-			env: map[string]string{
-				"NOTIFICATION_ACTIVE_HASH_KEY_ID": "v2",
-				"NOTIFICATION_HASH_KEYS_JSON":     fmt.Sprintf(`{"v2":%q}`, validHash),
-			},
-			want: "must remain",
 		},
 	}
 

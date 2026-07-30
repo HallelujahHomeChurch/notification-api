@@ -38,6 +38,7 @@ type claim struct {
 	TemplateVersion   int
 	Channel           string
 	Attempt           int
+	EncryptionKeyID   string
 	TargetCiphertext  []byte
 	PayloadCiphertext []byte
 }
@@ -64,7 +65,7 @@ type postgresStore struct {
 type Worker struct {
 	repository      repository
 	provider        providers.Provider
-	key             []byte
+	keys            map[string][]byte
 	retryDelay      func(int) time.Duration
 	newID           func() string
 	resolveTemplate func(string, int, string) (templates.Definition, error)
@@ -74,11 +75,27 @@ func New(db *sql.DB, provider providers.Provider, encryptionKey []byte) *Worker 
 	return newWorker(postgresStore{db: db}, provider, encryptionKey)
 }
 
+func NewWithKeyring(db *sql.DB, provider providers.Provider, keys map[string][]byte) *Worker {
+	return newWorkerWithKeyring(postgresStore{db: db}, provider, keys)
+}
+
 func newWorker(repository repository, provider providers.Provider, encryptionKey []byte) *Worker {
+	return newWorkerWithKeyring(
+		repository,
+		provider,
+		map[string][]byte{"legacy-v1": encryptionKey},
+	)
+}
+
+func newWorkerWithKeyring(
+	repository repository,
+	provider providers.Provider,
+	keys map[string][]byte,
+) *Worker {
 	return &Worker{
 		repository:      repository,
 		provider:        provider,
-		key:             encryptionKey,
+		keys:            keys,
 		retryDelay:      retryDelay,
 		newID:           uuid.NewString,
 		resolveTemplate: templates.ResolveVersion,
@@ -109,6 +126,9 @@ func (w *Worker) Process(ctx context.Context, message queue.BrokerMessage) error
 
 	payload, err := w.render(claimed)
 	if err != nil {
+		if errors.Is(err, notificationcrypto.ErrKeyNotConfigured) {
+			return fmt.Errorf("render delivery: %w", err)
+		}
 		if transitionErr := w.repository.markFailed(ctx, claimed, "invalid_payload"); transitionErr != nil {
 			return errors.Join(fmt.Errorf("render delivery: %w", err), transitionErr)
 		}
@@ -163,16 +183,18 @@ func (w *Worker) Process(ctx context.Context, message queue.BrokerMessage) error
 }
 
 func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
-	target, err := notificationcrypto.Decrypt(
-		w.key,
+	target, err := notificationcrypto.DecryptWithKeyID(
+		w.keys,
+		claimed.EncryptionKeyID,
 		[]byte(claimed.MessageID+":target"),
 		claimed.TargetCiphertext,
 	)
 	if err != nil {
 		return providers.DeliveryPayload{}, err
 	}
-	payload, err := notificationcrypto.Decrypt(
-		w.key,
+	payload, err := notificationcrypto.DecryptWithKeyID(
+		w.keys,
+		claimed.EncryptionKeyID,
 		[]byte(claimed.MessageID+":payload"),
 		claimed.PayloadCiphertext,
 	)
@@ -276,9 +298,9 @@ func (s postgresStore) claim(
 		    updated_at=clock_timestamp()
 		FROM candidate, notification_messages AS message
 		WHERE delivery.id=candidate.id AND message.id=delivery.message_id
-		RETURNING delivery.id, message.id, message.template_id, message.template_version,
-		          delivery.channel, delivery.attempt_count,
-		          message.target_ciphertext, message.payload_ciphertext`,
+			RETURNING delivery.id, message.id, message.template_id, message.template_version,
+			          delivery.channel, delivery.attempt_count,
+			          message.encryption_key_id, message.target_ciphertext, message.payload_ciphertext`,
 		deliveryID,
 		lease.Seconds(),
 	).Scan(
@@ -288,6 +310,7 @@ func (s postgresStore) claim(
 		&claimed.TemplateVersion,
 		&claimed.Channel,
 		&claimed.Attempt,
+		&claimed.EncryptionKeyID,
 		&claimed.TargetCiphertext,
 		&claimed.PayloadCiphertext,
 	)

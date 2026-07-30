@@ -115,10 +115,17 @@ func TestCreatePersistsMessageDeliveryAndOutboxInOneTransaction(t *testing.T) {
 	if !strings.Contains(tx.execs[0].query, "pg_advisory_xact_lock") {
 		t.Fatalf("first transaction statement = %q, want idempotency lock", tx.execs[0].query)
 	}
+	if tx.execs[0].args[0] != idempotencyLockKey("account-api", "request-1") {
+		t.Fatalf("idempotency lock input = %#v, want stable caller/key digest", tx.execs[0].args[0])
+	}
 	for index, table := range []string{"notification_messages", "notification_deliveries", "notification_outbox"} {
 		if !strings.Contains(tx.execs[index+1].query, table) {
 			t.Fatalf("write %d query = %q, want %s", index, tx.execs[index+1].query, table)
 		}
+	}
+	if !strings.Contains(tx.execs[1].query, "encryption_key_id") ||
+		!strings.Contains(tx.execs[1].query, "hash_key_id") {
+		t.Fatalf("message insert does not persist key IDs: %q", tx.execs[1].query)
 	}
 }
 
@@ -153,6 +160,42 @@ func TestCreateRateLimitUsesDatabaseClockAndWritesNoIntent(t *testing.T) {
 	}
 }
 
+func TestCreateChecksEveryRetainedHashKeyRateBucket(t *testing.T) {
+	databaseNow := time.Date(2026, 7, 27, 4, 30, 45, 0, time.UTC)
+	tx := &fakeTransaction{rows: []fakeRow{
+		{err: sql.ErrNoRows},
+		{values: []any{databaseNow}},
+		{values: []any{int64(1), int64(30)}},
+		{values: []any{int64(2), int64(30)}},
+	}}
+	db := &fakeDatabase{tx: tx}
+	instance := newStoreWithHashKeys(db, map[string][]byte{
+		"v1": []byte("01234567890123456789012345678901"),
+		"v2": []byte("abcdefghijklmnopqrstuvwxyz012345"),
+	})
+	params := createParams()
+	params.HashKeyID = "v2"
+	params.RequestHashes = map[string]string{"v1": "request-v1", "v2": "request-v2"}
+	params.TargetHashes = map[string]string{"v1": "target-v1", "v2": "target-v2"}
+	params.RequestHash = params.RequestHashes["v2"]
+	params.TargetHash = params.TargetHashes["v2"]
+	params.RateLimits = []RateLimit{{Window: time.Minute, Maximum: 1}}
+
+	result, err := instance.Create(context.Background(), params)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if result.RetryAfter != 30*time.Second {
+		t.Fatalf("RetryAfter = %s, want previous-key bucket rejection", result.RetryAfter)
+	}
+	if len(tx.queries) != 4 {
+		t.Fatalf("queries = %d, want lookup, clock, and two retained-key buckets", len(tx.queries))
+	}
+	if !tx.rolledBack || tx.committed {
+		t.Fatalf("committed=%v rolledBack=%v", tx.committed, tx.rolledBack)
+	}
+}
+
 func TestCreateResolvesUniqueKeyRaceDeterministically(t *testing.T) {
 	for _, test := range []struct {
 		name         string
@@ -173,7 +216,7 @@ func TestCreateResolvesUniqueKeyRaceDeterministically(t *testing.T) {
 			db := &fakeDatabase{
 				tx: tx,
 				outsideRows: []fakeRow{{values: []any{
-					"winner-message", "account-api", test.winnerHash, 1, contracts.MessageStatusQueued,
+					"winner-message", "account-api", test.winnerHash, "legacy-v1", 1, contracts.MessageStatusQueued,
 				}}},
 			}
 			store := newStore(db, []byte("hash-key"))
@@ -245,11 +288,15 @@ func createParams() CreateParams {
 		Caller:           "account-api",
 		IdempotencyKey:   "request-1",
 		RequestHash:      "request-hash",
+		RequestHashes:    map[string]string{"legacy-v1": "request-hash"},
+		EncryptionKeyID:  "legacy-v1",
+		HashKeyID:        "legacy-v1",
 		TemplateID:       "account.verify-email",
 		TemplateVersion:  1,
 		Channel:          "email",
 		TargetType:       "email",
 		TargetHash:       "target-hash",
+		TargetHashes:     map[string]string{"legacy-v1": "target-hash"},
 		TargetCiphertext: []byte("encrypted-target"),
 		PayloadCiphertext: []byte(
 			"encrypted-payload",

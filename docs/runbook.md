@@ -229,8 +229,8 @@ match the corresponding `legacy-v1` keyring entry exactly; startup rejects a
 mismatch so rolling replicas cannot write incompatible data under one key ID.
 
 Do not activate another key ID until the API, store, and worker are all wired
-to persist and read key IDs. The expand release rejects a non-`legacy-v1`
-active ID so it cannot write ciphertext under a mismatched database default.
+to persist and read key IDs. The keyring-aware release persists active IDs and
+reads historical IDs before another key is activated.
 Replacing only the old Key Vault values is unsafe:
 
 - the worker needs the current encryption key for every non-purged queued
@@ -239,8 +239,13 @@ Replacing only the old Key Vault values is unsafe:
   comparison, and rate-limit buckets.
 
 Keep every referenced key configured until a preflight confirms no retained
-row or live rate-limit window depends on it. Keep sending disabled during an
-emergency reconciliation. Do not improvise a secret-only rotation.
+row depends on it. API startup checks retained hash-key references; worker
+startup checks non-purged encryption-key references. Keep a previous hash key
+configured for at least the longest rate-limit window (currently 24 hours), so
+accepted requests continue incrementing both old and new buckets before
+retirement. After activating a new key, rollback only to a keyring-aware image.
+Keep sending disabled during an emergency reconciliation. Do not improvise a
+secret-only rotation.
 
 Managed identities do not have stored credentials to rotate.
 

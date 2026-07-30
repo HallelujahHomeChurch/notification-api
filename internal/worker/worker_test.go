@@ -15,6 +15,49 @@ import (
 
 var testKey = bytes.Repeat([]byte{1}, 32)
 
+func TestWorkerDecryptsQueuedMessageWithRetainedKey(t *testing.T) {
+	repository := deliveryRepository(t, nil, 1)
+	repository.claimResult.Claim.EncryptionKeyID = "v1"
+	provider := &fakeProvider{receipt: providers.ProviderReceipt{Provider: "smtp"}}
+	instance := newWorkerWithKeyring(repository, provider, map[string][]byte{
+		"v1": testKey,
+		"v2": bytes.Repeat([]byte{2}, 32),
+	})
+
+	if err := instance.Process(context.Background(), &fakeMessage{id: "delivery-1"}); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if provider.calls != 1 || repository.sentReceipt.Provider != "smtp" {
+		t.Fatalf("provider calls=%d receipt=%#v", provider.calls, repository.sentReceipt)
+	}
+}
+
+func TestWorkerReleasesLeaseWhenPersistedKeyIsMissing(t *testing.T) {
+	repository := deliveryRepository(t, nil, 1)
+	repository.claimResult.Claim.EncryptionKeyID = "retired"
+	provider := &fakeProvider{}
+	message := &fakeMessage{id: "delivery-1"}
+
+	err := newWorkerWithKeyring(
+		repository,
+		provider,
+		map[string][]byte{"v2": bytes.Repeat([]byte{2}, 32)},
+	).Process(context.Background(), message)
+	if !errors.Is(err, notificationcrypto.ErrKeyNotConfigured) {
+		t.Fatalf("Process() error = %v, want key configuration error", err)
+	}
+	if provider.calls != 0 || repository.releases != 1 ||
+		repository.failedCode != "" || message.deadLettered != 0 {
+		t.Fatalf(
+			"provider=%d releases=%d failed=%q dead-letter=%d",
+			provider.calls,
+			repository.releases,
+			repository.failedCode,
+			message.deadLettered,
+		)
+	}
+}
+
 func TestAlreadySentCompletesWithoutProviderCall(t *testing.T) {
 	repository := &fakeRepository{
 		claimResult: claimResult{Status: statusSent},
@@ -323,6 +366,7 @@ func deliveryRepository(t *testing.T, events *[]string, attempt int) *fakeReposi
 				TemplateVersion:   1,
 				Channel:           "email",
 				Attempt:           attempt,
+				EncryptionKeyID:   "legacy-v1",
 				TargetCiphertext:  target,
 				PayloadCiphertext: payload,
 			},

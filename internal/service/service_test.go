@@ -38,7 +38,7 @@ func (r *memoryRepository) Create(_ context.Context, params store.CreateParams) 
 	}
 	key := params.Caller + "\x00" + params.IdempotencyKey
 	if existing, ok := r.messages[key]; ok {
-		if existing.RequestHash != params.RequestHash {
+		if existing.RequestHash != params.RequestHashes[existing.HashKeyID] {
 			return store.CreateResult{Conflict: true}, nil
 		}
 		return store.CreateResult{Message: existing, Replayed: true}, nil
@@ -47,6 +47,7 @@ func (r *memoryRepository) Create(_ context.Context, params store.CreateParams) 
 		ID:              params.MessageID,
 		Caller:          params.Caller,
 		RequestHash:     params.RequestHash,
+		HashKeyID:       params.HashKeyID,
 		TemplateVersion: params.TemplateVersion,
 		Status:          contracts.MessageStatusQueued,
 	}
@@ -101,6 +102,81 @@ func TestSendCreatesEncryptedIntent(t *testing.T) {
 	}
 	if string(payload) != `{"locale":"zh-Hant","fields":{"verifyUrl":"https://account.alive.org.tw/verify-email?token=opaque-token"}}` {
 		t.Fatalf("decrypted payload = %s", payload)
+	}
+}
+
+func TestSendPersistsActiveKeyIDsAndAllHashIdentities(t *testing.T) {
+	encryptionKeys := map[string][]byte{
+		"v1": bytes.Repeat([]byte{1}, 32),
+		"v2": bytes.Repeat([]byte{3}, 32),
+	}
+	hashKeys := map[string][]byte{
+		"v1": bytes.Repeat([]byte{2}, 32),
+		"v2": bytes.Repeat([]byte{4}, 32),
+	}
+	repository := &memoryRepository{}
+	svc := New(repository, Config{
+		ActiveEncryptionKeyID: "v2",
+		EncryptionKeys:        encryptionKeys,
+		ActiveHashKeyID:       "v2",
+		HashKeys:              hashKeys,
+	})
+
+	result, err := svc.Send(context.Background(), "account-api", "versioned", validRequest())
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	params := repository.creates[0]
+	if params.EncryptionKeyID != "v2" || params.HashKeyID != "v2" {
+		t.Fatalf("key IDs = %q/%q, want v2/v2", params.EncryptionKeyID, params.HashKeyID)
+	}
+	if len(params.RequestHashes) != 2 || len(params.TargetHashes) != 2 {
+		t.Fatalf("hash identities = %#v/%#v", params.RequestHashes, params.TargetHashes)
+	}
+	if params.RequestHash != params.RequestHashes["v2"] ||
+		params.TargetHash != params.TargetHashes["v2"] {
+		t.Fatal("persisted hashes do not use active hash key")
+	}
+	if _, err := notificationcrypto.Decrypt(
+		encryptionKeys["v2"],
+		[]byte(result.MessageID+":payload"),
+		params.PayloadCiphertext,
+	); err != nil {
+		t.Fatalf("active-key decrypt error = %v", err)
+	}
+}
+
+func TestSendReplaysExistingRequestAcrossHashKeyRotation(t *testing.T) {
+	repository := &memoryRepository{}
+	keys := map[string][]byte{
+		"v1": bytes.Repeat([]byte{2}, 32),
+		"v2": bytes.Repeat([]byte{4}, 32),
+	}
+	firstService := New(repository, Config{
+		ActiveEncryptionKeyID: "v1",
+		EncryptionKeys:        map[string][]byte{"v1": testEncryptionKey},
+		ActiveHashKeyID:       "v1",
+		HashKeys:              keys,
+	})
+	first, err := firstService.Send(context.Background(), "account-api", "rotated", validRequest())
+	if err != nil {
+		t.Fatalf("first Send() error = %v", err)
+	}
+	rotatedService := New(repository, Config{
+		ActiveEncryptionKeyID: "v2",
+		EncryptionKeys: map[string][]byte{
+			"v1": testEncryptionKey,
+			"v2": bytes.Repeat([]byte{3}, 32),
+		},
+		ActiveHashKeyID: "v2",
+		HashKeys:        keys,
+	})
+	replay, err := rotatedService.Send(context.Background(), "account-api", "rotated", validRequest())
+	if err != nil {
+		t.Fatalf("rotated Send() error = %v", err)
+	}
+	if !replay.Replayed || replay.MessageID != first.MessageID {
+		t.Fatalf("rotated Send() = %#v, want replay of %s", replay, first.MessageID)
 	}
 }
 

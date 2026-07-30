@@ -7,8 +7,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
+
+var ErrKeyNotConfigured = errors.New("key is not configured")
 
 func Encrypt(key, context, plaintext []byte) ([]byte, error) {
 	if len(context) == 0 {
@@ -80,7 +83,7 @@ func keyByID(keys map[string][]byte, keyID string) ([]byte, error) {
 	}
 	key, ok := keys[keyID]
 	if !ok {
-		return nil, fmt.Errorf("key ID %q is not configured", keyID)
+		return nil, fmt.Errorf("%w: %q", ErrKeyNotConfigured, keyID)
 	}
 	return key, nil
 }

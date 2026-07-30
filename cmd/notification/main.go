@@ -159,15 +159,21 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 	if err != nil {
 		return apiComponents{}, err
 	}
+	if err := store.ValidateKeyReferences(ctx, db, nil, cfg.HashKeys); err != nil {
+		_ = db.Close()
+		return apiComponents{}, fmt.Errorf("validate notification hash keys: %w", err)
+	}
 	publisher, err := queue.NewServiceBus(serviceBusConfig(cfg))
 	if err != nil {
 		_ = db.Close()
 		return apiComponents{}, fmt.Errorf("create publisher: %w", err)
 	}
-	repository := store.New(db, cfg.HashKey)
+	repository := store.NewWithHashKeys(db, cfg.HashKeys)
 	notificationService := service.New(repository, service.Config{
-		DataEncryptionKey:     cfg.DataEncryptionKey,
-		HashKey:               cfg.HashKey,
+		ActiveEncryptionKeyID: cfg.ActiveEncryptionKeyID,
+		EncryptionKeys:        cfg.EncryptionKeys,
+		ActiveHashKeyID:       cfg.ActiveHashKeyID,
+		HashKeys:              cfg.HashKeys,
 		NotificationsDisabled: cfg.NotificationsDisabled,
 		RateLimits: []store.RateLimit{
 			{Window: 15 * time.Minute, Maximum: 1},
@@ -209,13 +215,17 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 	if err != nil {
 		return workerComponents{}, err
 	}
+	if err := store.ValidateKeyReferences(ctx, db, cfg.EncryptionKeys, nil); err != nil {
+		_ = db.Close()
+		return workerComponents{}, fmt.Errorf("validate notification encryption keys: %w", err)
+	}
 	consumer, err := queue.NewServiceBusConsumer(serviceBusConfig(cfg))
 	if err != nil {
 		_ = db.Close()
 		return workerComponents{}, fmt.Errorf("create consumer: %w", err)
 	}
 	provider := providers.NewSMTP(smtpConfig)
-	deliveryWorker := worker.New(db, provider, cfg.DataEncryptionKey)
+	deliveryWorker := worker.NewWithKeyring(db, provider, cfg.EncryptionKeys)
 
 	return workerComponents{
 		http: httpProcess(cfg.Port, workerHealthHandler(db), cfg.ShutdownTimeout),

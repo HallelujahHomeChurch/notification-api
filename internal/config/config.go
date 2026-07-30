@@ -75,13 +75,6 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if activeEncryptionKeyID != "" && activeEncryptionKeyID != legacyKeyID {
-		return Config{}, fmt.Errorf("NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID must remain %q until key IDs are persisted", legacyKeyID)
-	}
-	if activeHashKeyID != "" && activeHashKeyID != legacyKeyID {
-		return Config{}, fmt.Errorf("NOTIFICATION_ACTIVE_HASH_KEY_ID must remain %q until key IDs are persisted", legacyKeyID)
-	}
-
 	cfg := Config{
 		Environment:                env("ENVIRONMENT", EnvironmentDevelopment),
 		Port:                       env("PORT", "8081"),
