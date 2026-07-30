@@ -23,8 +23,9 @@ type Message struct {
 }
 
 type RateLimit struct {
-	Window  time.Duration
-	Maximum int
+	Window       time.Duration
+	Maximum      int
+	TemplateWide bool
 }
 
 type CreateParams struct {
@@ -241,7 +242,7 @@ func (s *Store) applyRateLimits(ctx context.Context, tx transaction, params Crea
 			params.Caller,
 			params.TemplateID,
 			params.TargetHash,
-			limit.Window,
+			limit,
 			windowStart,
 		)
 		var count, retryAfterSeconds int64
@@ -304,14 +305,17 @@ func rateBucketKey(
 	caller string,
 	templateID string,
 	targetHash string,
-	window time.Duration,
+	limit RateLimit,
 	windowStart time.Time,
 ) string {
+	if limit.TemplateWide {
+		targetHash = ""
+	}
 	value := strings.Join([]string{
 		caller,
 		templateID,
 		targetHash,
-		strconv.FormatInt(int64(window/time.Second), 10),
+		strconv.FormatInt(int64(limit.Window/time.Second), 10),
 		strconv.FormatInt(windowStart.Unix(), 10),
 	}, "\x00")
 	return notificationcrypto.Hash(hashKey, []byte(value))

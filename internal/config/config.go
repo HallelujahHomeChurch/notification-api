@@ -31,6 +31,7 @@ type Config struct {
 	SMTPPassword               string
 	SMTPFrom                   string
 	NotificationsDisabled      bool
+	TemplateDailyLimit         int
 	ShutdownTimeout            time.Duration
 }
 
@@ -42,6 +43,13 @@ func Load() (Config, error) {
 	notificationsDisabled, err := boolEnv("NOTIFICATIONS_DISABLED", false)
 	if err != nil {
 		return Config{}, err
+	}
+	templateDailyLimit, err := intEnv("NOTIFICATION_TEMPLATE_DAILY_LIMIT", 1_000)
+	if err != nil {
+		return Config{}, err
+	}
+	if templateDailyLimit <= 0 {
+		return Config{}, fmt.Errorf("NOTIFICATION_TEMPLATE_DAILY_LIMIT must be positive")
 	}
 	shutdownTimeoutSeconds, err := intEnv("SHUTDOWN_TIMEOUT_SECONDS", 30)
 	if err != nil {
@@ -67,6 +75,7 @@ func Load() (Config, error) {
 		SMTPPassword:               os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:                   os.Getenv("SMTP_FROM"),
 		NotificationsDisabled:      notificationsDisabled,
+		TemplateDailyLimit:         templateDailyLimit,
 		ShutdownTimeout:            time.Duration(shutdownTimeoutSeconds) * time.Second,
 	}
 

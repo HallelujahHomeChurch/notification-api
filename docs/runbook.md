@@ -163,9 +163,9 @@ allowlisted Dapr caller (`account-api` or `hhc-web-api`) and require
 `Dapr-Caller-App-Id`.
 
 This is not a full delivery stop. Use `ReceiveDisabled` when existing
-notifications must not reach SMTP. The current Bicep template does not persist
-this emergency override; a later Bicep release restores its configured
-environment, so verify the flag after every deployment during an incident.
+notifications must not reach SMTP. The production release refuses to deploy
+while this emergency override is `true`; re-enable it explicitly only after the
+incident is resolved.
 
 Re-enable new intents explicitly:
 
@@ -399,6 +399,7 @@ traffic exists.
 | Signal | Warning | Critical |
 | --- | --- | --- |
 | API readiness | 1 failure | 2 consecutive minutes |
+| API rate limited | more than 10 HTTP 429s in 5 minutes | investigate request, recipient, and template volume |
 | Oldest due outbox row | 120 seconds | 600 seconds |
 | Due outbox rows | 100 for 5 minutes | 1,000 for 5 minutes |
 | Oldest due delivery | 120 seconds | 600 seconds |
@@ -417,6 +418,11 @@ minutes with zero replicas; page after five minutes.
 
 Also alert on a non-`Active` queue outside an approved maintenance window and
 on an API/worker latest revision that is not the latest ready revision.
+
+The API enforces recipient limits of one message per 15 minutes and five per
+24 hours, plus `NOTIFICATION_TEMPLATE_DAILY_LIMIT` per caller/template/day
+(default `1000`). Tune the template-wide limit from observed legitimate volume;
+do not remove it to accommodate a burst.
 
 ## Log redaction
 

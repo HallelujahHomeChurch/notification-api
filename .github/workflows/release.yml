@@ -76,6 +76,7 @@ jobs:
       SMTP_ADDR: ${{ vars.SMTP_ADDR }}
       SMTP_FROM: ${{ vars.SMTP_FROM }}
       SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
+      NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -89,6 +90,7 @@ jobs:
             SMTP_ADDR
             SMTP_FROM
             SMTP_AUTHENTICATION_ENABLED
+            NOTIFICATION_TEMPLATE_DAILY_LIMIT
           )
           for name in "${required_vars[@]}"; do
             if [[ -z "${!name:-}" ]]; then
@@ -103,6 +105,10 @@ jobs:
               exit 1
               ;;
           esac
+          if ! [[ "${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "NOTIFICATION_TEMPLATE_DAILY_LIMIT must be a positive integer" >&2
+            exit 1
+          fi
 
       - name: Set image tag
         shell: bash
@@ -117,6 +123,65 @@ jobs:
 
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --yes
+
+      - name: Capture runtime state and preflight monitoring
+        shell: bash
+        run: |
+          previous_api_image="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${API_APP_NAME}" \
+            --query "properties.template.containers[0].image" \
+            --output tsv \
+            --only-show-errors)"
+          previous_worker_image="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${WORKER_APP_NAME}" \
+            --query "properties.template.containers[0].image" \
+            --output tsv \
+            --only-show-errors)"
+          notifications_disabled="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${API_APP_NAME}" \
+            --query "properties.template.containers[0].env[?name=='NOTIFICATIONS_DISABLED'].value | [0]" \
+            --output tsv \
+            --only-show-errors)"
+          notifications_disabled="${notifications_disabled:-false}"
+          notifications_disabled="${notifications_disabled,,}"
+          if [[ -z "${previous_api_image}" || -z "${previous_worker_image}" ]]; then
+            echo "Unable to capture current runtime images" >&2
+            exit 1
+          fi
+          case "${notifications_disabled}" in
+            false) ;;
+            true)
+              echo "NOTIFICATIONS_DISABLED=true; refusing to release during an active notification incident" >&2
+              exit 1
+              ;;
+            *)
+              echo "Invalid deployed NOTIFICATIONS_DISABLED value: ${notifications_disabled}" >&2
+              exit 1
+              ;;
+          esac
+          az monitor action-group show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "RecommendedAlertRules-AG-1" \
+            --only-show-errors \
+            --output none
+          {
+            echo "PREVIOUS_API_IMAGE=${previous_api_image}"
+            echo "PREVIOUS_WORKER_IMAGE=${previous_worker_image}"
+            echo "NOTIFICATIONS_DISABLED=${notifications_disabled}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Deploy rate-limit alert
+        shell: bash
+        run: |
+          az deployment group create \
+            --name "notification-alerts-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/alerts.bicep \
+            --only-show-errors \
+            --output none
 
       - name: Build and push image to ACR
         run: |
@@ -142,6 +207,8 @@ jobs:
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
               smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
+              notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
             --only-show-errors \
             --output none
 
@@ -184,6 +251,7 @@ jobs:
           exit 1
 
       - name: Deploy API and worker
+        id: deploy_runtime
         shell: bash
         run: |
           image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
@@ -199,10 +267,13 @@ jobs:
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
               smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
+              notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
             --only-show-errors \
             --output none
 
       - name: Wait for API and worker revisions
+        id: wait_runtime
         shell: bash
         run: |
           image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
@@ -241,6 +312,7 @@ jobs:
           wait_for_revision "${WORKER_APP_NAME}"
 
       - name: Verify Dapr readiness through API gateway
+        id: smoke_runtime
         shell: bash
         run: |
           dapr_url="http://localhost:3500/v1.0/invoke/notification-api/method/ready"
@@ -267,3 +339,46 @@ jobs:
             echo "Dapr readiness probe command failed with exit ${probe_exit}" >&2
             exit 1
           fi
+
+      - name: Roll back runtime after failed deployment verification
+        if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          rollback() {
+            local app_name="$1"
+            local image_ref="$2"
+            az containerapp update \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${app_name}" \
+              --image "${image_ref}" \
+              --only-show-errors \
+              --output none
+            for attempt in {1..60}; do
+              state="$(az containerapp show \
+                --resource-group "${RESOURCE_GROUP}" \
+                --name "${app_name}" \
+                --query "join('|', [properties.latestRevisionName, properties.latestReadyRevisionName])" \
+                --output tsv \
+                --only-show-errors)"
+              IFS='|' read -r latest ready <<< "${state}"
+              if [[ -n "${latest}" && "${latest}" == "${ready}" ]]; then
+                deployed_image="$(az containerapp revision show \
+                  --resource-group "${RESOURCE_GROUP}" \
+                  --name "${app_name}" \
+                  --revision "${ready}" \
+                  --query "properties.template.containers[0].image" \
+                  --output tsv \
+                  --only-show-errors)"
+                if [[ "${deployed_image}" == "${image_ref}" ]]; then
+                  echo "Rolled back ${app_name} to ${image_ref}"
+                  return 0
+                fi
+              fi
+              sleep 10
+            done
+            echo "Rollback failed for ${app_name}" >&2
+            return 1
+          }
+
+          rollback "${API_APP_NAME}" "${PREVIOUS_API_IMAGE}"
+          rollback "${WORKER_APP_NAME}" "${PREVIOUS_WORKER_IMAGE}"

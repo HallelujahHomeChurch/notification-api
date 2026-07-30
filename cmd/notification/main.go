@@ -172,6 +172,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		RateLimits: []store.RateLimit{
 			{Window: 15 * time.Minute, Maximum: 1},
 			{Window: 24 * time.Hour, Maximum: 5},
+			{Window: 24 * time.Hour, Maximum: cfg.TemplateDailyLimit, TemplateWide: true},
 		},
 	})
 	handler := httpapi.New(

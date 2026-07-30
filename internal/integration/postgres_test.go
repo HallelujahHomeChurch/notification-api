@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ func TestPostgresLedger(t *testing.T) {
 
 	testMigrationAdvisoryLock(t, ctx, scoped)
 	testDurableNotificationService(t, ctx, scoped)
+	testTemplateWideRateLimit(t, ctx, scoped)
 	testConcurrentIdempotentReplay(t, ctx, scoped)
 	testConcurrentIdempotencyConflict(t, ctx, scoped)
 
@@ -54,6 +56,86 @@ func TestPostgresLedger(t *testing.T) {
 type sendOutcome struct {
 	result service.Result
 	err    error
+}
+
+func testTemplateWideRateLimit(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	hashKey := bytes.Repeat([]byte{3}, 32)
+	svc := service.New(store.New(db, hashKey), service.Config{
+		DataEncryptionKey: bytes.Repeat([]byte{1}, 32),
+		HashKey:           hashKey,
+		RateLimits: []store.RateLimit{
+			{Window: time.Hour, Maximum: 1},
+			{Window: 24 * time.Hour, Maximum: 1, TemplateWide: true},
+		},
+	})
+	requests := []contracts.SendRequest{
+		integrationRequest("template-a-"+suffix+"@example.com", "template-a-"+suffix),
+		integrationRequest("template-b-"+suffix+"@example.com", "template-b-"+suffix),
+	}
+	keys := []string{"template-a-" + suffix, "template-b-" + suffix}
+	rateRowsBefore, rateCountBefore := rateTotals(t, ctx, db)
+
+	start := make(chan struct{})
+	outcomes := make([]sendOutcome, len(requests))
+	var wait sync.WaitGroup
+	for index := range requests {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			outcomes[index].result, outcomes[index].err = svc.Send(
+				ctx, "account-api", keys[index], requests[index],
+			)
+		}()
+	}
+	close(start)
+	wait.Wait()
+
+	accepted := -1
+	limited := 0
+	for index, outcome := range outcomes {
+		switch {
+		case outcome.err == nil:
+			accepted = index
+		case errors.Is(outcome.err, service.ErrRateLimited):
+			limited++
+		default:
+			t.Fatalf("template-wide Send() error = %v", outcome.err)
+		}
+	}
+	if accepted < 0 || limited != 1 {
+		t.Fatalf("template-wide outcomes = %#v, want one accepted and one rate limited", outcomes)
+	}
+
+	replay, err := svc.Send(ctx, "account-api", keys[accepted], requests[accepted])
+	if err != nil || !replay.Replayed {
+		t.Fatalf("accepted replay = %#v, error = %v", replay, err)
+	}
+	rateRowsAfter, rateCountAfter := rateTotals(t, ctx, db)
+	if rateRowsAfter != rateRowsBefore+2 || rateCountAfter != rateCountBefore+2 {
+		t.Fatalf(
+			"template-wide rate totals rows=%d->%d count=%d->%d, want two consumed buckets",
+			rateRowsBefore,
+			rateRowsAfter,
+			rateCountBefore,
+			rateCountAfter,
+		)
+	}
+
+	var messages int
+	if err := db.QueryRowContext(ctx, `
+		SELECT count(*) FROM notification_messages
+		WHERE caller_app_id='account-api' AND idempotency_key IN ($1,$2)`,
+		keys[0],
+		keys[1],
+	).Scan(&messages); err != nil {
+		t.Fatalf("count template-wide messages: %v", err)
+	}
+	if messages != 1 {
+		t.Fatalf("template-wide messages = %d, want 1", messages)
+	}
 }
 
 func testConcurrentIdempotentReplay(t *testing.T, ctx context.Context, db *sql.DB) {
