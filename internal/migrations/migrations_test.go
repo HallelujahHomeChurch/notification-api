@@ -55,6 +55,16 @@ func TestCryptoKeyMigrationIsExpandCompatible(t *testing.T) {
 	for _, want := range []string{
 		"add column encryption_key_id text not null default 'legacy-v1'",
 		"add column hash_key_id text not null default 'legacy-v1'",
+		"add column expires_at timestamptz",
+		"set expires_at = created_at + case template_id",
+		"when 'account.verify-email' then interval '24 hours'",
+		"when 'account.reset-password' then interval '1 hour'",
+		"when 'account.oauth-link-confirmation' then interval '15 minutes'",
+		"alter column expires_at set not null",
+		"notification_messages_terminal_idx",
+		"notification_messages_unpurged_terminal_idx",
+		"notification_deliveries_message_id_idx",
+		"notification_outbox_delivery_id_idx",
 	} {
 		if !strings.Contains(schema, want) {
 			t.Errorf("crypto key migration missing %q", want)

@@ -53,6 +53,7 @@ type CreateParams struct {
 	ResourceID        string
 	Provider          string
 	RateLimits        []RateLimit
+	ExpiresAfter      time.Duration
 }
 
 type CreateResult struct {
@@ -195,6 +196,9 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 	if params.TargetHashes == nil {
 		params.TargetHashes = map[string]string{params.HashKeyID: params.TargetHash}
 	}
+	if params.ExpiresAfter <= 0 {
+		params.ExpiresAfter = 15 * time.Minute
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("begin notification intent: %w", err)
@@ -229,12 +233,16 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 			INSERT INTO notification_messages (
 				id, caller_app_id, idempotency_key, request_hash, template_id, template_version,
 				channel, target_type, target_hash, target_ciphertext, payload_ciphertext,
-				resource_type, resource_id, encryption_key_id, hash_key_id, status
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'queued')`,
+				resource_type, resource_id, encryption_key_id, hash_key_id, expires_at, status
+			) VALUES (
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+				clock_timestamp()+($16::bigint*interval '1 microsecond'),'queued'
+			)`,
 		params.MessageID, params.Caller, params.IdempotencyKey, params.RequestHash,
 		params.TemplateID, params.TemplateVersion, params.Channel, params.TargetType,
 		params.TargetHash, params.TargetCiphertext, params.PayloadCiphertext,
 		params.ResourceType, params.ResourceID, params.EncryptionKeyID, params.HashKeyID,
+		params.ExpiresAfter.Microseconds(),
 	); err != nil {
 		if isUniqueViolation(err) {
 			_ = tx.Rollback()

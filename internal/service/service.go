@@ -183,6 +183,7 @@ func (s *Service) Send(
 		ResourceID:        request.Resource.ID,
 		Provider:          "smtp",
 		RateLimits:        s.config.RateLimits,
+		ExpiresAfter:      definition.TTL,
 	})
 	if err != nil {
 		return Result{}, err

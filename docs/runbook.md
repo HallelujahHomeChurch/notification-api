@@ -345,6 +345,29 @@ After the transaction commits:
 5. Confirm the new delivery reaches one terminal state.
 6. If any step is ambiguous, pause again; never create another replay blindly.
 
+## Message expiry and retention
+
+Authentication messages expire before outbox publish and again before provider
+delivery:
+
+- email verification: 24 hours;
+- password reset: 1 hour;
+- OAuth account-link confirmation: 15 minutes.
+
+The migration backfills existing rows from their original `created_at` and
+keeps a conservative 15-minute database default for rows written by a previous
+runtime. The keyring-aware API writes the template TTL using the database
+clock. Before relying on expiry enforcement, drain and deactivate every legacy
+worker revision, then start only expiry-aware workers. After that gate, expired
+messages become `dead_lettered` with delivery error code `expired` before a new
+provider send.
+
+Sensitive target and payload ciphertext is purged seven days after a terminal
+state. Hashes, caller-scoped idempotency metadata, template version, status,
+attempt timestamps, and provider receipt metadata are retained for 730 days,
+then the message and indexed child rows are deleted in bounded batches. Rate
+limit buckets are deleted after their own expiry.
+
 ## Database health queries
 
 Run with a secure connection and without shell tracing. These queries return

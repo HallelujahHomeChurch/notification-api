@@ -30,6 +30,7 @@ type claim struct {
 	OutboxID   string
 	DeliveryID string
 	Attempt    int
+	Expired    bool
 }
 
 type store interface {
@@ -73,6 +74,9 @@ func (d *Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 	}
 	if !ok {
 		return false, nil
+	}
+	if claimed.Expired {
+		return true, nil
 	}
 	publishCtx, cancel := context.WithTimeout(ctx, d.publishTimeout)
 	err = d.publisher.Publish(publishCtx, claimed.OutboxID, claimed.DeliveryID)
@@ -150,32 +154,85 @@ func (d *Dispatcher) retryDelay(attempt int) time.Duration {
 }
 
 func (s postgresStore) claimNext(ctx context.Context, lease time.Duration) (claim, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return claim{}, false, fmt.Errorf("begin notification outbox claim: %w", err)
+	}
+	defer tx.Rollback()
+
 	var claimed claim
-	err := s.db.QueryRowContext(ctx, `
-		WITH candidate AS (
-			SELECT id
-			FROM notification_outbox
-			WHERE (status='pending' AND next_attempt_at <= clock_timestamp())
-			   OR (status='publishing' AND COALESCE(lease_expires_at, '-infinity'::timestamptz) <= clock_timestamp())
-			ORDER BY COALESCE(lease_expires_at, next_attempt_at), created_at, id
-			FOR UPDATE SKIP LOCKED
-			LIMIT 1
-		)
-		UPDATE notification_outbox AS outbox
-		SET status='publishing',
-		    attempt_count=outbox.attempt_count+1,
-		    lease_expires_at=clock_timestamp()+($1::double precision*interval '1 second'),
-		    updated_at=clock_timestamp()
-		FROM candidate
-		WHERE outbox.id=candidate.id
-		RETURNING outbox.id, outbox.delivery_id, outbox.attempt_count`,
-		lease.Seconds(),
-	).Scan(&claimed.OutboxID, &claimed.DeliveryID, &claimed.Attempt)
+	var messageID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT outbox.id, delivery.id, message.id,
+		       message.expires_at <= clock_timestamp()
+		FROM notification_outbox AS outbox
+		JOIN notification_deliveries AS delivery ON delivery.id=outbox.delivery_id
+		JOIN notification_messages AS message ON message.id=delivery.message_id
+		WHERE (
+		        (outbox.status='pending' AND outbox.next_attempt_at <= clock_timestamp())
+		        OR
+		        (outbox.status='publishing'
+		         AND COALESCE(outbox.lease_expires_at, '-infinity'::timestamptz) <= clock_timestamp())
+		      )
+		  AND delivery.status='queued'
+		  AND message.status='queued'
+		ORDER BY COALESCE(outbox.lease_expires_at, outbox.next_attempt_at),
+		         outbox.created_at, outbox.id
+		FOR UPDATE OF outbox, delivery, message SKIP LOCKED
+		LIMIT 1`,
+	).Scan(&claimed.OutboxID, &claimed.DeliveryID, &messageID, &claimed.Expired)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim{}, false, nil
 	}
 	if err != nil {
+		return claim{}, false, fmt.Errorf("select notification outbox: %w", err)
+	}
+	if claimed.Expired {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE notification_deliveries
+			SET status='dead_lettered',
+			    last_error_code='expired',
+			    lease_expires_at=NULL,
+			    updated_at=clock_timestamp()
+			WHERE id=$1`,
+			claimed.DeliveryID,
+		); err != nil {
+			return claim{}, false, fmt.Errorf("expire notification delivery: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE notification_messages
+			SET status='dead_lettered',
+			    terminal_at=clock_timestamp(),
+			    updated_at=clock_timestamp()
+			WHERE id=$1`,
+			messageID,
+		); err != nil {
+			return claim{}, false, fmt.Errorf("expire notification message: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM notification_outbox WHERE id=$1`, claimed.OutboxID); err != nil {
+			return claim{}, false, fmt.Errorf("delete expired notification outbox: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return claim{}, false, fmt.Errorf("commit expired notification outbox: %w", err)
+		}
+		return claimed, true, nil
+	}
+	err = tx.QueryRowContext(ctx, `
+		UPDATE notification_outbox
+		SET status='publishing',
+		    attempt_count=attempt_count+1,
+		    lease_expires_at=clock_timestamp()+($2::double precision*interval '1 second'),
+		    updated_at=clock_timestamp()
+		WHERE id=$1
+		RETURNING attempt_count`,
+		claimed.OutboxID,
+		lease.Seconds(),
+	).Scan(&claimed.Attempt)
+	if err != nil {
 		return claim{}, false, fmt.Errorf("claim notification outbox: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return claim{}, false, fmt.Errorf("commit notification outbox claim: %w", err)
 	}
 	return claimed, true, nil
 }

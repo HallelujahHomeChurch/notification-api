@@ -82,6 +82,28 @@ func TestDispatchMarksPublishedOnlyAfterBrokerAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestDispatchSkipsProviderForExpiredClaim(t *testing.T) {
+	store := &fakeStore{
+		claim:   claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Expired: true},
+		claimOK: true,
+	}
+	published := false
+	processed, err := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
+		published = true
+		return nil
+	})).DispatchOne(context.Background())
+
+	if err != nil || !processed || published || len(store.published) != 0 {
+		t.Fatalf(
+			"processed=%v error=%v provider=%v published=%d",
+			processed,
+			err,
+			published,
+			len(store.published),
+		)
+	}
+}
+
 func TestDispatchFailureSchedulesBoundedJitteredBackoff(t *testing.T) {
 	store := &fakeStore{
 		claim:   claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Attempt: 20},

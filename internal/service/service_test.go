@@ -137,6 +137,9 @@ func TestSendPersistsActiveKeyIDsAndAllHashIdentities(t *testing.T) {
 		params.TargetHash != params.TargetHashes["v2"] {
 		t.Fatal("persisted hashes do not use active hash key")
 	}
+	if params.ExpiresAfter != 24*time.Hour {
+		t.Fatalf("ExpiresAfter = %s, want 24h", params.ExpiresAfter)
+	}
 	if _, err := notificationcrypto.Decrypt(
 		encryptionKeys["v2"],
 		[]byte(result.MessageID+":payload"),

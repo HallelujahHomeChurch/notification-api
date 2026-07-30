@@ -277,6 +277,17 @@ func (s postgresStore) claim(
 	}
 	defer tx.Rollback()
 
+	expired, err := expireDelivery(ctx, tx, deliveryID)
+	if err != nil {
+		return claimResult{}, err
+	}
+	if expired {
+		if err := tx.Commit(); err != nil {
+			return claimResult{}, err
+		}
+		return claimResult{Status: statusDeadLettered}, nil
+	}
+
 	var claimed claim
 	err = tx.QueryRowContext(ctx, `
 		WITH candidate AS (
@@ -350,6 +361,88 @@ func (s postgresStore) claim(
 		return claimResult{}, err
 	}
 	return claimResult{Status: status}, nil
+}
+
+func expireDelivery(ctx context.Context, tx *sql.Tx, deliveryID string) (bool, error) {
+	outboxRows, err := tx.QueryContext(ctx, `
+		SELECT id
+		FROM notification_outbox
+		WHERE delivery_id=$1 AND status<>'published'
+		ORDER BY id
+		FOR UPDATE`,
+		deliveryID,
+	)
+	if err != nil {
+		return false, err
+	}
+	for outboxRows.Next() {
+		var outboxID string
+		if err := outboxRows.Scan(&outboxID); err != nil {
+			outboxRows.Close()
+			return false, err
+		}
+	}
+	if err := outboxRows.Close(); err != nil {
+		return false, err
+	}
+
+	var messageID string
+	var expired bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT message.id, message.expires_at <= clock_timestamp()
+		FROM notification_deliveries AS delivery
+		JOIN notification_messages AS message ON message.id=delivery.message_id
+		WHERE delivery.id=$1
+		  AND (
+		        delivery.status='queued'
+		        OR (
+		            delivery.status='sending'
+		            AND COALESCE(delivery.lease_expires_at, '-infinity'::timestamptz)
+		                <= clock_timestamp()
+		        )
+		      )
+		  AND message.status IN ('queued','sending')
+		FOR UPDATE OF delivery, message`,
+		deliveryID,
+	).Scan(&messageID, &expired)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !expired {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE notification_deliveries
+		SET status='dead_lettered',
+		    last_error_code='expired',
+		    lease_expires_at=NULL,
+		    updated_at=clock_timestamp()
+		WHERE id=$1`,
+		deliveryID,
+	); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE notification_messages
+		SET status='dead_lettered',
+		    terminal_at=clock_timestamp(),
+		    updated_at=clock_timestamp()
+		WHERE id=$1`,
+		messageID,
+	); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM notification_outbox
+		WHERE delivery_id=$1 AND status<>'published'`,
+		deliveryID,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s postgresStore) markSent(
