@@ -15,14 +15,20 @@ assert_contains() {
   local file="$1"
   local pattern="$2"
   local description="$3"
-  rg --quiet --multiline "${pattern}" "${file}" || fail "${description}"
+  PATTERN="${pattern}" perl -0777 -e '
+    $content = do { local $/; <> };
+    exit($content =~ /$ENV{PATTERN}/m ? 0 : 1);
+  ' "${file}" || fail "${description}"
 }
 
 assert_not_contains() {
   local file="$1"
   local pattern="$2"
   local description="$3"
-  if rg --quiet --multiline "${pattern}" "${file}"; then
+  if PATTERN="${pattern}" perl -0777 -e '
+    $content = do { local $/; <> };
+    exit($content =~ /$ENV{PATTERN}/m ? 0 : 1);
+  ' "${file}"; then
     fail "${description}"
   fi
 }
@@ -32,7 +38,7 @@ assert_not_contains() {
 assert_contains "${workflow}" 'contents:[[:space:]]*read' "contents permission must be read-only"
 assert_contains "${workflow}" '(?s)^permissions:\n  contents: read\n\nconcurrency:' "workflow permissions must only read contents"
 assert_contains "${workflow}" '(?s)  deploy:\n.*?    needs: verify\n.*?    permissions:\n      contents: read\n      id-token: write' "deploy must depend on verify and alone receive OIDC"
-[[ "$(rg --count 'id-token:[[:space:]]*write' "${workflow}")" == "1" ]] || fail "OIDC permission must appear exactly once"
+[[ "$(grep -Ec 'id-token:[[:space:]]*write' "${workflow}")" == "1" ]] || fail "OIDC permission must appear exactly once"
 assert_contains "${workflow}" 'group:[[:space:]]*notification-production' "production concurrency group is missing"
 assert_contains "${workflow}" 'cancel-in-progress:[[:space:]]*false' "production releases must not cancel in progress"
 assert_contains "${workflow}" 'POSTGRES_DB:[[:space:]]*notification_test' "Postgres test database is missing"
