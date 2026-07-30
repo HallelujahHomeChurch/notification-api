@@ -52,6 +52,7 @@ jobs:
           go test ./...
           go test -tags=integration ./... -count=1
           go vet ./...
+          bash scripts/release-static.test.sh
 
   deploy:
     name: Build, migrate, and deploy
@@ -127,15 +128,29 @@ jobs:
       - name: Capture runtime state and preflight monitoring
         shell: bash
         run: |
-          previous_api_image="$(az containerapp show \
+          previous_api_revision="$(az containerapp show \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${API_APP_NAME}" \
+            --query "properties.latestReadyRevisionName" \
+            --output tsv \
+            --only-show-errors)"
+          previous_worker_revision="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${WORKER_APP_NAME}" \
+            --query "properties.latestReadyRevisionName" \
+            --output tsv \
+            --only-show-errors)"
+          previous_api_image="$(az containerapp revision show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${API_APP_NAME}" \
+            --revision "${previous_api_revision}" \
             --query "properties.template.containers[0].image" \
             --output tsv \
             --only-show-errors)"
-          previous_worker_image="$(az containerapp show \
+          previous_worker_image="$(az containerapp revision show \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${WORKER_APP_NAME}" \
+            --revision "${previous_worker_revision}" \
             --query "properties.template.containers[0].image" \
             --output tsv \
             --only-show-errors)"
@@ -147,8 +162,8 @@ jobs:
             --only-show-errors)"
           notifications_disabled="${notifications_disabled:-false}"
           notifications_disabled="${notifications_disabled,,}"
-          if [[ -z "${previous_api_image}" || -z "${previous_worker_image}" ]]; then
-            echo "Unable to capture current runtime images" >&2
+          if [[ -z "${previous_api_revision}" || -z "${previous_worker_revision}" || -z "${previous_api_image}" || -z "${previous_worker_image}" ]]; then
+            echo "Unable to capture current Ready revisions" >&2
             exit 1
           fi
           case "${notifications_disabled}" in
@@ -168,6 +183,8 @@ jobs:
             --only-show-errors \
             --output none
           {
+            echo "PREVIOUS_API_REVISION=${previous_api_revision}"
+            echo "PREVIOUS_WORKER_REVISION=${previous_worker_revision}"
             echo "PREVIOUS_API_IMAGE=${previous_api_image}"
             echo "PREVIOUS_WORKER_IMAGE=${previous_worker_image}"
             echo "NOTIFICATIONS_DISABLED=${notifications_disabled}"
@@ -346,11 +363,13 @@ jobs:
         run: |
           rollback() {
             local app_name="$1"
-            local image_ref="$2"
-            az containerapp update \
+            local previous_revision="$2"
+            local image_ref="$3"
+            az containerapp revision copy \
               --resource-group "${RESOURCE_GROUP}" \
               --name "${app_name}" \
-              --image "${image_ref}" \
+              --from-revision "${previous_revision}" \
+              --revision-suffix "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --only-show-errors \
               --output none
             for attempt in {1..60}; do
@@ -380,5 +399,7 @@ jobs:
             return 1
           }
 
-          rollback "${API_APP_NAME}" "${PREVIOUS_API_IMAGE}"
-          rollback "${WORKER_APP_NAME}" "${PREVIOUS_WORKER_IMAGE}"
+          rollback_status=0
+          rollback "${API_APP_NAME}" "${PREVIOUS_API_REVISION}" "${PREVIOUS_API_IMAGE}" || rollback_status=1
+          rollback "${WORKER_APP_NAME}" "${PREVIOUS_WORKER_REVISION}" "${PREVIOUS_WORKER_IMAGE}" || rollback_status=1
+          exit "${rollback_status}"
