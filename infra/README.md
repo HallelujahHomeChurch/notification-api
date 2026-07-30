@@ -1,120 +1,118 @@
 # Notification Azure infrastructure
 
-This template provisions the notification Service Bus queue, API, worker,
-migration job, workload identities, and least-privilege role assignments in
-the existing `alive` resource group.
+This directory manages the notification Service Bus queue, dedicated secret
+scope, API, worker, migration job, identities, and alerts in resource group
+`alive`.
 
 ## Prerequisites
 
-- Existing `alive-env`, `alive` ACR, and `alive-vault`.
-- Existing enabled `RecommendedAlertRules-AG-1` action group.
-- Private PostgreSQL reachable at `172.16.68.4:5432`.
-- SMTP endpoint and sender. When SMTP authentication is enabled, create
-  `notification-smtp-username` and `notification-smtp-password` in
-  `alive-vault` before deployment.
-- A built image with an immutable `main-<short-sha>` tag. Both image parameters
-  are required; there is no mutable `latest` default.
+- Existing `alive-env`, `alive` ACR, `alive-vnet/aca`, `alive-env-logs`, and
+  `RecommendedAlertRules-AG-1`.
+- Private PostgreSQL reachable from the Container Apps environment.
+- SMTP endpoint and sender.
+- GitHub environment `production` with a required reviewer, self-review
+  disabled, and deployment branches limited to `main`.
+- Repository variable `PRODUCTION_DEPLOY_ENABLED=true` only after that
+  environment protection is verified. Without it the deploy job is skipped.
 
-`alive-vault` currently uses access policies. An initial administrator
-deployment must use `provisionPermissions=true` (the default) to create ACR,
-Service Bus, and Key Vault access for the three workload identities. The
-deploying principal must be allowed to create role assignments in addition to
-updating the existing Key Vault. Do not switch the shared vault to RBAC as part
-of this deployment.
+The runtime template accepts one 71-character `sha256:` digest and constructs
+the ACR image reference itself. Tags and `latest` are not deployment inputs.
 
-## Bootstrap and validate
+## Bootstrap the dedicated vault
+
+`secret-scope.bicep` creates an RBAC-enabled, purge-protected vault restricted
+to the ACA subnet. Its secure parameters create seven notification-only
+secrets. Role assignments are scoped to the exact secrets consumed by each
+identity; no notification identity receives vault-wide `list`.
+
+Before the first cutover, read the existing values into shell variables without
+printing them, build both keyring JSON values with `legacy-v1`, and run:
+
+```bash
+az deployment group what-if \
+  --resource-group alive \
+  --template-file infra/secret-scope.bicep \
+  --parameters \
+    databaseURL="${DATABASE_URL}" \
+    dataEncryptionKey="${DATA_ENCRYPTION_KEY}" \
+    hashKey="${HASH_KEY}" \
+    encryptionKeysJSON="${ENCRYPTION_KEYS_JSON}" \
+    hashKeysJSON="${HASH_KEYS_JSON}" \
+    smtpUsername="${SMTP_USERNAME}" \
+    smtpPassword="${SMTP_PASSWORD}"
+```
+
+After review, an administrator may replace `what-if` with `create`. Never use
+shell tracing, echo these variables, or save them in a parameter file. Wait for
+RBAC propagation, then run `scripts/verify-secret-scope.sh`; it validates the
+seven ARM secret resources and exact secret-level assignments without reading
+their values.
+
+The initial runtime release supplies both legacy and versioned keyring
+variables with active ID `legacy-v1`. This preserves rolling compatibility.
+The active IDs and dedicated vault name live in the reviewed
+`infra/production-release.env`. Activate a new key only in a separate approved
+commit after both keyring secrets contain the new and retained old values.
+
+During cutover, Container Apps retain the old shared-vault aliases and add
+distinct `*-v2` aliases for the dedicated vault. New revisions use only `*-v2`;
+old revisions remain rollback-capable. Remove the old aliases and the three
+notification identity policies from shared `alive-vault` only in a later
+approved release after the rollback drill and retention window. Do not alter
+the shared vault authorization mode.
+
+## Validate and deploy
 
 ```bash
 bash scripts/bootstrap-database.test.sh
-bash scripts/bootstrap-database.sh
-
-cp infra/main.example.bicepparam infra/main.bicepparam
-# Set the immutable image and real SMTP values in the ignored parameter file.
-
+bash scripts/release-static.test.sh
+az bicep build --file infra/secret-scope.bicep
 az bicep build --file infra/main.bicep
-az deployment group what-if \
-  --resource-group alive \
-  --template-file infra/main.bicep \
-  --parameters infra/main.bicepparam
+az bicep build --file infra/alerts.bicep
 ```
 
-Use the default `provisionPermissions=true` for the initial administrator
-bootstrap. After those permissions exist, routine deployments must pass
-`provisionPermissions=false`; this allows the GitHub OIDC principal to remain a
-Contributor without IAM write access.
+The release workflow performs:
 
-Deploy infrastructure and update only the migration job first:
+1. Unit, integration, vet, static release, and Bicep checks.
+2. ACR build using `main-<short-sha>` only as a discovery label.
+3. Digest resolution and complete `alerts.bicep` plus `main.bicep` what-if.
+4. Upload of the what-if artifact.
+5. GitHub `production` environment approval.
+6. Dedicated vault, seven secrets, and exact RBAC preflight.
+7. A fresh what-if immediately before apply.
+8. Alert deployment, migration-only deployment, and one successful migration.
+9. API/worker deployment by digest, exact revision verification, and gateway
+   Dapr readiness smoke.
+10. Automatic rollback to the previous ready revisions after failed runtime
+    verification. Transitional shared-vault aliases keep those revisions valid.
 
-```bash
-az deployment group create \
-  --resource-group alive \
-  --template-file infra/main.bicep \
-  --parameters infra/main.bicepparam \
-  --parameters deployRuntime=false provisionPermissions=false
+Routine CI passes `provisionPermissions=false`. Initial ACR and Service Bus role
+bootstrap remains an explicit administrator operation.
 
-az containerapp job start \
-  --resource-group alive \
-  --name notification-migrate
-```
+## Capacity and readiness
 
-Only after the migration execution reports `Succeeded`, deploy runtime
-revisions:
+API and worker replicas each have capacity for two PostgreSQL connections.
+Three API plus five worker replicas therefore cap runtime capacity at 16;
+migration adds one. This is a ceiling, not a reservation. Before approval,
+verify the shared 50-connection server has room for migration and brief
+old/new revision overlap.
 
-```bash
-az deployment group create \
-  --resource-group alive \
-  --template-file infra/main.bicep \
-  --parameters infra/main.bicepparam \
-  --parameters deployRuntime=true provisionPermissions=false
-```
+`/health` is process liveness. `/ready` verifies PostgreSQL. Queue and provider
+clients are constructed before the HTTP server starts; readiness never sends
+email or requests Service Bus management permission.
 
-Incremental deployment leaves existing API and worker revisions unchanged when
-`deployRuntime=false`. A failed migration therefore cannot roll out new runtime
-images.
+## Monitoring
 
-The API publishes with `notification-api-identity`; the worker receives and
-scales with `notification-worker-identity`. No Service Bus connection string is
-stored. API and worker replicas each have capacity for at most two PostgreSQL
-connections; this is a ceiling, not a reservation. At the configured maximum
-of three API and five worker replicas, runtime capacity is bounded at 16.
-Migration adds at most one connection. Before a release, verify shared database
-usage leaves room for migration and the brief old/new revision overlap.
+`alerts.bicep` owns the current production notification alerts plus:
 
-## GitHub Actions release
+- Service Bus server errors and throttling;
+- sustained queue backlog and DLQ presence;
+- API 5xx, rate limiting, and API/worker restarts;
+- delayed transactional outbox rows;
+- SMTP acceptance-unknown, configuration failures, and sustained failure ratio;
+- sustained KEDA scaler checks.
 
-`.github/workflows/release.yml` runs for relevant changes pushed to `main` and
-can also be started manually. Configure the immutable repository OIDC binding
-outside this repository, then add these repository variables:
-
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
-- `SMTP_ADDR`
-- `SMTP_FROM`
-- `SMTP_AUTHENTICATION_ENABLED` (`true` or `false`)
-- `NOTIFICATION_TEMPLATE_DAILY_LIMIT` (positive integer; production starts at `1000`)
-
-The workflow fails before build or deployment when any variable is missing,
-the SMTP authentication flag is invalid, the template limit is not positive,
-the action group is unavailable, or `NOTIFICATIONS_DISABLED=true` is active.
-SMTP credentials are not GitHub variables or secrets; when authentication is enabled, only
-`notification-smtp-username` and `notification-smtp-password` in `alive-vault`
-are used.
-
-Each release tests the service against PostgreSQL `notification_test`, builds
-only the immutable `main-<short-sha>` ACR tag, and deploys in this order:
-
-1. Validate and deploy the independent rate-limit alert.
-2. Capture the current immutable API/worker images and emergency kill switch.
-3. Update only `notification-migrate` with `deployRuntime=false`.
-4. Start one migration execution and require that exact execution to report
-   `Succeeded`.
-5. Update the API and worker with `deployRuntime=true`.
-6. Require both latest revisions to be ready with the exact immutable image.
-7. Invoke the notification API `/ready` endpoint through Dapr from
-   `api-gateway` and validate both HTTP 200 and the readiness response body.
-
-CI always passes `provisionPermissions=false`; permission bootstrap remains an
-explicit administrator operation. If runtime deployment or smoke verification
-fails, the workflow restores both previously captured images; migrations are
-never rolled back automatically.
+Every alert identifies the HHC platform owner, threshold/window, action group,
+and runbook. Worker scale-to-zero is expected; backlog age, not replica count,
+is the worker-absence signal. Provider queries match both the pre-cutover SMTP
+log format and the structured event format during rolling deployment.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"time"
 
@@ -17,6 +18,7 @@ const (
 	maxRetryDelay       = time.Minute
 	idlePollInterval    = 250 * time.Millisecond
 	defaultFailureLimit = 5
+	delayedThreshold    = 5 * time.Minute
 )
 
 var (
@@ -31,6 +33,7 @@ type claim struct {
 	DeliveryID string
 	Attempt    int
 	Expired    bool
+	AgeSeconds int64
 }
 
 type store interface {
@@ -50,6 +53,7 @@ type Dispatcher struct {
 	wait                   func(context.Context, time.Duration) error
 	publishTimeout         time.Duration
 	maxConsecutiveFailures int
+	logf                   func(string, ...any)
 }
 
 func New(db *sql.DB, publisher queue.Publisher) *Dispatcher {
@@ -64,6 +68,7 @@ func newDispatcher(store store, publisher queue.Publisher) *Dispatcher {
 		wait:                   wait,
 		publishTimeout:         publishTimeout,
 		maxConsecutiveFailures: defaultFailureLimit,
+		logf:                   log.Printf,
 	}
 }
 
@@ -74,6 +79,9 @@ func (d *Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 	}
 	if !ok {
 		return false, nil
+	}
+	if time.Duration(claimed.AgeSeconds)*time.Second > delayedThreshold {
+		d.logf("event=notification_outbox_delayed age_seconds=%d", claimed.AgeSeconds)
 	}
 	if claimed.Expired {
 		return true, nil
@@ -123,11 +131,15 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		}
 
 		if err != nil {
-			failures := max(claimFailures, publishFailures, transitionFailures)
-			if failures >= d.maxConsecutiveFailures {
-				return fmt.Errorf("persistent outbox dependency failure after %d attempts: %w", failures, err)
+			databaseFailures := max(claimFailures, transitionFailures)
+			if databaseFailures >= d.maxConsecutiveFailures {
+				return fmt.Errorf(
+					"persistent outbox database failure after %d attempts: %w",
+					databaseFailures,
+					err,
+				)
 			}
-			if err := d.wait(ctx, d.retryDelay(failures)); err != nil {
+			if err := d.wait(ctx, d.retryDelay(max(claimFailures, publishFailures, transitionFailures))); err != nil {
 				return err
 			}
 			continue
@@ -164,6 +176,10 @@ func (s postgresStore) claimNext(ctx context.Context, lease time.Duration) (clai
 	var messageID string
 	err = tx.QueryRowContext(ctx, `
 		SELECT outbox.id, delivery.id, message.id,
+		       EXTRACT(EPOCH FROM GREATEST(
+		           clock_timestamp()-outbox.created_at,
+		           interval '0 seconds'
+		       ))::bigint,
 		       message.expires_at <= clock_timestamp()
 		FROM notification_outbox AS outbox
 		JOIN notification_deliveries AS delivery ON delivery.id=outbox.delivery_id
@@ -180,7 +196,13 @@ func (s postgresStore) claimNext(ctx context.Context, lease time.Duration) (clai
 		         outbox.created_at, outbox.id
 		FOR UPDATE OF outbox, delivery, message SKIP LOCKED
 		LIMIT 1`,
-	).Scan(&claimed.OutboxID, &claimed.DeliveryID, &messageID, &claimed.Expired)
+	).Scan(
+		&claimed.OutboxID,
+		&claimed.DeliveryID,
+		&messageID,
+		&claimed.AgeSeconds,
+		&claimed.Expired,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim{}, false, nil
 	}
