@@ -45,3 +45,22 @@ func TestMigrationChecksumIsDeterministic(t *testing.T) {
 		t.Fatal("checksum() did not change with migration contents")
 	}
 }
+
+func TestCryptoKeyMigrationIsExpandCompatible(t *testing.T) {
+	contents, err := files.ReadFile("sql/002_crypto_keys_and_retention_indexes.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	schema := strings.ToLower(string(contents))
+	for _, want := range []string{
+		"add column encryption_key_id text not null default 'legacy-v1'",
+		"add column hash_key_id text not null default 'legacy-v1'",
+	} {
+		if !strings.Contains(schema, want) {
+			t.Errorf("crypto key migration missing %q", want)
+		}
+	}
+	if strings.Contains(schema, "drop default") {
+		t.Fatal("crypto key migration removes expand-phase defaults")
+	}
+}

@@ -218,19 +218,29 @@ Never store the URL in shell history, CI variables, or the incident record.
 
 ### Encryption and hash keys
 
-Do not rotate `notification-data-encryption-key` or `notification-hash-key` by
-only replacing their Key Vault values:
+The expand migration adds `encryption_key_id` and `hash_key_id` with the
+non-null default `legacy-v1`. Before running it, configure the current
+`notification-data-encryption-key` and `notification-hash-key` values under
+`legacy-v1` in `NOTIFICATION_ENCRYPTION_KEYS_JSON` and
+`NOTIFICATION_HASH_KEYS_JSON`, and set both active key IDs to `legacy-v1`.
+The legacy single-key environment variables remain a supported upgrade
+fallback. While old and versioned settings coexist, each legacy value must
+match the corresponding `legacy-v1` keyring entry exactly; startup rejects a
+mismatch so rolling replicas cannot write incompatible data under one key ID.
+
+Do not activate another key ID until the API, store, and worker are all wired
+to persist and read key IDs. The expand release rejects a non-`legacy-v1`
+active ID so it cannot write ciphertext under a mismatched database default.
+Replacing only the old Key Vault values is unsafe:
 
 - the worker needs the current encryption key for every non-purged queued
   payload;
 - changing the hash key changes stored request/target hashes, idempotent replay
   comparison, and rate-limit buckets.
 
-The current service has one active encryption key and one active hash key; it
-has no dual-key reader or online re-encryption operation. A planned or emergency
-rotation therefore requires a reviewed application/data migration release.
-Keep sending disabled until all nonterminal rows and DLQ entries are
-reconciled. Do not improvise a secret-only rotation.
+Keep every referenced key configured until a preflight confirms no retained
+row or live rate-limit window depends on it. Keep sending disabled during an
+emergency reconciliation. Do not improvise a secret-only rotation.
 
 Managed identities do not have stored credentials to rotate.
 

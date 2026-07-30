@@ -50,6 +50,41 @@ func Hash(key, value []byte) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
+func EncryptWithKeyID(keys map[string][]byte, keyID string, context, plaintext []byte) ([]byte, error) {
+	key, err := keyByID(keys, keyID)
+	if err != nil {
+		return nil, err
+	}
+	return Encrypt(key, context, plaintext)
+}
+
+func DecryptWithKeyID(keys map[string][]byte, keyID string, context, ciphertext []byte) ([]byte, error) {
+	key, err := keyByID(keys, keyID)
+	if err != nil {
+		return nil, err
+	}
+	return Decrypt(key, context, ciphertext)
+}
+
+func HashWithKeyID(keys map[string][]byte, keyID string, value []byte) (string, error) {
+	key, err := keyByID(keys, keyID)
+	if err != nil {
+		return "", err
+	}
+	return Hash(key, value), nil
+}
+
+func keyByID(keys map[string][]byte, keyID string) ([]byte, error) {
+	if keyID == "" {
+		return nil, fmt.Errorf("key ID is required")
+	}
+	key, ok := keys[keyID]
+	if !ok {
+		return nil, fmt.Errorf("key ID %q is not configured", keyID)
+	}
+	return key, nil
+}
+
 func newAEAD(key []byte) (cipher.AEAD, error) {
 	if len(key) != 32 {
 		return nil, fmt.Errorf("encryption key must be 32 bytes")
