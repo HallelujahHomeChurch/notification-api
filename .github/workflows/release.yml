@@ -11,6 +11,7 @@ on:
       - cmd/**
       - internal/**
       - infra/**
+      - scripts/**
   workflow_dispatch:
 
 permissions:
