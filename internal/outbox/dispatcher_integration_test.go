@@ -191,7 +191,12 @@ func integrationDatabase(t *testing.T) *sql.DB {
 	if !strings.Contains(strings.ToLower(strings.TrimPrefix(parsed.Path, "/")), "test") {
 		t.Fatal("TEST_DATABASE_URL database name must contain test")
 	}
-	admin, err := database.Open(config.Config{DatabaseURL: rawURL})
+	admin, err := database.Open(config.Config{
+		DatabaseURL:       rawURL,
+		DBMaxOpenConns:    2,
+		DBMaxIdleConns:    1,
+		DBConnMaxLifetime: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("open integration database: %v", err)
 	}
@@ -205,7 +210,12 @@ func integrationDatabase(t *testing.T) *sql.DB {
 	query := parsed.Query()
 	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
-	db, err := database.Open(config.Config{DatabaseURL: parsed.String()})
+	db, err := database.Open(config.Config{
+		DatabaseURL:       parsed.String(),
+		DBMaxOpenConns:    5,
+		DBMaxIdleConns:    2,
+		DBConnMaxLifetime: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("open scoped integration database: %v", err)
 	}

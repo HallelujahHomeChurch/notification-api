@@ -74,7 +74,11 @@ images.
 
 The API publishes with `notification-api-identity`; the worker receives and
 scales with `notification-worker-identity`. No Service Bus connection string is
-stored.
+stored. API and worker replicas each have capacity for at most two PostgreSQL
+connections; this is a ceiling, not a reservation. At the configured maximum
+of three API and five worker replicas, runtime capacity is bounded at 16.
+Migration adds at most one connection. Before a release, verify shared database
+usage leaves room for migration and the brief old/new revision overlap.
 
 ## GitHub Actions release
 

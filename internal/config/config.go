@@ -13,15 +13,21 @@ import (
 )
 
 const (
-	EnvironmentDevelopment = "development"
-	EnvironmentProduction  = "production"
-	legacyKeyID            = "legacy-v1"
+	EnvironmentDevelopment   = "development"
+	EnvironmentProduction    = "production"
+	legacyKeyID              = "legacy-v1"
+	defaultDBMaxOpenConns    = 5
+	defaultDBMaxIdleConns    = 2
+	defaultDBConnMaxLifetime = 30 * time.Minute
 )
 
 type Config struct {
 	Environment                string
 	Port                       string
 	DatabaseURL                string
+	DBMaxOpenConns             int
+	DBMaxIdleConns             int
+	DBConnMaxLifetime          time.Duration
 	AllowedCallers             []string
 	AllowDevCallerHeader       bool
 	ActiveEncryptionKeyID      string
@@ -66,6 +72,30 @@ func Load() (Config, error) {
 	if shutdownTimeoutSeconds <= 0 {
 		return Config{}, fmt.Errorf("SHUTDOWN_TIMEOUT_SECONDS must be positive")
 	}
+	dbMaxOpenConns, err := intEnv("DB_MAX_OPEN_CONNS", defaultDBMaxOpenConns)
+	if err != nil {
+		return Config{}, err
+	}
+	if dbMaxOpenConns <= 0 {
+		return Config{}, fmt.Errorf("DB_MAX_OPEN_CONNS must be positive")
+	}
+	dbMaxIdleConns, err := intEnv("DB_MAX_IDLE_CONNS", defaultDBMaxIdleConns)
+	if err != nil {
+		return Config{}, err
+	}
+	if dbMaxIdleConns <= 0 {
+		return Config{}, fmt.Errorf("DB_MAX_IDLE_CONNS must be positive")
+	}
+	if dbMaxIdleConns > dbMaxOpenConns {
+		return Config{}, fmt.Errorf("DB_MAX_IDLE_CONNS must not exceed DB_MAX_OPEN_CONNS")
+	}
+	dbConnMaxLifetime, err := durationEnv("DB_CONN_MAX_LIFETIME", defaultDBConnMaxLifetime)
+	if err != nil {
+		return Config{}, err
+	}
+	if dbConnMaxLifetime <= 0 {
+		return Config{}, fmt.Errorf("DB_CONN_MAX_LIFETIME must be positive")
+	}
 
 	activeEncryptionKeyID, encryptionKeys, dataEncryptionKey, err := loadEncryptionKeys()
 	if err != nil {
@@ -79,6 +109,9 @@ func Load() (Config, error) {
 		Environment:                env("ENVIRONMENT", EnvironmentDevelopment),
 		Port:                       env("PORT", "8081"),
 		DatabaseURL:                os.Getenv("DATABASE_URL"),
+		DBMaxOpenConns:             dbMaxOpenConns,
+		DBMaxIdleConns:             dbMaxIdleConns,
+		DBConnMaxLifetime:          dbConnMaxLifetime,
 		AllowedCallers:             parseCallers(os.Getenv("NOTIFICATION_ALLOWED_CALLERS")),
 		AllowDevCallerHeader:       allowDevCallerHeader,
 		ActiveEncryptionKeyID:      activeEncryptionKeyID,
@@ -212,6 +245,18 @@ func intEnv(key string, fallback int) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func durationEnv(key string, fallback time.Duration) (time.Duration, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a duration: %w", key, err)
 	}
 	return parsed, nil
 }

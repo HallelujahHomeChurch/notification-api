@@ -566,7 +566,12 @@ func testDatabases(t *testing.T) (*sql.DB, *sql.DB) {
 		t.Fatal("TEST_DATABASE_URL database name must contain test")
 	}
 
-	admin, err := database.Open(config.Config{DatabaseURL: rawURL})
+	admin, err := database.Open(config.Config{
+		DatabaseURL:       rawURL,
+		DBMaxOpenConns:    2,
+		DBMaxIdleConns:    1,
+		DBConnMaxLifetime: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("database.Open(admin): %v", err)
 	}
@@ -582,7 +587,12 @@ func testDatabases(t *testing.T) (*sql.DB, *sql.DB) {
 	query := parsed.Query()
 	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
-	scoped, err := database.Open(config.Config{DatabaseURL: parsed.String()})
+	scoped, err := database.Open(config.Config{
+		DatabaseURL:       parsed.String(),
+		DBMaxOpenConns:    5,
+		DBMaxIdleConns:    2,
+		DBConnMaxLifetime: time.Minute,
+	})
 	if err != nil {
 		admin.Close()
 		t.Fatalf("database.Open(scoped): %v", err)

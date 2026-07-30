@@ -77,6 +77,14 @@ assert_contains "${workflow}" "grep -Eq 'HTTP/1" "Dapr probe must validate HTTP 
 assert_contains "${workflow}" "grep -Eq '\"status\"" "Dapr probe must validate the response body"
 
 assert_contains "${bicep}" 'param provisionPermissions bool = true' "provisionPermissions must default to true"
+[[ "$(grep -Fc "{ name: 'DB_MAX_OPEN_CONNS', value: '2' }" "${bicep}")" == "1" ]] ||
+  fail "API and worker must share the two-connection runtime limit"
+[[ "$(grep -Fc "{ name: 'DB_MAX_OPEN_CONNS', value: '1' }" "${bicep}")" == "1" ]] ||
+  fail "migration must use one database connection"
+[[ "$(grep -Fc "{ name: 'DB_MAX_IDLE_CONNS', value: '1' }" "${bicep}")" == "2" ]] ||
+  fail "runtime and migration idle connection limits are missing"
+[[ "$(grep -Fc "{ name: 'DB_CONN_MAX_LIFETIME', value: '30m' }" "${bicep}")" == "2" ]] ||
+  fail "runtime and migration connection lifetimes are missing"
 assert_not_contains "${readme}" 'optional `latest`|`:latest`' "README must not describe a mutable latest image"
 for resource in \
   apiAcrPull \

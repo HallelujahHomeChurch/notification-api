@@ -36,6 +36,9 @@ var commonEnvironment = [
   { name: 'SERVICEBUS_NAMESPACE', value: '${serviceBus.name}.servicebus.windows.net' }
   { name: 'SERVICEBUS_QUEUE_NAME', value: emailQueue.name }
   { name: 'SHUTDOWN_TIMEOUT_SECONDS', value: '30' }
+  { name: 'DB_MAX_OPEN_CONNS', value: '2' }
+  { name: 'DB_MAX_IDLE_CONNS', value: '1' }
+  { name: 'DB_CONN_MAX_LIFETIME', value: '30m' }
 ]
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
@@ -385,6 +388,9 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = {
             { name: 'ENVIRONMENT', value: 'production' }
             { name: 'AZURE_CLIENT_ID', value: migrateIdentity.properties.clientId }
             { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'DB_MAX_OPEN_CONNS', value: '1' }
+            { name: 'DB_MAX_IDLE_CONNS', value: '1' }
+            { name: 'DB_CONN_MAX_LIFETIME', value: '30m' }
           ]
           resources: {
             cpu: json('0.25')

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadParsesVersionedKeyrings(t *testing.T) {
@@ -277,6 +278,70 @@ func TestLoadTemplateDailyLimit(t *testing.T) {
 	}
 }
 
+func TestLoadDatabasePoolDefaultsAndOverrides(t *testing.T) {
+	clearConfigEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DBMaxOpenConns != 5 {
+		t.Fatalf("DBMaxOpenConns = %d, want 5", cfg.DBMaxOpenConns)
+	}
+	if cfg.DBMaxIdleConns != 2 {
+		t.Fatalf("DBMaxIdleConns = %d, want 2", cfg.DBMaxIdleConns)
+	}
+	if cfg.DBConnMaxLifetime != 30*time.Minute {
+		t.Fatalf("DBConnMaxLifetime = %s, want 30m", cfg.DBConnMaxLifetime)
+	}
+
+	t.Setenv("DB_MAX_OPEN_CONNS", "8")
+	t.Setenv("DB_MAX_IDLE_CONNS", "3")
+	t.Setenv("DB_CONN_MAX_LIFETIME", "45m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load(overrides) error = %v", err)
+	}
+	if cfg.DBMaxOpenConns != 8 || cfg.DBMaxIdleConns != 3 || cfg.DBConnMaxLifetime != 45*time.Minute {
+		t.Fatalf("database pool config = %d/%d/%s, want 8/3/45m",
+			cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetime)
+	}
+}
+
+func TestLoadRejectsInvalidDatabasePool(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "nonpositive open", env: map[string]string{"DB_MAX_OPEN_CONNS": "0"}, want: "DB_MAX_OPEN_CONNS"},
+		{name: "nonpositive idle", env: map[string]string{"DB_MAX_IDLE_CONNS": "0"}, want: "DB_MAX_IDLE_CONNS"},
+		{name: "idle exceeds open", env: map[string]string{
+			"DB_MAX_OPEN_CONNS": "2",
+			"DB_MAX_IDLE_CONNS": "3",
+		}, want: "must not exceed"},
+		{name: "nonpositive lifetime", env: map[string]string{
+			"DB_CONN_MAX_LIFETIME": "0s",
+		}, want: "DB_CONN_MAX_LIFETIME"},
+		{name: "invalid lifetime", env: map[string]string{
+			"DB_CONN_MAX_LIFETIME": "later",
+		}, want: "DB_CONN_MAX_LIFETIME"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsNonPositiveTemplateDailyLimit(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("NOTIFICATION_TEMPLATE_DAILY_LIMIT", "0")
@@ -407,6 +472,7 @@ func clearConfigEnv(t *testing.T) {
 		"QUEUE_DRIVER", "SERVICEBUS_NAMESPACE", "SERVICEBUS_QUEUE_NAME", "SERVICEBUS_CONNECTION_STRING",
 		"SMTP_ADDR", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM", "NOTIFICATIONS_DISABLED",
 		"NOTIFICATION_TEMPLATE_DAILY_LIMIT", "SHUTDOWN_TIMEOUT_SECONDS",
+		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME",
 	} {
 		t.Setenv(key, "")
 	}
