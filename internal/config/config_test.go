@@ -1,10 +1,175 @@
 package config
 
 import (
+	"bytes"
 	"encoding/base64"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestLoadParsesVersionedKeyrings(t *testing.T) {
+	clearConfigEnv(t)
+	encryptionV1 := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	encryptionV2 := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	t.Setenv("NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "enc-v2")
+	t.Setenv("NOTIFICATION_ENCRYPTION_KEYS_JSON", fmt.Sprintf(
+		`{"legacy-v1":%q,"enc-v2":%q}`, encryptionV1, encryptionV2,
+	))
+	t.Setenv("NOTIFICATION_ACTIVE_HASH_KEY_ID", "hash-v2")
+	t.Setenv("NOTIFICATION_HASH_KEYS_JSON",
+		`{"legacy-v1":"01234567890123456789012345678901","hash-v2":"abcdefghijklmnopqrstuvwxyz012345"}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ActiveEncryptionKeyID != "enc-v2" || len(cfg.EncryptionKeys) != 2 {
+		t.Fatalf("encryption keyring = %q %#v", cfg.ActiveEncryptionKeyID, cfg.EncryptionKeys)
+	}
+	if cfg.ActiveHashKeyID != "hash-v2" || len(cfg.HashKeys) != 2 {
+		t.Fatalf("hash keyring = %q %#v", cfg.ActiveHashKeyID, cfg.HashKeys)
+	}
+	if !reflect.DeepEqual(cfg.DataEncryptionKey, cfg.EncryptionKeys["enc-v2"]) {
+		t.Fatal("DataEncryptionKey does not preserve the active key for current callers")
+	}
+	if !reflect.DeepEqual(cfg.HashKey, cfg.HashKeys["hash-v2"]) {
+		t.Fatal("HashKey does not preserve the active key for current callers")
+	}
+}
+
+func TestLoadMapsLegacyKeysToLegacyV1(t *testing.T) {
+	clearConfigEnv(t)
+	encryptionKey := make([]byte, 32)
+	hashKey := "01234567890123456789012345678901"
+	t.Setenv("NOTIFICATION_DATA_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(encryptionKey))
+	t.Setenv("NOTIFICATION_HASH_KEY", hashKey)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ActiveEncryptionKeyID != "legacy-v1" ||
+		!reflect.DeepEqual(cfg.EncryptionKeys["legacy-v1"], encryptionKey) {
+		t.Fatalf("legacy encryption keyring = %q %#v", cfg.ActiveEncryptionKeyID, cfg.EncryptionKeys)
+	}
+	if cfg.ActiveHashKeyID != "legacy-v1" ||
+		string(cfg.HashKeys["legacy-v1"]) != hashKey {
+		t.Fatalf("legacy hash keyring = %q %#v", cfg.ActiveHashKeyID, cfg.HashKeys)
+	}
+}
+
+func TestLoadRequiresLegacyAndVersionedKeysToMatch(t *testing.T) {
+	clearConfigEnv(t)
+	legacyEncryption := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	differentEncryption := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	t.Setenv("NOTIFICATION_DATA_ENCRYPTION_KEY", legacyEncryption)
+	t.Setenv("NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "legacy-v1")
+	t.Setenv("NOTIFICATION_ENCRYPTION_KEYS_JSON", fmt.Sprintf(`{"legacy-v1":%q}`, differentEncryption))
+	t.Setenv("NOTIFICATION_HASH_KEY", "01234567890123456789012345678901")
+	t.Setenv("NOTIFICATION_ACTIVE_HASH_KEY_ID", "legacy-v1")
+	t.Setenv("NOTIFICATION_HASH_KEYS_JSON", `{"legacy-v1":"abcdefghijklmnopqrstuvwxyz012345"}`)
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "must match") {
+		t.Fatalf("Load() error = %v, want legacy/keyring mismatch", err)
+	}
+
+	t.Setenv("NOTIFICATION_ENCRYPTION_KEYS_JSON", fmt.Sprintf(`{"legacy-v1":%q}`, legacyEncryption))
+	_, err = Load()
+	if err == nil || !strings.Contains(err.Error(), "NOTIFICATION_HASH_KEY must match") {
+		t.Fatalf("Load() error = %v, want hash legacy/keyring mismatch", err)
+	}
+}
+
+func TestLoadRejectsInvalidKeyrings(t *testing.T) {
+	validEncryption := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	validHash := "01234567890123456789012345678901"
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "duplicate encryption id",
+			env: map[string]string{
+				"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID": "v1",
+				"NOTIFICATION_ENCRYPTION_KEYS_JSON":     fmt.Sprintf(`{"v1":%q,"v1":%q}`, validEncryption, validEncryption),
+			},
+			want: "duplicate key ID",
+		},
+		{
+			name: "empty encryption id",
+			env: map[string]string{
+				"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID": "v1",
+				"NOTIFICATION_ENCRYPTION_KEYS_JSON":     fmt.Sprintf(`{"":%q}`, validEncryption),
+			},
+			want: "empty key ID",
+		},
+		{
+			name: "missing active encryption id",
+			env: map[string]string{
+				"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID": "v2",
+				"NOTIFICATION_ENCRYPTION_KEYS_JSON":     fmt.Sprintf(`{"v1":%q}`, validEncryption),
+			},
+			want: "active key",
+		},
+		{
+			name: "invalid encryption base64",
+			env: map[string]string{
+				"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID": "v1",
+				"NOTIFICATION_ENCRYPTION_KEYS_JSON":     `{"v1":"not-base64"}`,
+			},
+			want: "base64",
+		},
+		{
+			name: "wrong encryption length",
+			env: map[string]string{
+				"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID": "v1",
+				"NOTIFICATION_ENCRYPTION_KEYS_JSON":     fmt.Sprintf(`{"v1":%q}`, base64.StdEncoding.EncodeToString(make([]byte, 31))),
+			},
+			want: "32 bytes",
+		},
+		{
+			name: "duplicate hash id",
+			env: map[string]string{
+				"NOTIFICATION_ACTIVE_HASH_KEY_ID": "v1",
+				"NOTIFICATION_HASH_KEYS_JSON":     fmt.Sprintf(`{"v1":%q,"v1":%q}`, validHash, validHash),
+			},
+			want: "duplicate key ID",
+		},
+		{
+			name: "short hash key",
+			env: map[string]string{
+				"NOTIFICATION_ACTIVE_HASH_KEY_ID": "v1",
+				"NOTIFICATION_HASH_KEYS_JSON":     `{"v1":"short"}`,
+			},
+			want: "at least 32 bytes",
+		},
+		{
+			name: "incomplete versioned config",
+			env: map[string]string{
+				"NOTIFICATION_ACTIVE_HASH_KEY_ID": "v1",
+			},
+			want: "must be set together",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
 
 func TestLoadProductionRejectsMissingDatabaseURL(t *testing.T) {
 	setProductionEnv(t)
@@ -110,6 +275,70 @@ func TestLoadTemplateDailyLimit(t *testing.T) {
 	}
 	if cfg.TemplateDailyLimit != 250 {
 		t.Fatalf("TemplateDailyLimit = %d, want 250", cfg.TemplateDailyLimit)
+	}
+}
+
+func TestLoadDatabasePoolDefaultsAndOverrides(t *testing.T) {
+	clearConfigEnv(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DBMaxOpenConns != 5 {
+		t.Fatalf("DBMaxOpenConns = %d, want 5", cfg.DBMaxOpenConns)
+	}
+	if cfg.DBMaxIdleConns != 2 {
+		t.Fatalf("DBMaxIdleConns = %d, want 2", cfg.DBMaxIdleConns)
+	}
+	if cfg.DBConnMaxLifetime != 30*time.Minute {
+		t.Fatalf("DBConnMaxLifetime = %s, want 30m", cfg.DBConnMaxLifetime)
+	}
+
+	t.Setenv("DB_MAX_OPEN_CONNS", "8")
+	t.Setenv("DB_MAX_IDLE_CONNS", "3")
+	t.Setenv("DB_CONN_MAX_LIFETIME", "45m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load(overrides) error = %v", err)
+	}
+	if cfg.DBMaxOpenConns != 8 || cfg.DBMaxIdleConns != 3 || cfg.DBConnMaxLifetime != 45*time.Minute {
+		t.Fatalf("database pool config = %d/%d/%s, want 8/3/45m",
+			cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetime)
+	}
+}
+
+func TestLoadRejectsInvalidDatabasePool(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "nonpositive open", env: map[string]string{"DB_MAX_OPEN_CONNS": "0"}, want: "DB_MAX_OPEN_CONNS"},
+		{name: "nonpositive idle", env: map[string]string{"DB_MAX_IDLE_CONNS": "0"}, want: "DB_MAX_IDLE_CONNS"},
+		{name: "idle exceeds open", env: map[string]string{
+			"DB_MAX_OPEN_CONNS": "2",
+			"DB_MAX_IDLE_CONNS": "3",
+		}, want: "must not exceed"},
+		{name: "nonpositive lifetime", env: map[string]string{
+			"DB_CONN_MAX_LIFETIME": "0s",
+		}, want: "DB_CONN_MAX_LIFETIME"},
+		{name: "invalid lifetime", env: map[string]string{
+			"DB_CONN_MAX_LIFETIME": "later",
+		}, want: "DB_CONN_MAX_LIFETIME"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			for key, value := range test.env {
+				t.Setenv(key, value)
+			}
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() error = %v, want containing %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -238,9 +467,12 @@ func clearConfigEnv(t *testing.T) {
 	for _, key := range []string{
 		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_ALLOWED_CALLERS",
 		"NOTIFICATION_ALLOW_DEV_CALLER_HEADER", "NOTIFICATION_DATA_ENCRYPTION_KEY", "NOTIFICATION_HASH_KEY",
+		"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "NOTIFICATION_ENCRYPTION_KEYS_JSON",
+		"NOTIFICATION_ACTIVE_HASH_KEY_ID", "NOTIFICATION_HASH_KEYS_JSON",
 		"QUEUE_DRIVER", "SERVICEBUS_NAMESPACE", "SERVICEBUS_QUEUE_NAME", "SERVICEBUS_CONNECTION_STRING",
 		"SMTP_ADDR", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM", "NOTIFICATIONS_DISABLED",
 		"NOTIFICATION_TEMPLATE_DAILY_LIMIT", "SHUTDOWN_TIMEOUT_SECONDS",
+		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME",
 	} {
 		t.Setenv(key, "")
 	}

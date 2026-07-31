@@ -39,6 +39,10 @@ func (e *RateLimitError) Unwrap() error {
 }
 
 type Config struct {
+	ActiveEncryptionKeyID string
+	EncryptionKeys        map[string][]byte
+	ActiveHashKeyID       string
+	HashKeys              map[string][]byte
 	DataEncryptionKey     []byte
 	HashKey               []byte
 	NotificationsDisabled bool
@@ -63,6 +67,14 @@ type Service struct {
 }
 
 func New(repository repository, config Config) *Service {
+	if len(config.EncryptionKeys) == 0 && len(config.DataEncryptionKey) > 0 {
+		config.ActiveEncryptionKeyID = "legacy-v1"
+		config.EncryptionKeys = map[string][]byte{"legacy-v1": config.DataEncryptionKey}
+	}
+	if len(config.HashKeys) == 0 && len(config.HashKey) > 0 {
+		config.ActiveHashKeyID = "legacy-v1"
+		config.HashKeys = map[string][]byte{"legacy-v1": config.HashKey}
+	}
 	return &Service{repository: repository, config: config}
 }
 
@@ -122,21 +134,31 @@ func (s *Service) Send(
 	}
 
 	messageID := uuid.NewString()
-	targetCiphertext, err := notificationcrypto.Encrypt(
-		s.config.DataEncryptionKey,
+	targetCiphertext, err := notificationcrypto.EncryptWithKeyID(
+		s.config.EncryptionKeys,
+		s.config.ActiveEncryptionKeyID,
 		[]byte(messageID+":target"),
 		[]byte(target),
 	)
 	if err != nil {
 		return Result{}, fmt.Errorf("encrypt notification target: %w", err)
 	}
-	payloadCiphertext, err := notificationcrypto.Encrypt(
-		s.config.DataEncryptionKey,
+	payloadCiphertext, err := notificationcrypto.EncryptWithKeyID(
+		s.config.EncryptionKeys,
+		s.config.ActiveEncryptionKeyID,
 		[]byte(messageID+":payload"),
 		payload,
 	)
 	if err != nil {
 		return Result{}, fmt.Errorf("encrypt notification payload: %w", err)
+	}
+
+	requestHashes := hashIdentities(s.config.HashKeys, canonical)
+	targetHashes := hashIdentities(s.config.HashKeys, []byte(target))
+	requestHash, requestHashOK := requestHashes[s.config.ActiveHashKeyID]
+	targetHash, targetHashOK := targetHashes[s.config.ActiveHashKeyID]
+	if !requestHashOK || !targetHashOK {
+		return Result{}, fmt.Errorf("active notification hash key is not configured")
 	}
 
 	created, err := s.repository.Create(ctx, store.CreateParams{
@@ -145,18 +167,23 @@ func (s *Service) Send(
 		OutboxID:          uuid.NewString(),
 		Caller:            caller,
 		IdempotencyKey:    idempotencyKey,
-		RequestHash:       notificationcrypto.Hash(s.config.HashKey, canonical),
+		RequestHash:       requestHash,
+		RequestHashes:     requestHashes,
+		EncryptionKeyID:   s.config.ActiveEncryptionKeyID,
+		HashKeyID:         s.config.ActiveHashKeyID,
 		TemplateID:        definition.ID,
 		TemplateVersion:   definition.Version,
 		Channel:           definition.Channel,
 		TargetType:        request.Target.Type,
-		TargetHash:        notificationcrypto.Hash(s.config.HashKey, []byte(target)),
+		TargetHash:        targetHash,
+		TargetHashes:      targetHashes,
 		TargetCiphertext:  targetCiphertext,
 		PayloadCiphertext: payloadCiphertext,
 		ResourceType:      request.Resource.Type,
 		ResourceID:        request.Resource.ID,
 		Provider:          "smtp",
 		RateLimits:        s.config.RateLimits,
+		ExpiresAfter:      definition.TTL,
 	})
 	if err != nil {
 		return Result{}, err
@@ -169,6 +196,14 @@ func (s *Service) Send(
 	default:
 		return resultFromMessage(created.Message, created.Replayed), nil
 	}
+}
+
+func hashIdentities(keys map[string][]byte, value []byte) map[string]string {
+	hashes := make(map[string]string, len(keys))
+	for keyID, key := range keys {
+		hashes[keyID] = notificationcrypto.Hash(key, value)
+	}
+	return hashes
 }
 
 func (s *Service) Get(ctx context.Context, caller, messageID string) (Result, error) {

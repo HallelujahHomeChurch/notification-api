@@ -26,6 +26,14 @@ func TestPostgresLeaseExcludesConcurrentWorkersAndRecoversAfterExpiry(t *testing
 	resetWorkerTables(t, db)
 	key := bytes.Repeat([]byte{1}, 32)
 	deliveryID := insertWorkerDelivery(t, db, key, statusQueued, 0, nil)
+	if _, err := db.Exec(`
+		INSERT INTO notification_outbox (id,delivery_id,status)
+		VALUES ($1,$2,'pending')`,
+		uuid.NewString(),
+		deliveryID,
+	); err != nil {
+		t.Fatalf("insert retry outbox: %v", err)
+	}
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -60,6 +68,15 @@ func TestPostgresLeaseExcludesConcurrentWorkersAndRecoversAfterExpiry(t *testing
 	}
 	if messageStatus != statusSending {
 		t.Fatalf("in-flight message status = %q, want %q", messageStatus, statusSending)
+	}
+	if _, err := db.Exec(`
+		UPDATE notification_messages AS message
+		SET expires_at=clock_timestamp()-interval '1 second'
+		FROM notification_deliveries AS delivery
+		WHERE delivery.id=$1 AND message.id=delivery.message_id`,
+		deliveryID,
+	); err != nil {
+		t.Fatalf("expire in-flight message: %v", err)
 	}
 	if err := New(db, secondProvider, key).Process(context.Background(), secondMessage); err != nil {
 		t.Fatalf("second Process() error = %v", err)
@@ -115,6 +132,57 @@ func TestPostgresDeliveryTransitionsFenceExpiredClaim(t *testing.T) {
 	}
 	if err := repository.markSent(context.Background(), second.Claim, receipt); err != nil {
 		t.Fatalf("current markSent() error = %v", err)
+	}
+}
+
+func TestPostgresExpiresNotificationBeforeProviderSend(t *testing.T) {
+	db := workerTestDatabase(t)
+	resetWorkerTables(t, db)
+	key := bytes.Repeat([]byte{1}, 32)
+	deliveryID := insertWorkerDelivery(t, db, key, statusQueued, 0, nil)
+	if _, err := db.Exec(`
+		UPDATE notification_messages AS message
+		SET expires_at=clock_timestamp()-interval '1 second'
+		FROM notification_deliveries AS delivery
+		WHERE delivery.id=$1 AND message.id=delivery.message_id`,
+		deliveryID,
+	); err != nil {
+		t.Fatalf("expire message: %v", err)
+	}
+	provider := &integrationProvider{send: func(context.Context) (providers.ProviderReceipt, error) {
+		t.Fatal("provider called for expired notification")
+		return providers.ProviderReceipt{}, nil
+	}}
+	message := &fakeMessage{id: deliveryID}
+
+	if err := New(db, provider, key).Process(context.Background(), message); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	var deliveryStatus, messageStatus, errorCode string
+	var outboxCount int
+	if err := db.QueryRow(`
+		SELECT delivery.status, message.status, delivery.last_error_code,
+		       (SELECT count(*) FROM notification_outbox
+		        WHERE delivery_id=delivery.id AND status<>'published')
+		FROM notification_deliveries AS delivery
+		JOIN notification_messages AS message ON message.id=delivery.message_id
+		WHERE delivery.id=$1`,
+		deliveryID,
+	).Scan(&deliveryStatus, &messageStatus, &errorCode, &outboxCount); err != nil {
+		t.Fatalf("read expired state: %v", err)
+	}
+	if provider.calls != 0 || message.deadLettered != 1 ||
+		deliveryStatus != statusDeadLettered || messageStatus != statusDeadLettered ||
+		errorCode != "expired" || outboxCount != 0 {
+		t.Fatalf(
+			"provider=%d broker=%d delivery=%q message=%q error=%q outbox=%d",
+			provider.calls,
+			message.deadLettered,
+			deliveryStatus,
+			messageStatus,
+			errorCode,
+			outboxCount,
+		)
 	}
 }
 

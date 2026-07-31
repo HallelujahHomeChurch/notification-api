@@ -18,9 +18,9 @@ avoid silently dropping account verification or password-reset email.
 - Worker Container App: `notification-worker`
 - Migration job: `notification-migrate`
 - Queue: `notifications-email`
-- Key Vault: `alive-vault`
+- Key Vault: dedicated `alive-notification-<stable-suffix>` vault
 - Immutable image format:
-  `alive.azurecr.io/alive/notification-api:main-<short-sha>`
+  `alive.azurecr.io/alive/notification-api@sha256:<digest>`
 
 Before changing production:
 
@@ -52,8 +52,9 @@ test -n "${namespace}"
    rejection, backlog, duplicate risk, or provider failure. Do not collect
    recipient addresses in the incident channel.
 2. Check API and worker latest/ready revisions and immutable images.
-3. Check API and worker readiness. `/ready` only proves PostgreSQL
-   connectivity; it does not prove Service Bus or SMTP availability.
+3. Check API and worker readiness. `/ready` proves PostgreSQL connectivity.
+   Queue/provider clients are initialized before HTTP starts, but readiness
+   does not send email or request Service Bus management access.
 4. Check queue status, active-message count, and DLQ count.
 5. Run the non-PII [database health queries](#database-health-queries).
 6. Check SMTP error kind/operation and provider-side acceptance records.
@@ -193,7 +194,7 @@ secret version is available.
    deactivate the worker.
 2. Rotate only the `notification` database role password on the shared server.
 3. Build the new URL without logging it and write it to
-   `notification-database-url` in `alive-vault`.
+   `notification-database-url` in the dedicated notification vault.
 4. Restart the API revision and verify `/ready`.
 5. Activate the worker revision and verify its readiness.
 6. Resume the queue, then set `NOTIFICATIONS_DISABLED=false`.
@@ -207,7 +208,7 @@ Never store the URL in shell history, CI variables, or the incident record.
 1. Pause queue consumption.
 2. Rotate the provider credential.
 3. Update both `notification-smtp-username` and
-   `notification-smtp-password` in `alive-vault`.
+   `notification-smtp-password` in the dedicated notification vault.
 4. Restart the worker revision.
 5. Set the queue to `Active` for a controlled acceptance, send one approved
    non-production recipient message, and inspect redacted logs.
@@ -218,19 +219,37 @@ Never store the URL in shell history, CI variables, or the incident record.
 
 ### Encryption and hash keys
 
-Do not rotate `notification-data-encryption-key` or `notification-hash-key` by
-only replacing their Key Vault values:
+The expand migration adds `encryption_key_id` and `hash_key_id` with the
+non-null default `legacy-v1`. Before running it, configure the current
+`notification-data-encryption-key` and `notification-hash-key` values under
+`legacy-v1` in `NOTIFICATION_ENCRYPTION_KEYS_JSON` and
+`NOTIFICATION_HASH_KEYS_JSON`, and set both active key IDs to `legacy-v1`.
+The legacy single-key environment variables remain a supported upgrade
+fallback. While old and versioned settings coexist, each legacy value must
+match the corresponding `legacy-v1` keyring entry exactly; startup rejects a
+mismatch so rolling replicas cannot write incompatible data under one key ID.
+The reviewed active IDs are committed in `infra/production-release.env`; every
+plan and apply passes those values explicitly so routine releases cannot reset
+a completed rotation.
+
+Do not activate another key ID until the API, store, and worker are all wired
+to persist and read key IDs. The keyring-aware release persists active IDs and
+reads historical IDs before another key is activated.
+Replacing only the old Key Vault values is unsafe:
 
 - the worker needs the current encryption key for every non-purged queued
   payload;
 - changing the hash key changes stored request/target hashes, idempotent replay
   comparison, and rate-limit buckets.
 
-The current service has one active encryption key and one active hash key; it
-has no dual-key reader or online re-encryption operation. A planned or emergency
-rotation therefore requires a reviewed application/data migration release.
-Keep sending disabled until all nonterminal rows and DLQ entries are
-reconciled. Do not improvise a secret-only rotation.
+Keep every referenced key configured until a preflight confirms no retained
+row depends on it. API startup checks retained hash-key references; worker
+startup checks non-purged encryption-key references. Keep a previous hash key
+configured for at least the longest rate-limit window (currently 24 hours), so
+accepted requests continue incrementing both old and new buckets before
+retirement. After activating a new key, rollback only to a keyring-aware image.
+Keep sending disabled during an emergency reconciliation. Do not improvise a
+secret-only rotation.
 
 Managed identities do not have stored credentials to rotate.
 
@@ -330,6 +349,29 @@ After the transaction commits:
 5. Confirm the new delivery reaches one terminal state.
 6. If any step is ambiguous, pause again; never create another replay blindly.
 
+## Message expiry and retention
+
+Authentication messages expire before outbox publish and again before provider
+delivery:
+
+- email verification: 24 hours;
+- password reset: 1 hour;
+- OAuth account-link confirmation: 15 minutes.
+
+The migration backfills existing rows from their original `created_at` and
+keeps a conservative 15-minute database default for rows written by a previous
+runtime. The keyring-aware API writes the template TTL using the database
+clock. Before relying on expiry enforcement, drain and deactivate every legacy
+worker revision, then start only expiry-aware workers. After that gate, expired
+messages become `dead_lettered` with delivery error code `expired` before a new
+provider send.
+
+Sensitive target and payload ciphertext is purged seven days after a terminal
+state. Hashes, caller-scoped idempotency metadata, template version, status,
+attempt timestamps, and provider receipt metadata are retained for 730 days,
+then the message and indexed child rows are deleted in bounded batches. Rate
+limit buckets are deleted after their own expiry.
+
 ## Database health queries
 
 Run with a secure connection and without shell tracing. These queries return
@@ -388,8 +430,9 @@ FROM terminal;
 ```
 
 `GET /health` is process liveness. `GET /ready` performs a PostgreSQL ping with
-a two-second timeout. Both API and worker expose these paths on port `8081`;
-neither readiness check validates Service Bus or SMTP.
+a two-second timeout. Both API and worker expose these paths on port `8081`.
+Service Bus and SMTP clients are initialized before the HTTP process starts;
+readiness intentionally does not send email.
 
 ## Initial alert thresholds
 
@@ -400,21 +443,15 @@ traffic exists.
 | --- | --- | --- |
 | API readiness | 1 failure | 2 consecutive minutes |
 | API rate limited | more than 10 HTTP 429s in 5 minutes | investigate request, recipient, and template volume |
-| Oldest due outbox row | 120 seconds | 600 seconds |
-| Due outbox rows | 100 for 5 minutes | 1,000 for 5 minutes |
-| Oldest due delivery | 120 seconds | 600 seconds |
-| Service Bus DLQ | 1 message | 10 messages or any sustained growth |
+| Oldest due outbox row | 300 seconds | any repeated delayed event |
+| Service Bus backlog | any message for 15 minutes | investigate worker/scaler |
+| Service Bus DLQ | 1 message | any sustained growth |
+| Provider failures | 50% of at least 20 attempts in 15 minutes | auth/TLS or acceptance-unknown immediately |
 | Migration execution | n/a | Any non-`Succeeded` terminal result |
 
-Provider terminal failure rate:
-
-- warning: 5% over 15 minutes, with at least 20 terminal attempts;
-- critical: 20% over 15 minutes, with at least 20 terminal attempts.
-
-Evaluate worker readiness and replica count only when the queue is `Active`, an
-active worker revision exists, the scaler is healthy, active message count is
-greater than zero, and no approved maintenance window is open. Warn after two
-minutes with zero replicas; page after five minutes.
+Worker scale-to-zero is normal. Do not alert on zero replicas alone. Sustained
+active messages, KEDA check failures, restart count, and readiness provide the
+actionable worker signal.
 
 Also alert on a non-`Active` queue outside an approved maintenance window and
 on an API/worker latest revision that is not the latest ready revision.
@@ -449,7 +486,7 @@ Rollback is allowed only when the previous binary is compatible with the
 current forward schema. Prefer roll-forward when compatibility is uncertain.
 Never delete `schema_migrations` rows or execute a down migration.
 
-1. Select the exact previous `main-<short-sha>` image.
+1. Select the exact previous digest image.
 2. Deploy that image to `notification-migrate` with
    `deployRuntime=false provisionPermissions=false`.
 3. Start one migration execution and require that exact execution to report
@@ -463,6 +500,12 @@ Use `infra/main.bicep` and the same parameter set/order as
 `.github/workflows/release.yml`. Running the older image's migration command is
 still forward-only; it does not undo migrations already applied by a newer
 release.
+
+During the dedicated-vault cutover, old shared-vault aliases remain in the
+Container App configuration while new revisions use distinct `*-v2` aliases.
+Do not remove the old aliases or shared-vault notification policies until a
+rollback drill has succeeded and the approved rollback retention window has
+ended.
 
 ## PostgreSQL PITR and disaster recovery
 
@@ -513,18 +556,24 @@ acceptance means no manual replay.
 
 ## Production acceptance
 
-Status: **runtime and Azure Communication Services SMTP deployment accepted;
-operational drills remain**. Static/local checks are not live acceptance.
+Status: **the previous runtime baseline is live; the keyring, dedicated-vault,
+digest-release, and expanded-alert hardening in this branch is not deployed**.
+Static/local checks and what-if are not live acceptance.
 
 - [x] Unit tests, PostgreSQL integration tests, and vet pass.
 - [x] Bicep and release workflow static validation pass.
-- [x] Migration-first workflow and immutable image readiness gates exist.
+- [ ] Dedicated notification vault is bootstrapped and
+      `scripts/verify-secret-scope.sh` passes.
+- [ ] Protected `production` environment requires a reviewer, rejects
+      self-review, limits deployment to `main`, and
+      `PRODUCTION_DEPLOY_ENABLED=true` is set afterward.
+- [ ] What-if artifact is reviewed before production approval.
+- [ ] Migration-first digest workflow and exact image readiness gates pass live.
 - [x] `SMTP_ADDR`, `SMTP_FROM`, and
       `SMTP_AUTHENTICATION_ENABLED` production repository variables are set.
-- [x] Required SMTP Key Vault credentials exist when authentication is enabled.
-- [x] Production migration job succeeds.
-- [x] Production API and worker latest revisions become ready on the exact
-      immutable image.
+- [ ] Required SMTP and keyring secrets exist in the dedicated vault.
+- [ ] Production migration job succeeds on the hardened digest.
+- [ ] Production API and worker latest revisions become ready on that digest.
 - [x] Gateway Dapr invocation of notification `/ready` returns the expected
       HTTP status and body.
 - [x] Unauthorized Dapr callers are rejected in the deployed environment.
@@ -535,7 +584,10 @@ operational drills remain**. Static/local checks are not live acceptance.
       deployed provider.
 - [ ] Queue pause/resume and `NOTIFICATIONS_DISABLED` are exercised.
 - [ ] One safe DLQ replay drill is completed without duplicate provider send.
-- [ ] Alerts and ownership are configured and tested.
+- [ ] All repo-managed alerts and ownership are deployed and test-fired.
+- [ ] Previous revisions are rollback-tested while shared-vault aliases remain.
+- [ ] Shared-vault notification policies and old aliases are removed in a later
+      approved cleanup release.
 
 Do not begin the production `account-api` cutover until every unchecked item is
 completed and recorded.
