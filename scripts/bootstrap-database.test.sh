@@ -102,6 +102,7 @@ if HHC_ENV_FILE="$invalid_env" NOTIFICATION_BOOTSTRAP_DRY_RUN=1 \
 fi
 
 grep -q 'host=172.16.68.4' <<<"$output"
+grep -q 'runtime-host=hhc-pg.postgres.database.azure.com' <<<"$output"
 grep -q 'database=notification' <<<"$output"
 grep -q 'role=notification' <<<"$output"
 grep -q 'sslmode=require' <<<"$output"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 env_file="${HHC_ENV_FILE:-/Users/rayselfs/Projects/hhc/.env.json}"
 host="${NOTIFICATION_DB_HOST:-172.16.68.4}"
+runtime_host="${NOTIFICATION_RUNTIME_DB_HOST:-hhc-pg.postgres.database.azure.com}"
 port="${NOTIFICATION_DB_PORT:-5432}"
 database="notification"
 role="notification"
@@ -44,7 +45,7 @@ if [[ -z "$notification_password" || -z "$data_encryption_key" || -z "$hash_key"
 fi
 
 encoded_password="$(printf '%s' "$notification_password" | jq -sRr @uri)"
-database_url="postgres://notification:${encoded_password}@${host}:${port}/notification?sslmode=require"
+database_url="postgres://notification:${encoded_password}@${runtime_host}:${port}/notification?sslmode=require"
 encryption_keys_json="$(jq -r '.NOTIFICATION_ENCRYPTION_KEYS_JSON // empty' "$env_file")"
 hash_keys_json="$(jq -r '.NOTIFICATION_HASH_KEYS_JSON // empty' "$env_file")"
 [[ -n "$encryption_keys_json" ]] || encryption_keys_json="$(jq -nc --arg key "$data_encryption_key" '{"legacy-v1":$key}')"
@@ -92,6 +93,7 @@ unset active_encryption_key_id active_hash_key_id
 unset stream_entries
 
 echo "host=$host"
+echo "runtime-host=$runtime_host"
 echo "database=$database"
 echo "role=$role"
 echo "sslmode=require"
