@@ -130,7 +130,7 @@ func (s *SMTP) Send(ctx context.Context, payload DeliveryPayload) (ProviderRecei
 		AcceptedAt:        time.Now().UTC(),
 	}
 	if s.config.Logger != nil {
-		s.config.Logger.Print("smtp delivery accepted")
+		s.config.Logger.Print("event=notification_provider_success provider=smtp")
 	}
 	return receipt, nil
 }
@@ -173,7 +173,11 @@ func smtpHost(config SMTPConfig) (string, error) {
 func (s *SMTP) failed(kind ErrorKind, operation string, cause error) error {
 	providerErr := &ProviderError{Kind: kind, Operation: operation, cause: cause}
 	if s.config.Logger != nil {
-		s.config.Logger.Printf("smtp delivery failed kind=%s operation=%s", kind, operation)
+		s.config.Logger.Printf(
+			"event=notification_provider_failure provider=smtp kind=%s operation=%s",
+			kind,
+			operation,
+		)
 	}
 	return providerErr
 }

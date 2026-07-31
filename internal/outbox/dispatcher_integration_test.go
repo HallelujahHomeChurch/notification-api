@@ -80,6 +80,59 @@ func TestPostgresRecoversExpiredLeaseUsingDatabaseClock(t *testing.T) {
 	}
 }
 
+func TestPostgresExpiresNotificationBeforePublish(t *testing.T) {
+	db := integrationDatabase(t)
+	outboxID := insertOutboxFixture(t, db, "pending", nil)
+	var deliveryID, messageID string
+	if err := db.QueryRow(`
+		SELECT delivery.id, message.id
+		FROM notification_outbox AS outbox
+		JOIN notification_deliveries AS delivery ON delivery.id=outbox.delivery_id
+		JOIN notification_messages AS message ON message.id=delivery.message_id
+		WHERE outbox.id=$1`,
+		outboxID,
+	).Scan(&deliveryID, &messageID); err != nil {
+		t.Fatalf("read expiry fixture: %v", err)
+	}
+	if _, err := db.Exec(`
+		UPDATE notification_messages
+		SET expires_at=clock_timestamp()-interval '1 second'
+		WHERE id=$1`,
+		messageID,
+	); err != nil {
+		t.Fatalf("expire message: %v", err)
+	}
+
+	claimed, ok, err := (postgresStore{db: db}).claimNext(context.Background(), leaseDuration)
+	if err != nil || !ok || !claimed.Expired {
+		t.Fatalf("expired claim = %#v ok=%v error=%v", claimed, ok, err)
+	}
+	var outboxCount int
+	var deliveryStatus, messageStatus, errorCode string
+	if err := db.QueryRow(`
+		SELECT delivery.status, message.status, delivery.last_error_code,
+		       (SELECT count(*) FROM notification_outbox WHERE id=$3)
+		FROM notification_deliveries AS delivery
+		JOIN notification_messages AS message ON message.id=delivery.message_id
+		WHERE delivery.id=$1 AND message.id=$2`,
+		deliveryID,
+		messageID,
+		outboxID,
+	).Scan(&deliveryStatus, &messageStatus, &errorCode, &outboxCount); err != nil {
+		t.Fatalf("read expired state: %v", err)
+	}
+	if deliveryStatus != "dead_lettered" || messageStatus != "dead_lettered" ||
+		errorCode != "expired" || outboxCount != 0 {
+		t.Fatalf(
+			"delivery=%q message=%q error=%q outbox=%d",
+			deliveryStatus,
+			messageStatus,
+			errorCode,
+			outboxCount,
+		)
+	}
+}
+
 func TestPostgresFencesStaleLeaseGenerationTransitions(t *testing.T) {
 	db := integrationDatabase(t)
 	outboxID := insertOutboxFixture(t, db, "pending", nil)
@@ -138,7 +191,12 @@ func integrationDatabase(t *testing.T) *sql.DB {
 	if !strings.Contains(strings.ToLower(strings.TrimPrefix(parsed.Path, "/")), "test") {
 		t.Fatal("TEST_DATABASE_URL database name must contain test")
 	}
-	admin, err := database.Open(config.Config{DatabaseURL: rawURL})
+	admin, err := database.Open(config.Config{
+		DatabaseURL:       rawURL,
+		DBMaxOpenConns:    2,
+		DBMaxIdleConns:    1,
+		DBConnMaxLifetime: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("open integration database: %v", err)
 	}
@@ -152,7 +210,12 @@ func integrationDatabase(t *testing.T) *sql.DB {
 	query := parsed.Query()
 	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
-	db, err := database.Open(config.Config{DatabaseURL: parsed.String()})
+	db, err := database.Open(config.Config{
+		DatabaseURL:       parsed.String(),
+		DBMaxOpenConns:    5,
+		DBMaxIdleConns:    2,
+		DBConnMaxLifetime: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("open scoped integration database: %v", err)
 	}

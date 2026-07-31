@@ -7,8 +7,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
+
+var ErrKeyNotConfigured = errors.New("key is not configured")
 
 func Encrypt(key, context, plaintext []byte) ([]byte, error) {
 	if len(context) == 0 {
@@ -48,6 +51,41 @@ func Hash(key, value []byte) string {
 	hash := hmac.New(sha256.New, key)
 	_, _ = hash.Write(value)
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func EncryptWithKeyID(keys map[string][]byte, keyID string, context, plaintext []byte) ([]byte, error) {
+	key, err := keyByID(keys, keyID)
+	if err != nil {
+		return nil, err
+	}
+	return Encrypt(key, context, plaintext)
+}
+
+func DecryptWithKeyID(keys map[string][]byte, keyID string, context, ciphertext []byte) ([]byte, error) {
+	key, err := keyByID(keys, keyID)
+	if err != nil {
+		return nil, err
+	}
+	return Decrypt(key, context, ciphertext)
+}
+
+func HashWithKeyID(keys map[string][]byte, keyID string, value []byte) (string, error) {
+	key, err := keyByID(keys, keyID)
+	if err != nil {
+		return "", err
+	}
+	return Hash(key, value), nil
+}
+
+func keyByID(keys map[string][]byte, keyID string) ([]byte, error) {
+	if keyID == "" {
+		return nil, fmt.Errorf("key ID is required")
+	}
+	key, ok := keys[keyID]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrKeyNotConfigured, keyID)
+	}
+	return key, nil
 }
 
 func newAEAD(key []byte) (cipher.AEAD, error) {

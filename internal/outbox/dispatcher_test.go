@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ type fakeStore struct {
 	publishErrs []error
 	retried     []claim
 	retryDelays []time.Duration
+	retryErrs   []error
 }
 
 type claimResult struct {
@@ -49,6 +51,11 @@ func (s *fakeStore) markPublished(_ context.Context, claimed claim) error {
 func (s *fakeStore) markRetry(_ context.Context, claimed claim, delay time.Duration) error {
 	s.retried = append(s.retried, claimed)
 	s.retryDelays = append(s.retryDelays, delay)
+	if len(s.retryErrs) > 0 {
+		err := s.retryErrs[0]
+		s.retryErrs = s.retryErrs[1:]
+		return err
+	}
 	return nil
 }
 
@@ -79,6 +86,28 @@ func TestDispatchMarksPublishedOnlyAfterBrokerAcknowledgement(t *testing.T) {
 	}
 	if !processed || len(store.published) != 1 || len(store.retried) != 0 {
 		t.Fatalf("processed=%v published=%d retried=%d", processed, len(store.published), len(store.retried))
+	}
+}
+
+func TestDispatchSkipsProviderForExpiredClaim(t *testing.T) {
+	store := &fakeStore{
+		claim:   claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Expired: true},
+		claimOK: true,
+	}
+	published := false
+	processed, err := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
+		published = true
+		return nil
+	})).DispatchOne(context.Background())
+
+	if err != nil || !processed || published || len(store.published) != 0 {
+		t.Fatalf(
+			"processed=%v error=%v provider=%v published=%d",
+			processed,
+			err,
+			published,
+			len(store.published),
+		)
 	}
 }
 
@@ -135,7 +164,7 @@ func TestDispatchCancelsBlockedPublishBeforeLeaseExpires(t *testing.T) {
 	}
 }
 
-func TestRunReturnsAfterPersistentDependencyFailures(t *testing.T) {
+func TestRunKeepsRetryingPersistentBrokerFailures(t *testing.T) {
 	store := &fakeStore{
 		claim:   claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Attempt: 1},
 		claimOK: true,
@@ -144,14 +173,92 @@ func TestRunReturnsAfterPersistentDependencyFailures(t *testing.T) {
 		return errors.New("broker unavailable")
 	}))
 	dispatcher.maxConsecutiveFailures = 3
+	stopErr := errors.New("stop test")
+	waits := 0
+	dispatcher.wait = func(context.Context, time.Duration) error {
+		waits++
+		if waits == 4 {
+			return stopErr
+		}
+		return nil
+	}
+
+	err := dispatcher.Run(context.Background())
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("Run() error = %v, want broker retries to continue", err)
+	}
+	if store.claimCalls != 4 {
+		t.Fatalf("claim calls = %d, want 4", store.claimCalls)
+	}
+}
+
+func TestRunStopsAfterPersistentClaimFailures(t *testing.T) {
+	store := &fakeStore{claimErr: errors.New("database unavailable")}
+	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
+		t.Fatal("publisher called without a claim")
+		return nil
+	}))
+	dispatcher.maxConsecutiveFailures = 3
 	dispatcher.wait = func(context.Context, time.Duration) error { return nil }
 
 	err := dispatcher.Run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "persistent outbox dependency failure") {
-		t.Fatalf("Run() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "persistent outbox database failure") {
+		t.Fatalf("Run() error = %v, want persistent claim failure", err)
 	}
 	if store.claimCalls != 3 {
 		t.Fatalf("claim calls = %d, want 3", store.claimCalls)
+	}
+}
+
+func TestRunStopsAfterPersistentRetryTransitionFailures(t *testing.T) {
+	databaseErr := errors.New("database unavailable")
+	store := &fakeStore{
+		claim:     claim{OutboxID: "outbox-1", DeliveryID: "delivery-1", Attempt: 1},
+		claimOK:   true,
+		retryErrs: []error{databaseErr, databaseErr, databaseErr},
+	}
+	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
+		return errors.New("broker unavailable")
+	}))
+	dispatcher.maxConsecutiveFailures = 3
+	dispatcher.wait = func(context.Context, time.Duration) error { return nil }
+
+	err := dispatcher.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "persistent outbox database failure") {
+		t.Fatalf("Run() error = %v, want persistent retry-transition failure", err)
+	}
+	if len(store.retried) != 3 {
+		t.Fatalf("markRetry calls = %d, want 3", len(store.retried))
+	}
+}
+
+func TestDispatchLogsDelayedOutboxWithoutIdentifiers(t *testing.T) {
+	store := &fakeStore{
+		claim: claim{
+			OutboxID:   "outbox-secret",
+			DeliveryID: "delivery-secret",
+			Attempt:    1,
+			AgeSeconds: 301,
+		},
+		claimOK: true,
+	}
+	dispatcher := newDispatcher(store, publisherFunc(func(context.Context, string, string) error {
+		return nil
+	}))
+	var entry string
+	dispatcher.logf = func(format string, values ...any) {
+		entry = fmt.Sprintf(format, values...)
+	}
+
+	processed, err := dispatcher.DispatchOne(context.Background())
+	if err != nil || !processed {
+		t.Fatalf("DispatchOne() processed=%v error=%v", processed, err)
+	}
+	if !strings.Contains(entry, "event=notification_outbox_delayed age_seconds=301") {
+		t.Fatalf("log = %q", entry)
+	}
+	if strings.Contains(entry, "outbox-secret") || strings.Contains(entry, "delivery-secret") {
+		t.Fatalf("log contains identifiers: %q", entry)
 	}
 }
 
@@ -226,7 +333,7 @@ func TestRunKeepsCompletionWriteFailuresAcrossIdlePolls(t *testing.T) {
 	}
 
 	err := dispatcher.Run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "persistent outbox dependency failure") {
+	if err == nil || !strings.Contains(err.Error(), "persistent outbox database failure") {
 		t.Fatalf("Run() error = %v, want persistent completion-write failure", err)
 	}
 	if len(store.published) != 3 {

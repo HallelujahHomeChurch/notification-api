@@ -3,11 +3,11 @@ targetScope = 'resourceGroup'
 param location string = resourceGroup().location
 param containerAppEnvironmentName string = 'alive-env'
 param containerRegistryName string = 'alive'
-param keyVaultName string = 'alive-vault'
-@minLength(1)
-param migrationImage string
-@minLength(1)
-param runtimeImage string
+param notificationVaultName string = 'alive-notify-${take(uniqueString(subscription().id, resourceGroup().id), 11)}'
+param legacyVaultName string = 'alive-vault'
+@minLength(71)
+@maxLength(71)
+param imageDigest string
 param deployRuntime bool = true
 param provisionPermissions bool = true
 param serviceBusNamespaceName string = 'alive-notifications-${uniqueString(subscription().id, resourceGroup().id)}'
@@ -18,6 +18,8 @@ param smtpAuthenticationEnabled bool = true
 @minValue(1)
 param notificationTemplateDailyLimit int = 1000
 param notificationsDisabled bool
+param activeEncryptionKeyID string = 'legacy-v1'
+param activeHashKeyID string = 'legacy-v1'
 param smtpUsernameSecretName string = 'notification-smtp-username'
 param smtpPasswordSecretName string = 'notification-smtp-password'
 
@@ -27,8 +29,16 @@ var serviceBusReceiverRole = subscriptionResourceId('Microsoft.Authorization/rol
 var databaseSecretUrl = '${vault.properties.vaultUri}secrets/notification-database-url'
 var encryptionSecretUrl = '${vault.properties.vaultUri}secrets/notification-data-encryption-key'
 var hashSecretUrl = '${vault.properties.vaultUri}secrets/notification-hash-key'
+var encryptionKeysSecretUrl = '${vault.properties.vaultUri}secrets/notification-encryption-keys-json'
+var hashKeysSecretUrl = '${vault.properties.vaultUri}secrets/notification-hash-keys-json'
 var smtpUsernameSecretUrl = '${vault.properties.vaultUri}secrets/${smtpUsernameSecretName}'
 var smtpPasswordSecretUrl = '${vault.properties.vaultUri}secrets/${smtpPasswordSecretName}'
+var legacyDatabaseSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-database-url'
+var legacyEncryptionSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-data-encryption-key'
+var legacyHashSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-hash-key'
+var legacySMTPUsernameSecretUrl = '${legacyVault.properties.vaultUri}secrets/${smtpUsernameSecretName}'
+var legacySMTPPasswordSecretUrl = '${legacyVault.properties.vaultUri}secrets/${smtpPasswordSecretName}'
+var imageReference = '${registry.properties.loginServer}/alive/notification-api@${imageDigest}'
 var commonEnvironment = [
   { name: 'ENVIRONMENT', value: 'production' }
   { name: 'PORT', value: '8081' }
@@ -36,6 +46,9 @@ var commonEnvironment = [
   { name: 'SERVICEBUS_NAMESPACE', value: '${serviceBus.name}.servicebus.windows.net' }
   { name: 'SERVICEBUS_QUEUE_NAME', value: emailQueue.name }
   { name: 'SHUTDOWN_TIMEOUT_SECONDS', value: '30' }
+  { name: 'DB_MAX_OPEN_CONNS', value: '2' }
+  { name: 'DB_MAX_IDLE_CONNS', value: '1' }
+  { name: 'DB_CONN_MAX_LIFETIME', value: '30m' }
 ]
 
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
@@ -46,8 +59,12 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
   name: containerRegistryName
 }
 
-resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
-  name: keyVaultName
+resource vault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
+  name: notificationVaultName
+}
+
+resource legacyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
+  name: legacyVaultName
 }
 
 resource serviceBus 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
@@ -61,7 +78,7 @@ resource serviceBus 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
     minimumTlsVersion: '1.2'
     disableLocalAuth: true
     publicNetworkAccess: 'Enabled'
-    zoneRedundant: false
+    zoneRedundant: true
   }
 }
 
@@ -76,6 +93,9 @@ resource emailQueue 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' = {
     defaultMessageTimeToLive: 'P7D'
     deadLetteringOnMessageExpiration: true
     enablePartitioning: true
+    maxSizeInMegabytes: 16384
+    maxMessageSizeInKilobytes: 256
+    autoDeleteOnIdle: 'P10675199DT2H48M5.4775807S'
   }
 }
 
@@ -144,37 +164,6 @@ resource workerServiceBusReceiver 'Microsoft.Authorization/roleAssignments@2022-
   }
 }
 
-// alive-vault currently uses access policies. Do not switch the shared vault to RBAC in this deployment.
-resource notificationSecretAccess 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = if (provisionPermissions) {
-  parent: vault
-  name: 'add'
-  properties: {
-    accessPolicies: [
-      {
-        tenantId: subscription().tenantId
-        objectId: apiIdentity.properties.principalId
-        permissions: {
-          secrets: ['get', 'list']
-        }
-      }
-      {
-        tenantId: subscription().tenantId
-        objectId: workerIdentity.properties.principalId
-        permissions: {
-          secrets: ['get', 'list']
-        }
-      }
-      {
-        tenantId: subscription().tenantId
-        objectId: migrateIdentity.properties.principalId
-        permissions: {
-          secrets: ['get', 'list']
-        }
-      }
-    ]
-  }
-}
-
 resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   name: 'notification-api'
   location: location
@@ -186,6 +175,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   }
   properties: {
     managedEnvironmentId: environment.id
+    workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
       dapr: {
@@ -202,22 +192,31 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         }
       ]
       secrets: [
-        { name: 'database-url', keyVaultUrl: databaseSecretUrl, identity: apiIdentity.id }
-        { name: 'data-encryption-key', keyVaultUrl: encryptionSecretUrl, identity: apiIdentity.id }
-        { name: 'hash-key', keyVaultUrl: hashSecretUrl, identity: apiIdentity.id }
+        { name: 'database-url', keyVaultUrl: legacyDatabaseSecretUrl, identity: apiIdentity.id }
+        { name: 'data-encryption-key', keyVaultUrl: legacyEncryptionSecretUrl, identity: apiIdentity.id }
+        { name: 'hash-key', keyVaultUrl: legacyHashSecretUrl, identity: apiIdentity.id }
+        { name: 'database-url-v2', keyVaultUrl: databaseSecretUrl, identity: apiIdentity.id }
+        { name: 'data-encryption-key-v2', keyVaultUrl: encryptionSecretUrl, identity: apiIdentity.id }
+        { name: 'hash-key-v2', keyVaultUrl: hashSecretUrl, identity: apiIdentity.id }
+        { name: 'encryption-keys-json-v2', keyVaultUrl: encryptionKeysSecretUrl, identity: apiIdentity.id }
+        { name: 'hash-keys-json-v2', keyVaultUrl: hashKeysSecretUrl, identity: apiIdentity.id }
       ]
     }
     template: {
       containers: [
         {
           name: 'notification-api'
-          image: runtimeImage
+          image: imageReference
           args: ['api']
           env: concat(commonEnvironment, [
             { name: 'AZURE_CLIENT_ID', value: apiIdentity.properties.clientId }
-            { name: 'DATABASE_URL', secretRef: 'database-url' }
-            { name: 'NOTIFICATION_DATA_ENCRYPTION_KEY', secretRef: 'data-encryption-key' }
-            { name: 'NOTIFICATION_HASH_KEY', secretRef: 'hash-key' }
+            { name: 'DATABASE_URL', secretRef: 'database-url-v2' }
+            { name: 'NOTIFICATION_DATA_ENCRYPTION_KEY', secretRef: 'data-encryption-key-v2' }
+            { name: 'NOTIFICATION_HASH_KEY', secretRef: 'hash-key-v2' }
+            { name: 'NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID', value: activeEncryptionKeyID }
+            { name: 'NOTIFICATION_ENCRYPTION_KEYS_JSON', secretRef: 'encryption-keys-json-v2' }
+            { name: 'NOTIFICATION_ACTIVE_HASH_KEY_ID', value: activeHashKeyID }
+            { name: 'NOTIFICATION_HASH_KEYS_JSON', secretRef: 'hash-keys-json-v2' }
             { name: 'NOTIFICATION_ALLOWED_CALLERS', value: 'account-api,hhc-web-api' }
             { name: 'NOTIFICATION_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'NOTIFICATION_TEMPLATE_DAILY_LIMIT', value: '${notificationTemplateDailyLimit}' }
@@ -244,6 +243,8 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         }
       ]
       scale: {
+        pollingInterval: 30
+        cooldownPeriod: 300
         minReplicas: 1
         maxReplicas: 3
       }
@@ -252,7 +253,6 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   dependsOn: [
     apiAcrPull
     apiServiceBusSender
-    notificationSecretAccess
   ]
 }
 
@@ -267,6 +267,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   }
   properties: {
     managedEnvironmentId: environment.id
+    workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
       registries: [
@@ -276,28 +277,35 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         }
       ]
       secrets: concat([
-        { name: 'database-url', keyVaultUrl: databaseSecretUrl, identity: workerIdentity.id }
-        { name: 'data-encryption-key', keyVaultUrl: encryptionSecretUrl, identity: workerIdentity.id }
+        { name: 'database-url', keyVaultUrl: legacyDatabaseSecretUrl, identity: workerIdentity.id }
+        { name: 'data-encryption-key', keyVaultUrl: legacyEncryptionSecretUrl, identity: workerIdentity.id }
+        { name: 'database-url-v2', keyVaultUrl: databaseSecretUrl, identity: workerIdentity.id }
+        { name: 'data-encryption-key-v2', keyVaultUrl: encryptionSecretUrl, identity: workerIdentity.id }
+        { name: 'encryption-keys-json-v2', keyVaultUrl: encryptionKeysSecretUrl, identity: workerIdentity.id }
       ], smtpAuthenticationEnabled ? [
-        { name: 'smtp-username', keyVaultUrl: smtpUsernameSecretUrl, identity: workerIdentity.id }
-        { name: 'smtp-password', keyVaultUrl: smtpPasswordSecretUrl, identity: workerIdentity.id }
+        { name: 'smtp-username', keyVaultUrl: legacySMTPUsernameSecretUrl, identity: workerIdentity.id }
+        { name: 'smtp-password', keyVaultUrl: legacySMTPPasswordSecretUrl, identity: workerIdentity.id }
+        { name: 'smtp-username-v2', keyVaultUrl: smtpUsernameSecretUrl, identity: workerIdentity.id }
+        { name: 'smtp-password-v2', keyVaultUrl: smtpPasswordSecretUrl, identity: workerIdentity.id }
       ] : [])
     }
     template: {
       containers: [
         {
           name: 'notification-worker'
-          image: runtimeImage
+          image: imageReference
           args: ['worker']
           env: concat(commonEnvironment, [
             { name: 'AZURE_CLIENT_ID', value: workerIdentity.properties.clientId }
-            { name: 'DATABASE_URL', secretRef: 'database-url' }
-            { name: 'NOTIFICATION_DATA_ENCRYPTION_KEY', secretRef: 'data-encryption-key' }
+            { name: 'DATABASE_URL', secretRef: 'database-url-v2' }
+            { name: 'NOTIFICATION_DATA_ENCRYPTION_KEY', secretRef: 'data-encryption-key-v2' }
+            { name: 'NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID', value: activeEncryptionKeyID }
+            { name: 'NOTIFICATION_ENCRYPTION_KEYS_JSON', secretRef: 'encryption-keys-json-v2' }
             { name: 'SMTP_ADDR', value: smtpAddr }
             { name: 'SMTP_FROM', value: smtpFrom }
           ], smtpAuthenticationEnabled ? [
-            { name: 'SMTP_USERNAME', secretRef: 'smtp-username' }
-            { name: 'SMTP_PASSWORD', secretRef: 'smtp-password' }
+            { name: 'SMTP_USERNAME', secretRef: 'smtp-username-v2' }
+            { name: 'SMTP_PASSWORD', secretRef: 'smtp-password-v2' }
           ] : [])
           resources: {
             cpu: json('0.5')
@@ -320,6 +328,8 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         }
       ]
       scale: {
+        pollingInterval: 30
+        cooldownPeriod: 300
         minReplicas: 0
         maxReplicas: 5
         rules: [
@@ -342,7 +352,6 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   dependsOn: [
     workerAcrPull
     workerServiceBusReceiver
-    notificationSecretAccess
   ]
 }
 
@@ -357,6 +366,7 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = {
   }
   properties: {
     environmentId: environment.id
+    workloadProfileName: 'Consumption'
     configuration: {
       triggerType: 'Manual'
       replicaTimeout: 300
@@ -372,19 +382,23 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = {
         }
       ]
       secrets: [
-        { name: 'database-url', keyVaultUrl: databaseSecretUrl, identity: migrateIdentity.id }
+        { name: 'database-url', keyVaultUrl: legacyDatabaseSecretUrl, identity: migrateIdentity.id }
+        { name: 'database-url-v2', keyVaultUrl: databaseSecretUrl, identity: migrateIdentity.id }
       ]
     }
     template: {
       containers: [
         {
           name: 'notification-migrate'
-          image: migrationImage
+          image: imageReference
           args: ['migrate']
           env: [
             { name: 'ENVIRONMENT', value: 'production' }
             { name: 'AZURE_CLIENT_ID', value: migrateIdentity.properties.clientId }
-            { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'DATABASE_URL', secretRef: 'database-url-v2' }
+            { name: 'DB_MAX_OPEN_CONNS', value: '1' }
+            { name: 'DB_MAX_IDLE_CONNS', value: '1' }
+            { name: 'DB_CONN_MAX_LIFETIME', value: '30m' }
           ]
           resources: {
             cpu: json('0.25')
@@ -396,7 +410,6 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = {
   }
   dependsOn: [
     migrateAcrPull
-    notificationSecretAccess
   ]
 }
 

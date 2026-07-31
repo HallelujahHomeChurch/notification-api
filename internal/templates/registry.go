@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 )
@@ -24,6 +25,7 @@ type Definition struct {
 	RequiredFields  map[string]bool
 	AllowedFields   map[string]bool
 	SupportedLocale map[string]bool
+	TTL             time.Duration
 }
 
 var definitions = map[string]map[int]Definition{
@@ -36,6 +38,7 @@ var definitions = map[string]map[int]Definition{
 			RequiredFields:  set("verifyUrl"),
 			AllowedFields:   set("verifyUrl"),
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             24 * time.Hour,
 		},
 	},
 	"account.reset-password": {
@@ -47,6 +50,7 @@ var definitions = map[string]map[int]Definition{
 			RequiredFields:  set("resetUrl"),
 			AllowedFields:   set("resetUrl"),
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             time.Hour,
 		},
 	},
 	"account.oauth-link-confirmation": {
@@ -58,6 +62,7 @@ var definitions = map[string]map[int]Definition{
 			RequiredFields:  set("confirmUrl", "provider"),
 			AllowedFields:   set("confirmUrl", "provider"),
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             15 * time.Minute,
 		},
 	},
 }

@@ -3,12 +3,18 @@ package templates
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 )
 
 func TestResolveAccountTemplates(t *testing.T) {
-	for _, templateID := range []string{"account.verify-email", "account.reset-password", "account.oauth-link-confirmation"} {
+	ttls := map[string]time.Duration{
+		"account.verify-email":            24 * time.Hour,
+		"account.reset-password":          time.Hour,
+		"account.oauth-link-confirmation": 15 * time.Minute,
+	}
+	for templateID, ttl := range ttls {
 		definition, err := Resolve(templateID, "email")
 		if err != nil {
 			t.Fatalf("Resolve(%q, email) error = %v", templateID, err)
@@ -18,6 +24,9 @@ func TestResolveAccountTemplates(t *testing.T) {
 		}
 		if definition.Channel != "email" {
 			t.Fatalf("Resolve(%q, email).Channel = %q, want email", templateID, definition.Channel)
+		}
+		if definition.TTL != ttl {
+			t.Fatalf("Resolve(%q, email).TTL = %s, want %s", templateID, definition.TTL, ttl)
 		}
 	}
 }

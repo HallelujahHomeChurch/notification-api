@@ -55,23 +55,22 @@ jobs:
           go vet ./...
           bash scripts/release-static.test.sh
 
-  deploy:
-    name: Build, migrate, and deploy
+  plan:
+    name: Build and plan
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
+    outputs:
+      image_ref: ${{ steps.image.outputs.image_ref }}
     env:
       ACR_NAME: alive
       ACR_LOGIN_SERVER: alive.azurecr.io
       IMAGE_REPOSITORY: alive/notification-api
       RESOURCE_GROUP: alive
-      MIGRATION_JOB_NAME: notification-migrate
       API_APP_NAME: notification-api
-      WORKER_APP_NAME: notification-worker
-      API_GATEWAY_APP_NAME: api-gateway
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -81,6 +80,16 @@ jobs:
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Load production release settings
+        shell: bash
+        run: |
+          source infra/production-release.env
+          {
+            echo "NOTIFICATION_VAULT_NAME=${NOTIFICATION_VAULT_NAME}"
+            echo "ACTIVE_ENCRYPTION_KEY_ID=${ACTIVE_ENCRYPTION_KEY_ID}"
+            echo "ACTIVE_HASH_KEY_ID=${ACTIVE_HASH_KEY_ID}"
+          } >> "${GITHUB_ENV}"
 
       - name: Validate release configuration
         shell: bash
@@ -93,6 +102,9 @@ jobs:
             SMTP_FROM
             SMTP_AUTHENTICATION_ENABLED
             NOTIFICATION_TEMPLATE_DAILY_LIMIT
+            NOTIFICATION_VAULT_NAME
+            ACTIVE_ENCRYPTION_KEY_ID
+            ACTIVE_HASH_KEY_ID
           )
           for name in "${required_vars[@]}"; do
             if [[ -z "${!name:-}" ]]; then
@@ -111,6 +123,12 @@ jobs:
             echo "NOTIFICATION_TEMPLATE_DAILY_LIMIT must be a positive integer" >&2
             exit 1
           fi
+          for name in ACTIVE_ENCRYPTION_KEY_ID ACTIVE_HASH_KEY_ID; do
+            if ! [[ "${!name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "${name} contains an invalid key ID" >&2
+              exit 1
+            fi
+          done
 
       - name: Set image tag
         shell: bash
@@ -125,6 +143,190 @@ jobs:
 
       - name: Install Container Apps extension
         run: az extension add --name containerapp --upgrade --yes
+
+      - name: Verify dedicated secret scope
+        run: bash scripts/verify-secret-scope.sh
+
+      - name: Build image and resolve digest
+        id: image
+        shell: bash
+        run: |
+          az acr build \
+            --registry "${ACR_NAME}" \
+            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+            --file Dockerfile \
+            .
+          image_digest="$(az acr repository show \
+            --name "${ACR_NAME}" \
+            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
+            --query digest \
+            --output tsv \
+            --only-show-errors)"
+          if ! [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ACR returned an invalid image digest: ${image_digest}" >&2
+            exit 1
+          fi
+          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}@${image_digest}"
+          echo "image_ref=${image_ref}" >> "${GITHUB_OUTPUT}"
+          echo "IMAGE_REF=${image_ref}" >> "${GITHUB_ENV}"
+          echo "IMAGE_DIGEST=${image_digest}" >> "${GITHUB_ENV}"
+
+      - name: Read current release state
+        shell: bash
+        run: |
+          notifications_disabled="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${API_APP_NAME}" \
+            --query "properties.template.containers[0].env[?name=='NOTIFICATIONS_DISABLED'].value | [0]" \
+            --output tsv \
+            --only-show-errors)"
+          notifications_disabled="${notifications_disabled:-false}"
+          notifications_disabled="${notifications_disabled,,}"
+          case "${notifications_disabled}" in
+            true|false) ;;
+            *)
+              echo "Invalid deployed NOTIFICATIONS_DISABLED value: ${notifications_disabled}" >&2
+              exit 1
+              ;;
+          esac
+          echo "NOTIFICATIONS_DISABLED=${notifications_disabled}" >> "${GITHUB_ENV}"
+
+      - name: Produce complete what-if plan
+        shell: bash
+        run: |
+          mkdir -p release-plan
+          az deployment group what-if \
+            --name "notification-alerts-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/alerts.bicep \
+            --result-format FullResourcePayloads \
+            --no-pretty-print \
+            --only-show-errors \
+            --output json > release-plan/alerts-what-if.json
+          az deployment group what-if \
+            --name "notification-main-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/main.bicep \
+            --result-format FullResourcePayloads \
+            --parameters \
+              imageDigest="${IMAGE_DIGEST}" \
+              notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
+              deployRuntime=true \
+              provisionPermissions=false \
+              smtpAddr="${SMTP_ADDR}" \
+              smtpFrom="${SMTP_FROM}" \
+              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
+              notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
+              activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
+              activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
+            --no-pretty-print \
+            --only-show-errors \
+            --output json > release-plan/main-what-if.json
+          printf '%s\n' "${IMAGE_REF}" > release-plan/image-ref.txt
+
+      - name: Upload release plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: notification-release-plan-${{ github.sha }}
+          path: release-plan
+          if-no-files-found: error
+          retention-days: 30
+
+  deploy:
+    name: Migrate and deploy
+    needs: plan
+    if: ${{ vars.PRODUCTION_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE_REF: ${{ needs.plan.outputs.image_ref }}
+      RESOURCE_GROUP: alive
+      MIGRATION_JOB_NAME: notification-migrate
+      API_APP_NAME: notification-api
+      WORKER_APP_NAME: notification-worker
+      API_GATEWAY_APP_NAME: api-gateway
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      SMTP_ADDR: ${{ vars.SMTP_ADDR }}
+      SMTP_FROM: ${{ vars.SMTP_FROM }}
+      SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
+      NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Load production release settings
+        shell: bash
+        run: |
+          source infra/production-release.env
+          {
+            echo "NOTIFICATION_VAULT_NAME=${NOTIFICATION_VAULT_NAME}"
+            echo "ACTIVE_ENCRYPTION_KEY_ID=${ACTIVE_ENCRYPTION_KEY_ID}"
+            echo "ACTIVE_HASH_KEY_ID=${ACTIVE_HASH_KEY_ID}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          required_vars=(
+            AZURE_CLIENT_ID
+            AZURE_TENANT_ID
+            AZURE_SUBSCRIPTION_ID
+            SMTP_ADDR
+            SMTP_FROM
+            SMTP_AUTHENTICATION_ENABLED
+            NOTIFICATION_TEMPLATE_DAILY_LIMIT
+            NOTIFICATION_VAULT_NAME
+            ACTIVE_ENCRYPTION_KEY_ID
+            ACTIVE_HASH_KEY_ID
+            IMAGE_REF
+          )
+          for name in "${required_vars[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required release value: ${name}" >&2
+              exit 1
+            fi
+          done
+          case "${SMTP_AUTHENTICATION_ENABLED}" in
+            true|false) ;;
+            *)
+              echo "SMTP_AUTHENTICATION_ENABLED must be true or false" >&2
+              exit 1
+              ;;
+          esac
+          if ! [[ "${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "NOTIFICATION_TEMPLATE_DAILY_LIMIT must be a positive integer" >&2
+            exit 1
+          fi
+          if ! [[ "${IMAGE_REF}" =~ ^alive\.azurecr\.io/alive/notification-api@sha256:[0-9a-f]{64}$ ]]; then
+            echo "IMAGE_REF must be the planned notification-api ACR digest" >&2
+            exit 1
+          fi
+          for name in ACTIVE_ENCRYPTION_KEY_ID ACTIVE_HASH_KEY_ID; do
+            if ! [[ "${!name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "${name} contains an invalid key ID" >&2
+              exit 1
+            fi
+          done
+          echo "IMAGE_DIGEST=${IMAGE_REF##*@}" >> "${GITHUB_ENV}"
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Container Apps extension
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Verify dedicated secret scope
+        run: bash scripts/verify-secret-scope.sh
 
       - name: Capture runtime state and preflight monitoring
         shell: bash
@@ -191,7 +393,39 @@ jobs:
             echo "NOTIFICATIONS_DISABLED=${notifications_disabled}"
           } >> "${GITHUB_ENV}"
 
-      - name: Deploy rate-limit alert
+      - name: Re-run complete what-if
+        shell: bash
+        run: |
+          az deployment group what-if \
+            --name "notification-alerts-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/alerts.bicep \
+            --result-format FullResourcePayloads \
+            --no-pretty-print \
+            --only-show-errors \
+            --output none
+          az deployment group what-if \
+            --name "notification-main-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/main.bicep \
+            --result-format FullResourcePayloads \
+            --parameters \
+              imageDigest="${IMAGE_DIGEST}" \
+              notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
+              deployRuntime=true \
+              provisionPermissions=false \
+              smtpAddr="${SMTP_ADDR}" \
+              smtpFrom="${SMTP_FROM}" \
+              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
+              notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
+              activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
+              activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
+            --no-pretty-print \
+            --only-show-errors \
+            --output none
+
+      - name: Deploy alerts
         shell: bash
         run: |
           az deployment group create \
@@ -201,25 +435,16 @@ jobs:
             --only-show-errors \
             --output none
 
-      - name: Build and push image to ACR
-        run: |
-          az acr build \
-            --registry "${ACR_NAME}" \
-            --image "${IMAGE_REPOSITORY}:${IMAGE_TAG}" \
-            --file Dockerfile \
-            .
-
       - name: Update migration job
         shell: bash
         run: |
-          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
           az deployment group create \
             --name "notification-migrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "${RESOURCE_GROUP}" \
             --template-file infra/main.bicep \
             --parameters \
-              migrationImage="${image_ref}" \
-              runtimeImage="${image_ref}" \
+              imageDigest="${IMAGE_DIGEST}" \
+              notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
               deployRuntime=false \
               provisionPermissions=false \
               smtpAddr="${SMTP_ADDR}" \
@@ -227,6 +452,8 @@ jobs:
               smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
+              activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
+              activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
             --only-show-errors \
             --output none
 
@@ -272,14 +499,13 @@ jobs:
         id: deploy_runtime
         shell: bash
         run: |
-          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
           az deployment group create \
             --name "notification-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "${RESOURCE_GROUP}" \
             --template-file infra/main.bicep \
             --parameters \
-              migrationImage="${image_ref}" \
-              runtimeImage="${image_ref}" \
+              imageDigest="${IMAGE_DIGEST}" \
+              notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
               deployRuntime=true \
               provisionPermissions=false \
               smtpAddr="${SMTP_ADDR}" \
@@ -287,6 +513,8 @@ jobs:
               smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
+              activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
+              activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
             --only-show-errors \
             --output none
 
@@ -294,7 +522,7 @@ jobs:
         id: wait_runtime
         shell: bash
         run: |
-          image_ref="${ACR_LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          image_ref="${IMAGE_REF}"
           wait_for_revision() {
             local app_name="$1"
             for attempt in {1..60}; do

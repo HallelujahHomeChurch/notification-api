@@ -5,8 +5,11 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"strings"
@@ -16,7 +19,6 @@ import (
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
-	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
@@ -42,6 +44,7 @@ func TestPostgresLedger(t *testing.T) {
 	testTemplateWideRateLimit(t, ctx, scoped)
 	testConcurrentIdempotentReplay(t, ctx, scoped)
 	testConcurrentIdempotencyConflict(t, ctx, scoped)
+	testKeyRotationCompatibility(t, ctx, scoped)
 
 	if _, err := scoped.ExecContext(ctx, `UPDATE schema_migrations SET checksum='changed' WHERE version='sql/001_initial.sql'`); err != nil {
 		t.Fatalf("corrupt migration checksum: %v", err)
@@ -51,6 +54,61 @@ func TestPostgresLedger(t *testing.T) {
 	}
 
 	testSkipLocked(t, ctx, scoped)
+}
+
+func testKeyRotationCompatibility(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	request := integrationRequest("rotation-"+suffix+"@example.com", "rotation-"+suffix)
+	encryptionKeys := map[string][]byte{
+		"v1": bytes.Repeat([]byte{1}, 32),
+		"v2": bytes.Repeat([]byte{2}, 32),
+	}
+	hashV1 := bytes.Repeat([]byte{3}, 32)
+	hashKeys := map[string][]byte{
+		"v1": hashV1,
+		"v2": bytes.Repeat([]byte{4}, 32),
+	}
+	first := service.New(store.NewWithHashKeys(db, map[string][]byte{"v1": hashV1}), service.Config{
+		ActiveEncryptionKeyID: "v1",
+		EncryptionKeys:        encryptionKeys,
+		ActiveHashKeyID:       "v1",
+		HashKeys:              map[string][]byte{"v1": hashV1},
+		RateLimits:            []store.RateLimit{{Window: time.Hour, Maximum: 1}},
+	})
+	created, err := first.Send(ctx, "account-api", "rotation-"+suffix, request)
+	if err != nil {
+		t.Fatalf("v1 Send() error = %v", err)
+	}
+
+	rotated := service.New(store.NewWithHashKeys(db, hashKeys), service.Config{
+		ActiveEncryptionKeyID: "v2",
+		EncryptionKeys:        encryptionKeys,
+		ActiveHashKeyID:       "v2",
+		HashKeys:              hashKeys,
+		RateLimits:            []store.RateLimit{{Window: time.Hour, Maximum: 1}},
+	})
+	replay, err := rotated.Send(ctx, "account-api", "rotation-"+suffix, request)
+	if err != nil || !replay.Replayed || replay.MessageID != created.MessageID {
+		t.Fatalf("rotated replay = %#v, error = %v", replay, err)
+	}
+	if _, err := rotated.Send(ctx, "account-api", "rotation-new-"+suffix, request); !errors.Is(err, service.ErrRateLimited) {
+		t.Fatalf("rotated rate limit error = %v, want previous-key bucket rejection", err)
+	}
+
+	if err := store.ValidateKeyReferences(ctx, db, nil, map[string][]byte{"v2": hashKeys["v2"]}); err == nil {
+		t.Fatal("hash retirement preflight accepted referenced v1")
+	}
+	if err := store.ValidateKeyReferences(ctx, db, map[string][]byte{"v2": encryptionKeys["v2"]}, nil); err == nil {
+		t.Fatal("encryption retirement preflight accepted referenced v1")
+	}
+	retainedEncryptionKeys := maps.Clone(encryptionKeys)
+	retainedEncryptionKeys["legacy-v1"] = bytes.Repeat([]byte{1}, 32)
+	retainedHashKeys := maps.Clone(hashKeys)
+	retainedHashKeys["legacy-v1"] = bytes.Repeat([]byte{2}, 32)
+	if err := store.ValidateKeyReferences(ctx, db, retainedEncryptionKeys, retainedHashKeys); err != nil {
+		t.Fatalf("retained key preflight error = %v", err)
+	}
 }
 
 type sendOutcome struct {
@@ -150,7 +208,7 @@ func testConcurrentIdempotentReplay(t *testing.T, ctx context.Context, db *sql.D
 	svc := integrationService(db, hashKey)
 	rateRowsBefore, rateCountBefore := rateTotals(t, ctx, db)
 
-	outcomes := concurrentSends(t, ctx, db, hashKey, key, svc, request, request)
+	outcomes := concurrentSends(t, ctx, db, key, svc, request, request)
 	var original, replay *service.Result
 	for index := range outcomes {
 		if outcomes[index].err != nil {
@@ -205,7 +263,7 @@ func testConcurrentIdempotencyConflict(t *testing.T, ctx context.Context, db *sq
 	hashKey := bytes.Repeat([]byte{2}, 32)
 	svc := integrationService(db, hashKey)
 
-	outcomes := concurrentSends(t, ctx, db, hashKey, key, svc, first, second)
+	outcomes := concurrentSends(t, ctx, db, key, svc, first, second)
 	successes, conflicts := 0, 0
 	for _, outcome := range outcomes {
 		switch {
@@ -230,7 +288,6 @@ func concurrentSends(
 	t *testing.T,
 	ctx context.Context,
 	db *sql.DB,
-	hashKey []byte,
 	idempotencyKey string,
 	svc *service.Service,
 	requests ...contracts.SendRequest,
@@ -242,10 +299,7 @@ func concurrentSends(
 	}
 	defer blocker.Close()
 
-	lockKey := notificationcrypto.Hash(
-		hashKey,
-		[]byte("account-api\x00"+idempotencyKey),
-	)
+	lockKey := fmt.Sprintf("%x", sha256.Sum256([]byte("account-api\x00"+idempotencyKey)))
 	if _, err := blocker.ExecContext(
 		ctx,
 		`SELECT pg_advisory_lock(hashtextextended($1,0))`,
@@ -512,7 +566,12 @@ func testDatabases(t *testing.T) (*sql.DB, *sql.DB) {
 		t.Fatal("TEST_DATABASE_URL database name must contain test")
 	}
 
-	admin, err := database.Open(config.Config{DatabaseURL: rawURL})
+	admin, err := database.Open(config.Config{
+		DatabaseURL:       rawURL,
+		DBMaxOpenConns:    2,
+		DBMaxIdleConns:    1,
+		DBConnMaxLifetime: time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("database.Open(admin): %v", err)
 	}
@@ -528,7 +587,12 @@ func testDatabases(t *testing.T) (*sql.DB, *sql.DB) {
 	query := parsed.Query()
 	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
-	scoped, err := database.Open(config.Config{DatabaseURL: parsed.String()})
+	scoped, err := database.Open(config.Config{
+		DatabaseURL:       parsed.String(),
+		DBMaxOpenConns:    5,
+		DBMaxIdleConns:    2,
+		DBConnMaxLifetime: time.Minute,
+	})
 	if err != nil {
 		admin.Close()
 		t.Fatalf("database.Open(scoped): %v", err)

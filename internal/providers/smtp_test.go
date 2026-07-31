@@ -61,6 +61,9 @@ func TestSMTPAcceptsDeliveryOverSTARTTLS(t *testing.T) {
 			t.Fatalf("log contains sensitive value %q: %q", secret, output.String())
 		}
 	}
+	if !strings.Contains(output.String(), "event=notification_provider_success provider=smtp") {
+		t.Fatalf("success log = %q", output.String())
+	}
 	assertSMTPData(t, server, payload)
 }
 
@@ -147,6 +150,9 @@ func TestSMTPClassifiesPermanentRecipientRejection(t *testing.T) {
 	}).Send(context.Background(), validEmail())
 
 	assertProviderError(t, err, ErrorPermanent)
+	if !strings.Contains(output.String(), "event=notification_provider_failure provider=smtp") {
+		t.Fatalf("failure log = %q", output.String())
+	}
 	for _, sensitive := range []string{"person@example.test", "token=secret"} {
 		if strings.Contains(err.Error(), sensitive) || strings.Contains(output.String(), sensitive) {
 			t.Fatalf("provider exposed sensitive SMTP response %q", sensitive)

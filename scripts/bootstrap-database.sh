@@ -7,12 +7,9 @@ runtime_host="${NOTIFICATION_RUNTIME_DB_HOST:-hhc-pg.postgres.database.azure.com
 port="${NOTIFICATION_DB_PORT:-5432}"
 database="notification"
 role="notification"
-vault="${NOTIFICATION_KEY_VAULT:-alive-vault}"
-secret_name="notification-database-url"
 tmp_env=""
-secret_file=""
 generated_file=""
-trap 'rm -f "${tmp_env:-}" "${secret_file:-}" "${generated_file:-}"' EXIT
+trap 'rm -f "${tmp_env:-}" "${generated_file:-}"' EXIT
 
 for command in jq openssl; do
   command -v "$command" >/dev/null || {
@@ -47,14 +44,60 @@ if [[ -z "$notification_password" || -z "$data_encryption_key" || -z "$hash_key"
   generated_file=""
 fi
 
+encoded_password="$(printf '%s' "$notification_password" | jq -sRr @uri)"
+database_url="postgres://notification:${encoded_password}@${runtime_host}:${port}/notification?sslmode=require"
+encryption_keys_json="$(jq -r '.NOTIFICATION_ENCRYPTION_KEYS_JSON // empty' "$env_file")"
+hash_keys_json="$(jq -r '.NOTIFICATION_HASH_KEYS_JSON // empty' "$env_file")"
+[[ -n "$encryption_keys_json" ]] || encryption_keys_json="$(jq -nc --arg key "$data_encryption_key" '{"legacy-v1":$key}')"
+[[ -n "$hash_keys_json" ]] || hash_keys_json="$(jq -nc --arg key "$hash_key" '{"legacy-v1":$key}')"
+for keyring in "$encryption_keys_json" "$hash_keys_json"; do
+  stream_entries="$(jq -n --stream \
+    '[inputs | select(length == 2 and (.[0] | length) == 1)] | length' <<<"$keyring")"
+  test "$stream_entries" = "$(jq 'length' <<<"$keyring")" || exit 1
+done
+jq -e 'type == "object" and length > 0 and all(to_entries[];
+  (.key | type == "string" and test("\\S")) and (.value | type == "string"))' \
+  <<<"$encryption_keys_json" >/dev/null
+jq -e 'type == "object" and length > 0 and all(to_entries[];
+  (.key | type == "string" and test("\\S")) and (.value | type == "string"))' \
+  <<<"$hash_keys_json" >/dev/null
+while IFS= read -r key; do
+  [[ "$key" =~ ^[A-Za-z0-9+/]{43}=$ ]] || exit 1
+  test "$(printf '%s' "$key" | openssl base64 -d -A | wc -c | tr -d ' ')" = "32" || exit 1
+done < <(jq -r '.[]' <<<"$encryption_keys_json")
+while IFS= read -r key; do
+  test "$(printf '%s' "$key" | wc -c | tr -d ' ')" -ge 32 || exit 1
+done < <(jq -r '.[]' <<<"$hash_keys_json")
+active_encryption_key_id="$(jq -r '.NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID // "legacy-v1"' "$env_file")"
+active_hash_key_id="$(jq -r '.NOTIFICATION_ACTIVE_HASH_KEY_ID // "legacy-v1"' "$env_file")"
+jq -e --arg id "$active_encryption_key_id" 'has($id)' <<<"$encryption_keys_json" >/dev/null
+jq -e --arg id "$active_hash_key_id" 'has($id)' <<<"$hash_keys_json" >/dev/null
+jq -e --arg key "$data_encryption_key" '."legacy-v1" == $key' <<<"$encryption_keys_json" >/dev/null
+jq -e --arg key "$hash_key" '."legacy-v1" == $key' <<<"$hash_keys_json" >/dev/null
+tmp_env="$(mktemp "${env_file}.XXXXXX")"
+jq \
+  --arg database_url "$database_url" \
+  --arg encryption_keys_json "$encryption_keys_json" \
+  --arg hash_keys_json "$hash_keys_json" \
+  '. + {
+    NOTIFICATION_DATABASE_URL: $database_url,
+    NOTIFICATION_ENCRYPTION_KEYS_JSON: $encryption_keys_json,
+    NOTIFICATION_HASH_KEYS_JSON: $hash_keys_json
+  }' \
+  "$env_file" >"$tmp_env"
+chmod 0600 "$tmp_env"
+mv "$tmp_env" "$env_file"
+tmp_env=""
+unset encoded_password database_url encryption_keys_json hash_keys_json
+unset active_encryption_key_id active_hash_key_id
+unset stream_entries
+
 echo "host=$host"
 echo "runtime-host=$runtime_host"
 echo "database=$database"
 echo "role=$role"
 echo "sslmode=require"
-echo "key-vault-secret=$secret_name"
-echo "key-vault-secret=notification-data-encryption-key"
-echo "key-vault-secret=notification-hash-key"
+echo "secret-scope-template=infra/secret-scope.bicep"
 
 if [[ "${NOTIFICATION_BOOTSTRAP_DRY_RUN:-0}" == "1" ]]; then
   exit 0
@@ -66,11 +109,6 @@ psql_bin="$(command -v psql || true)"
   echo "psql is required" >&2
   exit 1
 }
-command -v az >/dev/null || {
-  echo "az is required" >&2
-  exit 1
-}
-
 export PGPASSWORD="$admin_password"
 export NOTIFICATION_DB_PASSWORD="$notification_password"
 "$psql_bin" "host=$host port=$port dbname=postgres user=HHCAdmin sslmode=require" \
@@ -90,36 +128,5 @@ GRANT USAGE, CREATE ON SCHEMA public TO notification;
 SQL
 unset PGPASSWORD NOTIFICATION_DB_PASSWORD admin_password notification_password
 
-encoded_password="$(jq -j '.NOTIFICATION_DB_PASSWORD' "$env_file" | jq -sRr @uri)"
-secret_file="$(mktemp)"
-chmod 0600 "$secret_file"
-printf 'postgres://notification:%s@%s:%s/notification?sslmode=require' \
-  "$encoded_password" "$runtime_host" "$port" >"$secret_file"
-unset encoded_password
-
-az keyvault secret set \
-  --vault-name "$vault" \
-  --name "$secret_name" \
-  --file "$secret_file" \
-  --content-type 'text/plain' \
-  --only-show-errors \
-  --output none
-
-for config_secret in notification-data-encryption-key notification-hash-key; do
-  case "$config_secret" in
-    notification-data-encryption-key) config_value="$data_encryption_key" ;;
-    notification-hash-key) config_value="$hash_key" ;;
-  esac
-  printf '%s' "$config_value" >"$secret_file"
-  az keyvault secret set \
-    --vault-name "$vault" \
-    --name "$config_secret" \
-    --file "$secret_file" \
-    --content-type 'text/plain' \
-    --only-show-errors \
-    --output none
-done
-
-unset config_value data_encryption_key hash_key
-rm -f "$secret_file"
-echo "notification database and Key Vault secret are ready"
+unset data_encryption_key hash_key
+echo "notification database is ready; deploy the reviewed dedicated secret scope separately"
