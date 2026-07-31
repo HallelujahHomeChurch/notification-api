@@ -1,7 +1,7 @@
 targetScope = 'resourceGroup'
 
 param location string = resourceGroup().location
-param notificationVaultName string = 'alive-notification-${uniqueString(subscription().id, resourceGroup().id)}'
+param notificationVaultName string = 'alive-notify-${take(uniqueString(subscription().id, resourceGroup().id), 11)}'
 param vnetName string = 'alive-vnet'
 param acaSubnetName string = 'aca'
 param apiIdentityName string = 'notification-api-identity'

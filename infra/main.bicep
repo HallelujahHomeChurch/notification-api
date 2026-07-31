@@ -3,7 +3,7 @@ targetScope = 'resourceGroup'
 param location string = resourceGroup().location
 param containerAppEnvironmentName string = 'alive-env'
 param containerRegistryName string = 'alive'
-param notificationVaultName string = 'alive-notification-${uniqueString(subscription().id, resourceGroup().id)}'
+param notificationVaultName string = 'alive-notify-${take(uniqueString(subscription().id, resourceGroup().id), 11)}'
 param legacyVaultName string = 'alive-vault'
 @minLength(71)
 @maxLength(71)

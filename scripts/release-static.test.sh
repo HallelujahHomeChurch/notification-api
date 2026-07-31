@@ -111,7 +111,7 @@ assert_contains "${dockerfile}" '^FROM gcr\.io/distroless/static-debian12:nonroo
 
 assert_contains "${bicep}" 'param provisionPermissions bool = true' "provisionPermissions must default to true"
 assert_contains "${bicep}" 'zoneRedundant:[[:space:]]*true' "Service Bus zone redundancy must match production"
-assert_contains "${bicep}" "param notificationVaultName string = 'alive-notification-[^']+'" "notification must use a dedicated vault"
+assert_contains "${bicep}" "param notificationVaultName string = 'alive-notify-[^']+'" "notification must use a dedicated vault"
 assert_contains "${bicep}" "(?s)resource vault 'Microsoft\\.KeyVault/vaults@[^']+' existing = \\{.*?name: notificationVaultName" "runtime secrets must reference the dedicated vault"
 assert_contains "${bicep}" 'NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID' "active encryption key ID is missing"
 assert_contains "${bicep}" 'NOTIFICATION_ENCRYPTION_KEYS_JSON' "encryption keyring is missing"
@@ -154,7 +154,10 @@ done
   fail "all notification alerts must preserve auto mitigation"
 assert_contains "${alerts_bicep}" 'smtp delivery failed' "provider alerts must match the pre-cutover log format"
 assert_contains "${alerts_bicep}" 'smtp delivery accepted' "provider ratio alert must match the pre-cutover success format"
-assert_contains "${production_release}" '^NOTIFICATION_VAULT_NAME=alive-notification-[a-z0-9]+$' "production vault name must be reviewable"
+assert_contains "${production_release}" '^NOTIFICATION_VAULT_NAME=alive-notify-[a-z0-9]+$' "production vault name must be reviewable"
+notification_vault_name="$(sed -n 's/^NOTIFICATION_VAULT_NAME=//p' "${production_release}")"
+[[ "${#notification_vault_name}" -ge 3 && "${#notification_vault_name}" -le 24 ]] ||
+  fail "production vault name must satisfy Azure's 3-24 character limit"
 assert_contains "${production_release}" '^ACTIVE_ENCRYPTION_KEY_ID=[A-Za-z0-9._-]+$' "active encryption key ID must be reviewable"
 assert_contains "${production_release}" '^ACTIVE_HASH_KEY_ID=[A-Za-z0-9._-]+$' "active hash key ID must be reviewable"
 assert_contains "${secret_preflight}" 'az resource show --ids' "secret preflight must use ARM metadata without reading values"
