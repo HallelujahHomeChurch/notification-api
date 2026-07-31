@@ -34,6 +34,7 @@ test "$(jq -r '.NOTIFICATION_HASH_KEY | length' "$env_file")" -ge "32"
 test "$(jq -r '.NOTIFICATION_DB_PASSWORD' "$env_file")" != "$admin_password"
 
 grep -q 'host=172.16.68.4' <<<"$output"
+grep -q 'runtime-host=hhc-pg.postgres.database.azure.com' <<<"$output"
 grep -q 'database=notification' <<<"$output"
 grep -q 'role=notification' <<<"$output"
 grep -q 'sslmode=require' <<<"$output"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 env_file="${HHC_ENV_FILE:-/Users/rayselfs/Projects/hhc/.env.json}"
 host="${NOTIFICATION_DB_HOST:-172.16.68.4}"
+runtime_host="${NOTIFICATION_RUNTIME_DB_HOST:-hhc-pg.postgres.database.azure.com}"
 port="${NOTIFICATION_DB_PORT:-5432}"
 database="notification"
 role="notification"
@@ -47,6 +48,7 @@ if [[ -z "$notification_password" || -z "$data_encryption_key" || -z "$hash_key"
 fi
 
 echo "host=$host"
+echo "runtime-host=$runtime_host"
 echo "database=$database"
 echo "role=$role"
 echo "sslmode=require"
@@ -92,7 +94,7 @@ encoded_password="$(jq -j '.NOTIFICATION_DB_PASSWORD' "$env_file" | jq -sRr @uri
 secret_file="$(mktemp)"
 chmod 0600 "$secret_file"
 printf 'postgres://notification:%s@%s:%s/notification?sslmode=require' \
-  "$encoded_password" "$host" "$port" >"$secret_file"
+  "$encoded_password" "$runtime_host" "$port" >"$secret_file"
 unset encoded_password
 
 az keyvault secret set \
