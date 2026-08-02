@@ -67,7 +67,7 @@ assert_contains "${workflow}" '(?s)outputs:\n      image_ref: \$\{\{ steps\.imag
 assert_contains "${workflow}" 'IMAGE_REF: \$\{\{ needs\.plan\.outputs\.image_ref \}\}' "deploy must consume the planned digest image reference"
 assert_contains "${workflow}" 'imageDigest="\$\{IMAGE_DIGEST\}"' "Bicep deployments must receive the raw image digest"
 assert_not_contains "${workflow}" 'migrationImage=|runtimeImage=' "legacy image parameters must not be passed"
-assert_contains "${workflow}" 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' "what-if artifact upload must use the approved immutable action"
+assert_contains "${workflow}" 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' "what-if artifact upload must use the approved immutable action"
 [[ "$(grep -Ec 'az deployment group what-if' "${workflow}")" -ge "4" ]] ||
   fail "alerts and main what-if must run in both plan and deploy"
 [[ "$(grep -Ec -- '--result-format FullResourcePayloads' "${workflow}")" -ge "4" ]] ||
