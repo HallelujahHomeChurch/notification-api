@@ -42,8 +42,8 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/notification_test?sslmode=disable
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -79,7 +79,7 @@ jobs:
       SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Load production release settings
         shell: bash
@@ -135,7 +135,7 @@ jobs:
         run: echo "IMAGE_TAG=main-${GITHUB_SHA::7}" >> "${GITHUB_ENV}"
 
       - name: Sign in to Azure with OIDC
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -258,7 +258,7 @@ jobs:
       SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Load production release settings
         shell: bash
@@ -316,7 +316,7 @@ jobs:
           echo "IMAGE_DIGEST=${IMAGE_REF##*@}" >> "${GITHUB_ENV}"
 
       - name: Sign in to Azure with OIDC
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
