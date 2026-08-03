@@ -13,6 +13,7 @@ func TestResolveAccountTemplates(t *testing.T) {
 		"account.verify-email":            24 * time.Hour,
 		"account.reset-password":          time.Hour,
 		"account.oauth-link-confirmation": 15 * time.Minute,
+		"account.oauth-onboarding-code":   15 * time.Minute,
 	}
 	for templateID, ttl := range ttls {
 		definition, err := Resolve(templateID, "email")
@@ -27,6 +28,23 @@ func TestResolveAccountTemplates(t *testing.T) {
 		}
 		if definition.TTL != ttl {
 			t.Fatalf("Resolve(%q, email).TTL = %s, want %s", templateID, definition.TTL, ttl)
+		}
+	}
+}
+
+func TestValidateOAuthOnboardingCode(t *testing.T) {
+	definition := mustResolve(t, "account.oauth-onboarding-code")
+	request := verificationRequest(map[string]string{"code": "123456", "provider": "line"})
+	request.TemplateID = definition.ID
+
+	if _, err := Validate(definition, "account-api", request); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	for _, code := range []string{"12345", "1234567", "abcdef"} {
+		request.Payload["code"] = code
+		if _, err := Validate(definition, "account-api", request); !errors.Is(err, ErrInvalidPayload) {
+			t.Fatalf("Validate(code=%q) error = %v, want ErrInvalidPayload", code, err)
 		}
 	}
 }

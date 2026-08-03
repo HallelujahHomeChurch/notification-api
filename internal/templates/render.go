@@ -28,6 +28,8 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 		return renderPasswordResetEmail(locale, to, validated["resetUrl"]), nil
 	case canonical.ID == "account.oauth-link-confirmation" && canonical.Version == 1:
 		return renderOAuthLinkConfirmationEmail(locale, to, validated["confirmUrl"], validated["provider"]), nil
+	case canonical.ID == "account.oauth-onboarding-code" && canonical.Version == 1:
+		return renderOAuthOnboardingCodeEmail(locale, to, validated["code"]), nil
 	default:
 		return Email{}, fmt.Errorf(
 			"%w: %s version %d",
@@ -35,6 +37,17 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 			canonical.ID,
 			canonical.Version,
 		)
+	}
+}
+
+func renderOAuthOnboardingCodeEmail(locale, to, code string) Email {
+	switch locale {
+	case "zh-Hant":
+		return Email{To: to, Subject: "驗證您的 HHC 帳戶 Email", Body: "您的 HHC 帳戶驗證碼是：" + code + "\n\n驗證碼將於 10 分鐘後失效。請勿將驗證碼提供給他人。\n"}
+	case "zh-Hans":
+		return Email{To: to, Subject: "验证您的 HHC 帐户 Email", Body: "您的 HHC 帐户验证码是：" + code + "\n\n验证码将在 10 分钟后失效。请勿将验证码提供给他人。\n"}
+	default:
+		return Email{To: to, Subject: "Verify your HHC account email", Body: "Your HHC account verification code is: " + code + "\n\nThe code expires in 10 minutes. Do not share it with anyone.\n"}
 	}
 }
 
