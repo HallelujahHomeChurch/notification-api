@@ -65,12 +65,25 @@ var definitions = map[string]map[int]Definition{
 			TTL:             15 * time.Minute,
 		},
 	},
+	"account.oauth-onboarding-code": {
+		1: {
+			ID:              "account.oauth-onboarding-code",
+			Version:         1,
+			Channel:         "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("code", "provider"),
+			AllowedFields:   set("code", "provider"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             15 * time.Minute,
+		},
+	},
 }
 
 var currentVersions = map[string]int{
 	"account.verify-email":            1,
 	"account.reset-password":          1,
 	"account.oauth-link-confirmation": 1,
+	"account.oauth-onboarding-code":   1,
 }
 
 func Resolve(templateID, channel string) (Definition, error) {
@@ -119,6 +132,13 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 		if key == "provider" {
 			if value != "google" && value != "line" && value != "microsoft" {
 				return nil, fmt.Errorf("%w: unsupported provider", ErrInvalidPayload)
+			}
+			validated[key] = value
+			continue
+		}
+		if key == "code" {
+			if len(value) != 6 || strings.Trim(value, "0123456789") != "" {
+				return nil, fmt.Errorf("%w: code must contain six digits", ErrInvalidPayload)
 			}
 			validated[key] = value
 			continue

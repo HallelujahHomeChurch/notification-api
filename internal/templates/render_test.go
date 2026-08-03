@@ -70,6 +70,22 @@ func TestRenderOAuthLinkConfirmation(t *testing.T) {
 	}
 }
 
+func TestRenderOAuthOnboardingCode(t *testing.T) {
+	definition := mustResolve(t, "account.oauth-onboarding-code")
+	email, err := RenderEmail(definition, "zh-Hant", "user@example.test", map[string]string{
+		"code": "123456", "provider": "microsoft",
+	})
+	if err != nil {
+		t.Fatalf("RenderEmail() error = %v", err)
+	}
+	if email.Subject != "驗證您的 HHC 帳戶 Email" {
+		t.Fatalf("RenderEmail() subject = %q", email.Subject)
+	}
+	if email.Body != "您的 HHC 帳戶驗證碼是：123456\n\n驗證碼將於 10 分鐘後失效。請勿將驗證碼提供給他人。\n" {
+		t.Fatalf("RenderEmail() body = %q", email.Body)
+	}
+}
+
 func TestQueuedVersionRendersAfterNewVersionBecomesCurrent(t *testing.T) {
 	templateID := "account.verify-email"
 	originalCurrent := currentVersions[templateID]
