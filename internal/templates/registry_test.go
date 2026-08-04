@@ -20,10 +20,7 @@ func TestResolveAccountTemplates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve(%q, email) error = %v", templateID, err)
 		}
-		wantVersion := 1
-		if templateID == "account.verify-email" {
-			wantVersion = 2
-		}
+		wantVersion := 2
 		if definition.Version != wantVersion {
 			t.Fatalf("Resolve(%q, email).Version = %d, want %d", templateID, definition.Version, wantVersion)
 		}

@@ -49,6 +49,52 @@ func TestRenderCurrentVerificationEmailHasBrandedHTMLAndPlainTextFallback(t *tes
 	}
 }
 
+func TestRenderCurrentActionEmailsHaveBrandedHTML(t *testing.T) {
+	tests := []struct {
+		templateID string
+		locale     string
+		payload    map[string]string
+		wants      []string
+	}{
+		{
+			"account.reset-password", "zh-Hant",
+			map[string]string{"resetUrl": "https://account.alive.org.tw/reset-password#token=opaque"},
+			[]string{"哈利路亞家教會", "重設密碼", `href="https://account.alive.org.tw/reset-password#token=opaque"`},
+		},
+		{
+			"account.oauth-link-confirmation", "en",
+			map[string]string{"confirmUrl": "https://account.alive.org.tw/oauth/link#token=opaque", "provider": "line"},
+			[]string{"Hallelujah Home Church", "Confirm LINE sign-in", `href="https://account.alive.org.tw/oauth/link#token=opaque"`},
+		},
+	}
+
+	for _, test := range tests {
+		email, err := RenderEmail(mustResolve(t, test.templateID), test.locale, "user@example.test", test.payload)
+		if err != nil {
+			t.Fatalf("RenderEmail(%q) error = %v", test.templateID, err)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(email.HTMLBody, want) {
+				t.Fatalf("RenderEmail(%q) HTML missing %q", test.templateID, want)
+			}
+		}
+	}
+}
+
+func TestRenderCurrentOnboardingCodeHasBrandedHTML(t *testing.T) {
+	email, err := RenderEmail(mustResolve(t, "account.oauth-onboarding-code"), "zh-Hans", "user@example.test", map[string]string{
+		"code": "123456", "provider": "microsoft",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"哈利路亚家教会", "123456", "10 分钟"} {
+		if !strings.Contains(email.HTMLBody, want) {
+			t.Fatalf("HTML body missing %q", want)
+		}
+	}
+}
+
 func TestRenderEmailFallsBackToEnglish(t *testing.T) {
 	definition := mustResolve(t, "account.reset-password")
 	email, err := RenderEmail(definition, "fr", "user@example.test", map[string]string{
@@ -60,13 +106,16 @@ func TestRenderEmailFallsBackToEnglish(t *testing.T) {
 	if email.Subject != "Reset your HHC account password" {
 		t.Fatalf("RenderEmail() subject = %q", email.Subject)
 	}
-	if email.Body != "Use this link to reset your HHC account password:\n\nhttps://account.alive.org.tw/reset-password?token=opaque\n" {
-		t.Fatalf("RenderEmail() body = %q", email.Body)
+	if !strings.Contains(email.Body, "https://account.alive.org.tw/reset-password?token=opaque") || email.HTMLBody == "" {
+		t.Fatalf("RenderEmail() must include the reset URL in text and branded HTML: %#v", email)
 	}
 }
 
 func TestRenderOAuthLinkConfirmation(t *testing.T) {
-	definition := mustResolve(t, "account.oauth-link-confirmation")
+	definition, err := ResolveVersion("account.oauth-link-confirmation", 1, "email")
+	if err != nil {
+		t.Fatal(err)
+	}
 	payload := map[string]string{
 		"confirmUrl": "https://account.alive.org.tw/oauth/link#token=opaque",
 		"provider":   "line",
@@ -92,7 +141,10 @@ func TestRenderOAuthLinkConfirmation(t *testing.T) {
 }
 
 func TestRenderOAuthOnboardingCode(t *testing.T) {
-	definition := mustResolve(t, "account.oauth-onboarding-code")
+	definition, err := ResolveVersion("account.oauth-onboarding-code", 1, "email")
+	if err != nil {
+		t.Fatal(err)
+	}
 	email, err := RenderEmail(definition, "zh-Hant", "user@example.test", map[string]string{
 		"code": "123456", "provider": "microsoft",
 	})

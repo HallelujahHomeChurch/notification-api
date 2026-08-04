@@ -62,11 +62,31 @@ var definitions = map[string]map[int]Definition{
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
 			TTL:             time.Hour,
 		},
+		2: {
+			ID:              "account.reset-password",
+			Version:         2,
+			Channel:         "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("resetUrl"),
+			AllowedFields:   set("resetUrl"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             time.Hour,
+		},
 	},
 	"account.oauth-link-confirmation": {
 		1: {
 			ID:              "account.oauth-link-confirmation",
 			Version:         1,
+			Channel:         "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("confirmUrl", "provider"),
+			AllowedFields:   set("confirmUrl", "provider"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             15 * time.Minute,
+		},
+		2: {
+			ID:              "account.oauth-link-confirmation",
+			Version:         2,
 			Channel:         "email",
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("confirmUrl", "provider"),
@@ -86,14 +106,24 @@ var definitions = map[string]map[int]Definition{
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
 			TTL:             15 * time.Minute,
 		},
+		2: {
+			ID:              "account.oauth-onboarding-code",
+			Version:         2,
+			Channel:         "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("code", "provider"),
+			AllowedFields:   set("code", "provider"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             15 * time.Minute,
+		},
 	},
 }
 
 var currentVersions = map[string]int{
 	"account.verify-email":            2,
-	"account.reset-password":          1,
-	"account.oauth-link-confirmation": 1,
-	"account.oauth-onboarding-code":   1,
+	"account.reset-password":          2,
+	"account.oauth-link-confirmation": 2,
+	"account.oauth-onboarding-code":   2,
 }
 
 func Resolve(templateID, channel string) (Definition, error) {
