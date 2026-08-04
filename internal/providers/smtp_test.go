@@ -16,14 +16,53 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net"
+	"net/mail"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestWriteMessageUsesDisplayNameAndHTMLAlternative(t *testing.T) {
+	var message bytes.Buffer
+	payload := DeliveryPayload{
+		Recipient: "person@example.test",
+		Subject:   "驗證您的 Email",
+		Body:      "Open https://account.alive.org.tw/verify-email?token=opaque",
+		HTMLBody:  `<a href="https://account.alive.org.tw/verify-email?token=opaque">驗證 Email</a>`,
+		MessageID: "<delivery-1@notification.alive.org.tw>",
+	}
+	if err := writeMessage(&message, "no-reply@alive.org.tw", "哈利路亞家教會", payload); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := mail.ReadMessage(bytes.NewReader(message.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, err := mail.ParseAddress(parsed.Header.Get("From"))
+	if err != nil || from.Name != "哈利路亞家教會" || from.Address != "no-reply@alive.org.tw" {
+		t.Fatalf("From = %#v, error = %v", from, err)
+	}
+	mediaType, params, err := mime.ParseMediaType(parsed.Header.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/alternative" {
+		t.Fatalf("Content-Type = %q, error = %v", parsed.Header.Get("Content-Type"), err)
+	}
+	parts := multipart.NewReader(parsed.Body, params["boundary"])
+	for _, contentType := range []string{"text/plain; charset=UTF-8", "text/html; charset=UTF-8"} {
+		part, err := parts.NextPart()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if part.Header.Get("Content-Type") != contentType {
+			t.Fatalf("part Content-Type = %q, want %q", part.Header.Get("Content-Type"), contentType)
+		}
+	}
+}
 
 func TestSMTPAcceptsDeliveryOverSTARTTLS(t *testing.T) {
 	server := newSMTPServer(t, smtpServerOptions{startTLS: true, auth: true})
@@ -204,6 +243,10 @@ func TestValidateSMTPConfigRejectsStaticErrors(t *testing.T) {
 			config: SMTPConfig{Addr: valid.Addr, From: "HHC <noreply@alive.org.tw>"},
 		},
 		{
+			name:   "display name header injection",
+			config: SMTPConfig{Addr: valid.Addr, From: valid.From, FromName: "HHC\r\nBcc: attacker@example.test"},
+		},
+		{
 			name: "username without password",
 			config: SMTPConfig{
 				Addr: valid.Addr, From: valid.From, Username: "smtp-user",
@@ -290,7 +333,7 @@ func TestSMTPAbortsDATAWithoutFinalizingAfterWriteFailure(t *testing.T) {
 		Timeout:   time.Second,
 		TLSConfig: server.clientTLS,
 	})
-	provider.writeMessage = func(writer io.Writer, _ string, _ DeliveryPayload) error {
+	provider.writeMessage = func(writer io.Writer, _, _ string, _ DeliveryPayload) error {
 		_, _ = io.WriteString(writer, "partial message")
 		return io.ErrUnexpectedEOF
 	}

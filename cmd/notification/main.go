@@ -206,6 +206,7 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		Username: cfg.SMTPUsername,
 		Password: cfg.SMTPPassword,
 		From:     cfg.SMTPFrom,
+		FromName: cfg.SMTPFromName,
 		Logger:   log.New(os.Stdout, "", log.LstdFlags),
 	}
 	if err := providers.ValidateSMTPConfig(smtpConfig); err != nil {

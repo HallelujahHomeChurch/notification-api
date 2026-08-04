@@ -229,6 +229,7 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 		Recipient: email.To,
 		Subject:   email.Subject,
 		Body:      email.Body,
+		HTMLBody:  email.HTMLBody,
 		MessageID: fmt.Sprintf("<%s@notification.alive.org.tw>", claimed.DeliveryID),
 	}, nil
 }
