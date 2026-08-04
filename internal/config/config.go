@@ -44,6 +44,7 @@ type Config struct {
 	SMTPUsername               string
 	SMTPPassword               string
 	SMTPFrom                   string
+	SMTPFromName               string
 	NotificationsDisabled      bool
 	TemplateDailyLimit         int
 	ShutdownTimeout            time.Duration
@@ -128,6 +129,7 @@ func Load() (Config, error) {
 		SMTPUsername:               os.Getenv("SMTP_USERNAME"),
 		SMTPPassword:               os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:                   os.Getenv("SMTP_FROM"),
+		SMTPFromName:               env("SMTP_FROM_NAME", "哈利路亞家教會"),
 		NotificationsDisabled:      notificationsDisabled,
 		TemplateDailyLimit:         templateDailyLimit,
 		ShutdownTimeout:            time.Duration(shutdownTimeoutSeconds) * time.Second,

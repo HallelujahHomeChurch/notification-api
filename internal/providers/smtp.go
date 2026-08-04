@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net"
 	"net/mail"
@@ -25,6 +26,7 @@ type SMTPConfig struct {
 	Username  string
 	Password  string
 	From      string
+	FromName  string
 	Timeout   time.Duration
 	TLSConfig *tls.Config
 	Logger    *log.Logger
@@ -32,7 +34,7 @@ type SMTPConfig struct {
 
 type SMTP struct {
 	config       SMTPConfig
-	writeMessage func(io.Writer, string, DeliveryPayload) error
+	writeMessage func(io.Writer, string, string, DeliveryPayload) error
 }
 
 func NewSMTP(config SMTPConfig) *SMTP {
@@ -115,7 +117,7 @@ func (s *SMTP) Send(ctx context.Context, payload DeliveryPayload) (ProviderRecei
 	if err != nil {
 		return ProviderReceipt{}, s.failed(classify(ctx, err), "data", contextCause(ctx, err))
 	}
-	if err := s.writeMessage(writer, s.config.From, payload); err != nil {
+	if err := s.writeMessage(writer, s.config.From, s.config.FromName, payload); err != nil {
 		_ = client.Close()
 		return ProviderReceipt{}, s.failed(classify(ctx, err), "message", contextCause(ctx, err))
 	}
@@ -163,6 +165,9 @@ func smtpHost(config SMTPConfig) (string, error) {
 	}
 	if !plainAddress(config.From) {
 		return "", errors.New("invalid email address")
+	}
+	if strings.ContainsAny(config.FromName, "\r\n") {
+		return "", errors.New("invalid sender display name")
 	}
 	if (config.Username == "") != (config.Password == "") {
 		return "", errors.New("SMTP credentials must be provided together")
@@ -285,9 +290,16 @@ func containsWord(value, word string) bool {
 	return false
 }
 
-func writeMessage(writer io.Writer, from string, payload DeliveryPayload) error {
+func writeMessage(writer io.Writer, from, fromName string, payload DeliveryPayload) error {
+	fromHeader := from
+	if fromName != "" {
+		fromHeader = (&mail.Address{Name: fromName, Address: from}).String()
+	}
+	if payload.HTMLBody != "" {
+		return writeMultipartMessage(writer, fromHeader, payload)
+	}
 	headers := strings.Join([]string{
-		"From: " + from,
+		"From: " + fromHeader,
 		"To: " + payload.Recipient,
 		"Subject: " + mime.QEncoding.Encode("UTF-8", payload.Subject),
 		"Message-ID: " + payload.MessageID,
@@ -305,6 +317,48 @@ func writeMessage(writer io.Writer, from string, payload DeliveryPayload) error 
 	}
 	if err := body.Close(); err != nil {
 		return fmt.Errorf("close body: %w", err)
+	}
+	return nil
+}
+
+func writeMultipartMessage(writer io.Writer, from string, payload DeliveryPayload) error {
+	multipartWriter := multipart.NewWriter(writer)
+	headers := strings.Join([]string{
+		"From: " + from,
+		"To: " + payload.Recipient,
+		"Subject: " + mime.QEncoding.Encode("UTF-8", payload.Subject),
+		"Message-ID: " + payload.MessageID,
+		"MIME-Version: 1.0",
+		"Content-Type: multipart/alternative; boundary=" + strconv.Quote(multipartWriter.Boundary()),
+		"",
+	}, "\r\n")
+	if _, err := io.WriteString(writer, headers+"\r\n"); err != nil {
+		return fmt.Errorf("write headers: %w", err)
+	}
+	for _, part := range []struct {
+		contentType string
+		body        string
+	}{
+		{"text/plain; charset=UTF-8", payload.Body},
+		{"text/html; charset=UTF-8", payload.HTMLBody},
+	} {
+		partWriter, err := multipartWriter.CreatePart(textproto.MIMEHeader{
+			"Content-Type":              {part.contentType},
+			"Content-Transfer-Encoding": {"quoted-printable"},
+		})
+		if err != nil {
+			return fmt.Errorf("create MIME part: %w", err)
+		}
+		bodyWriter := quotedprintable.NewWriter(partWriter)
+		if _, err := io.WriteString(bodyWriter, part.body); err != nil {
+			return fmt.Errorf("write MIME part: %w", err)
+		}
+		if err := bodyWriter.Close(); err != nil {
+			return fmt.Errorf("close MIME part: %w", err)
+		}
+	}
+	if err := multipartWriter.Close(); err != nil {
+		return fmt.Errorf("close MIME message: %w", err)
 	}
 	return nil
 }

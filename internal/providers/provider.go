@@ -21,6 +21,7 @@ type DeliveryPayload struct {
 	Recipient string
 	Subject   string
 	Body      string
+	HTMLBody  string
 	MessageID string
 }
 

@@ -40,6 +40,16 @@ var definitions = map[string]map[int]Definition{
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
 			TTL:             24 * time.Hour,
 		},
+		2: {
+			ID:              "account.verify-email",
+			Version:         2,
+			Channel:         "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("verifyUrl"),
+			AllowedFields:   set("verifyUrl"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             24 * time.Hour,
+		},
 	},
 	"account.reset-password": {
 		1: {
@@ -80,7 +90,7 @@ var definitions = map[string]map[int]Definition{
 }
 
 var currentVersions = map[string]int{
-	"account.verify-email":            1,
+	"account.verify-email":            2,
 	"account.reset-password":          1,
 	"account.oauth-link-confirmation": 1,
 	"account.oauth-onboarding-code":   1,

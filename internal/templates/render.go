@@ -1,11 +1,15 @@
 package templates
 
-import "fmt"
+import (
+	"fmt"
+	"html"
+)
 
 type Email struct {
-	To      string
-	Subject string
-	Body    string
+	To       string
+	Subject  string
+	Body     string
+	HTMLBody string
 }
 
 func RenderEmail(definition Definition, locale, to string, payload map[string]string) (Email, error) {
@@ -23,6 +27,8 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 
 	switch {
 	case canonical.ID == "account.verify-email" && canonical.Version == 1:
+		return renderVerificationEmailV1(locale, to, validated["verifyUrl"]), nil
+	case canonical.ID == "account.verify-email" && canonical.Version == 2:
 		return renderVerificationEmail(locale, to, validated["verifyUrl"]), nil
 	case canonical.ID == "account.reset-password" && canonical.Version == 1:
 		return renderPasswordResetEmail(locale, to, validated["resetUrl"]), nil
@@ -67,7 +73,7 @@ func renderOAuthLinkConfirmationEmail(locale, to, confirmURL, provider string) E
 	}
 }
 
-func renderVerificationEmail(locale, to, verifyURL string) Email {
+func renderVerificationEmailV1(locale, to, verifyURL string) Email {
 	switch locale {
 	case "zh-Hant":
 		return Email{To: to, Subject: "驗證您的 HHC 帳戶", Body: "請使用以下連結驗證您的 HHC 帳戶：\n\n" + verifyURL + "\n"}
@@ -76,6 +82,35 @@ func renderVerificationEmail(locale, to, verifyURL string) Email {
 	default:
 		return Email{To: to, Subject: "Verify your HHC account", Body: "Use this link to verify your HHC account:\n\n" + verifyURL + "\n"}
 	}
+}
+
+func renderVerificationEmail(locale, to, verifyURL string) Email {
+	var subject, church, heading, message, action, footer string
+	switch locale {
+	case "zh-Hant":
+		subject, church, heading = "驗證您的 Email", "哈利路亞家教會", "驗證您的 Email"
+		message, action = "感謝您建立 HHC 帳戶。請點選下方按鈕完成 Email 驗證。此連結將於 24 小時後失效。", "驗證 Email"
+		footer = "如果您沒有建立 HHC 帳戶，可以忽略這封信。"
+	case "zh-Hans":
+		subject, church, heading = "验证您的 Email", "哈利路亚家教会", "验证您的 Email"
+		message, action = "感谢您建立 HHC 帐户。请点击下方按钮完成 Email 验证。此链接将在 24 小时后失效。", "验证 Email"
+		footer = "如果您没有建立 HHC 帐户，可以忽略这封邮件。"
+	default:
+		subject, church, heading = "Verify your email", "Hallelujah Home Church", "Verify your email"
+		message, action = "Thank you for creating an HHC Account. Select the button below to verify your email. This link expires in 24 hours.", "Verify email"
+		footer = "If you did not create an HHC Account, you can ignore this email."
+	}
+	body := message + "\n\n" + action + ": " + verifyURL + "\n\n" + footer + "\n"
+	return Email{
+		To: to, Subject: subject, Body: body,
+		HTMLBody: brandedEmailHTML(locale, church, heading, message, action, verifyURL, footer),
+	}
+}
+
+func brandedEmailHTML(locale, church, heading, message, action, actionURL, footer string) string {
+	return fmt.Sprintf(`<!doctype html><html lang="%s"><body style="margin:0;background:#fbf5eb;color:#342d2b;font-family:Arial,'Noto Sans TC',sans-serif"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#fbf5eb;padding:32px 16px"><tr><td align="center"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#fffdf9;border:1px solid #eaded2;border-radius:8px"><tr><td style="padding:32px"><p style="margin:0 0 28px;color:#b94f47;font-size:16px;font-weight:700">%s</p><h1 style="margin:0 0 16px;font-size:26px;line-height:1.35">%s</h1><p style="margin:0 0 28px;color:#665c58;font-size:16px;line-height:1.75">%s</p><a href="%s" style="display:inline-block;background:#c75d55;color:#fffaf5;text-decoration:none;font-weight:700;padding:13px 22px;border-radius:6px">%s</a><p style="margin:32px 0 0;padding-top:20px;border-top:1px solid #eaded2;color:#827773;font-size:13px;line-height:1.65">%s</p></td></tr></table></td></tr></table></body></html>`,
+		html.EscapeString(locale), html.EscapeString(church), html.EscapeString(heading), html.EscapeString(message),
+		html.EscapeString(actionURL), html.EscapeString(action), html.EscapeString(footer))
 }
 
 func renderPasswordResetEmail(locale, to, resetURL string) Email {

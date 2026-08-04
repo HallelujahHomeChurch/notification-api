@@ -75,7 +75,7 @@ func TestSendCreatesEncryptedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
-	if result.Status != contracts.MessageStatusQueued || result.TemplateVersion != 1 || result.Replayed {
+	if result.Status != contracts.MessageStatusQueued || result.TemplateVersion != 2 || result.Replayed {
 		t.Fatalf("Send() = %#v", result)
 	}
 	if len(repository.creates) != 1 {

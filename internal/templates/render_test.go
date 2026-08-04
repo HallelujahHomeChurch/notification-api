@@ -2,11 +2,15 @@ package templates
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
 func TestRenderEmailLocalizesAccountVerification(t *testing.T) {
-	definition := mustResolve(t, "account.verify-email")
+	definition, err := ResolveVersion("account.verify-email", 1, "email")
+	if err != nil {
+		t.Fatal(err)
+	}
 	payload := map[string]string{"verifyUrl": "https://account.alive.org.tw/verify-email?token=opaque"}
 
 	for _, test := range []struct {
@@ -24,6 +28,23 @@ func TestRenderEmailLocalizesAccountVerification(t *testing.T) {
 		}
 		if email.Subject != test.subject || email.Body != test.body {
 			t.Fatalf("RenderEmail(%q) = %#v, want subject=%q body=%q", test.locale, email, test.subject, test.body)
+		}
+	}
+}
+
+func TestRenderCurrentVerificationEmailHasBrandedHTMLAndPlainTextFallback(t *testing.T) {
+	definition := mustResolve(t, "account.verify-email")
+	verifyURL := "https://account.alive.org.tw/verify-email?token=opaque"
+	email, err := RenderEmail(definition, "zh-Hant", "user@example.test", map[string]string{"verifyUrl": verifyURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(email.Body, verifyURL) {
+		t.Fatalf("plain text body must contain fallback URL: %q", email.Body)
+	}
+	for _, want := range []string{"哈利路亞家教會", "驗證 Email", `href="` + verifyURL + `"`} {
+		if !strings.Contains(email.HTMLBody, want) {
+			t.Fatalf("HTML body missing %q", want)
 		}
 	}
 }
@@ -99,15 +120,15 @@ func TestQueuedVersionRendersAfterNewVersionBecomesCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveVersion(v1) error = %v", err)
 	}
-	v2 := cloneDefinition(v1)
-	v2.Version = 2
-	v2.RequiredFields = set("confirmationUrl")
-	v2.AllowedFields = set("confirmationUrl")
-	definitions[templateID] = map[int]Definition{1: v1, 2: v2}
-	currentVersions[templateID] = 2
+	v3 := cloneDefinition(v1)
+	v3.Version = 3
+	v3.RequiredFields = set("confirmationUrl")
+	v3.AllowedFields = set("confirmationUrl")
+	definitions[templateID] = map[int]Definition{1: v1, 3: v3}
+	currentVersions[templateID] = 3
 
 	current, err := Resolve(templateID, "email")
-	if err != nil || current.Version != 2 {
+	if err != nil || current.Version != 3 {
 		t.Fatalf("Resolve(current) = %#v, error = %v", current, err)
 	}
 	email, err := RenderEmail(v1, "en", "user@example.test", map[string]string{
@@ -119,9 +140,9 @@ func TestQueuedVersionRendersAfterNewVersionBecomesCurrent(t *testing.T) {
 	if email.Subject != "Verify your HHC account" {
 		t.Fatalf("RenderEmail(queued v1) subject = %q", email.Subject)
 	}
-	if _, err := RenderEmail(v2, "en", "user@example.test", map[string]string{
-		"confirmationUrl": "https://account.alive.org.tw/verify-email?token=v2",
+	if _, err := RenderEmail(v3, "en", "user@example.test", map[string]string{
+		"confirmationUrl": "https://account.alive.org.tw/verify-email?token=v3",
 	}); !errors.Is(err, ErrUnknownTemplate) {
-		t.Fatalf("RenderEmail(unimplemented v2) error = %v, want ErrUnknownTemplate", err)
+		t.Fatalf("RenderEmail(unimplemented v3) error = %v, want ErrUnknownTemplate", err)
 	}
 }
