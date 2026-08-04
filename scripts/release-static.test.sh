@@ -76,6 +76,9 @@ assert_not_contains "${workflow}" '--mode Complete' "resource-group what-if must
 assert_contains "${workflow}" '(?s)  deploy:\n.*?Capture runtime state and preflight monitoring.*?az deployment group what-if.*?infra/alerts\.bicep.*?az deployment group what-if.*?infra/main\.bicep.*?az deployment group create' "deploy must finish preflight and both what-if checks before any deployment create"
 assert_contains "${workflow}" 'vars\.SMTP_ADDR' "SMTP_ADDR must come from repository variables"
 assert_contains "${workflow}" 'vars\.SMTP_FROM' "SMTP_FROM must come from repository variables"
+assert_contains "${bicep}" "param smtpFromName string = '哈利路亞家教會'" "SMTP sender display name must remain branded"
+assert_contains "${bicep}" "name: 'SMTP_FROM_NAME', value: smtpFromName" "worker must receive the branded SMTP sender name"
+assert_contains "${bicep}" 'minReplicas: 1' "notification worker must avoid scale-to-zero delivery latency"
 assert_contains "${workflow}" 'vars\.SMTP_AUTHENTICATION_ENABLED' "SMTP auth flag must come from repository variables"
 assert_contains "${workflow}" 'provisionPermissions=false' "CI must not provision IAM or Key Vault permissions"
 [[ "$(grep -Fc 'bash scripts/verify-secret-scope.sh' "${workflow}")" == "2" ]] ||
