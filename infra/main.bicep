@@ -14,6 +14,7 @@ param serviceBusNamespaceName string = 'alive-notifications-${uniqueString(subsc
 param queueName string = 'notifications-email'
 param smtpAddr string
 param smtpFrom string
+param smtpFromName string = '哈利路亞家教會'
 param smtpAuthenticationEnabled bool = true
 @minValue(1)
 param notificationTemplateDailyLimit int = 1000
@@ -39,6 +40,7 @@ var legacyHashSecretUrl = '${legacyVault.properties.vaultUri}secrets/notificatio
 var legacySMTPUsernameSecretUrl = '${legacyVault.properties.vaultUri}secrets/${smtpUsernameSecretName}'
 var legacySMTPPasswordSecretUrl = '${legacyVault.properties.vaultUri}secrets/${smtpPasswordSecretName}'
 var imageReference = '${registry.properties.loginServer}/alive/notification-api@${imageDigest}'
+var smtpFromParts = split(smtpFrom, '@')
 var commonEnvironment = [
   { name: 'ENVIRONMENT', value: 'production' }
   { name: 'PORT', value: '8081' }
@@ -65,6 +67,24 @@ resource vault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
 
 resource legacyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
   name: legacyVaultName
+}
+
+resource emailService 'Microsoft.Communication/emailServices@2023-03-31' existing = {
+  name: 'alive-email'
+}
+
+resource emailDomain 'Microsoft.Communication/emailServices/domains@2023-03-31' existing = {
+  parent: emailService
+  name: smtpFromParts[1]
+}
+
+resource emailSender 'Microsoft.Communication/emailServices/domains/senderUsernames@2023-03-31' = {
+  parent: emailDomain
+  name: smtpFromParts[0]
+  properties: {
+    username: smtpFromParts[0]
+    displayName: smtpFromName
+  }
 }
 
 resource serviceBus 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
@@ -303,6 +323,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'NOTIFICATION_ENCRYPTION_KEYS_JSON', secretRef: 'encryption-keys-json-v2' }
             { name: 'SMTP_ADDR', value: smtpAddr }
             { name: 'SMTP_FROM', value: smtpFrom }
+            { name: 'SMTP_FROM_NAME', value: smtpFromName }
           ], smtpAuthenticationEnabled ? [
             { name: 'SMTP_USERNAME', secretRef: 'smtp-username-v2' }
             { name: 'SMTP_PASSWORD', secretRef: 'smtp-password-v2' }
@@ -330,7 +351,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
       scale: {
         pollingInterval: 30
         cooldownPeriod: 300
-        minReplicas: 0
+        minReplicas: 1
         maxReplicas: 5
         rules: [
           {
