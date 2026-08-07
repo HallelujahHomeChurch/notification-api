@@ -57,6 +57,29 @@ func TestValidateNewsletterTemplate(t *testing.T) {
 	}
 }
 
+func TestValidateWebPushTemplate(t *testing.T) {
+	definition, err := Resolve("engagement.web-push", "web_push")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := contracts.SendRequest{
+		TemplateID: definition.ID,
+		Channel:    definition.Channel,
+		Payload: map[string]string{
+			"title":     "August news",
+			"body":      "Church updates",
+			"actionUrl": "https://www.alive.org.tw/zh-Hant/news",
+		},
+	}
+	if _, err := Validate(definition, "engagement-api", request); err != nil {
+		t.Fatal(err)
+	}
+	request.Payload["title"] = "unsafe\r\nheader"
+	if _, err := Validate(definition, "engagement-api", request); !errors.Is(err, ErrInvalidPayload) {
+		t.Fatalf("header injection error = %v", err)
+	}
+}
+
 func TestValidateOAuthOnboardingCode(t *testing.T) {
 	definition := mustResolve(t, "account.oauth-onboarding-code")
 	request := verificationRequest(map[string]string{"code": "123456", "provider": "line"})

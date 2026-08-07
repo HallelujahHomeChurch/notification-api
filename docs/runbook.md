@@ -1,8 +1,8 @@
 # Notification Production Runbook
 
 This runbook covers the current `notification-api`, `notification-worker`,
-PostgreSQL ledger/outbox, Azure Service Bus queue, Key Vault secrets, and SMTP
-provider. It does not record a completed production acceptance. See
+PostgreSQL ledger/outbox, Azure Service Bus queue, Key Vault secrets, SMTP,
+and Web Push providers. It does not record a completed production acceptance. See
 [Production acceptance](#production-acceptance) for current status.
 
 Delivery is at-least-once. Each delivery keeps one stable RFC `Message-ID`
@@ -26,8 +26,8 @@ Before changing production:
 
 1. Freeze notification releases and record the incident/change identifier.
 2. Record current API/worker image and latest ready revision.
-3. Never print `DATABASE_URL`, SMTP credentials, encryption/hash keys, email
-   addresses, decrypted payloads, reset/verification URLs, or tokens.
+3. Never print `DATABASE_URL`, SMTP/VAPID credentials, encryption/hash keys,
+   notification targets, decrypted payloads, action URLs, or tokens.
 4. Never replay an ambiguous delivery until provider-side evidence shows it
    was not accepted.
 5. Use forward-only migrations. Never down-migrate production.
@@ -57,7 +57,7 @@ test -n "${namespace}"
    does not send email or request Service Bus management access.
 4. Check queue status, active-message count, and DLQ count.
 5. Run the non-PII [database health queries](#database-health-queries).
-6. Check SMTP error kind/operation and provider-side acceptance records.
+6. Check provider error kind/operation and provider-side acceptance records.
 7. Choose the narrowest containment:
    - reject only new intents with `NOTIFICATIONS_DISABLED`;
    - pause delivery with queue `ReceiveDisabled`;
@@ -216,6 +216,18 @@ Never store the URL in shell history, CI variables, or the incident record.
    it to `ReceiveDisabled`.
 
 `/ready` does not connect to SMTP and cannot validate this rotation.
+
+### VAPID private key
+
+1. Pause queue consumption.
+2. Generate and retain one matching VAPID public/private key pair.
+3. Update `notification-vapid-private-key` in the dedicated vault and
+   `VAPID_PUBLIC_KEY` in repository variables together.
+4. Restart the worker revision and send one approved Web Push acceptance.
+5. Resume the queue only after delivery succeeds.
+
+Changing the VAPID key pair requires browsers to create new subscriptions;
+routine rotations therefore keep the existing pair unless it is compromised.
 
 ### Encryption and hash keys
 
@@ -571,7 +583,7 @@ Static/local checks and what-if are not live acceptance.
 - [ ] Migration-first digest workflow and exact image readiness gates pass live.
 - [x] `SMTP_ADDR`, `SMTP_FROM`, and
       `SMTP_AUTHENTICATION_ENABLED` production repository variables are set.
-- [ ] Required SMTP and keyring secrets exist in the dedicated vault.
+- [ ] Required SMTP, VAPID, and keyring secrets exist in the dedicated vault.
 - [ ] Production migration job succeeds on the hardened digest.
 - [ ] Production API and worker latest revisions become ready on that digest.
 - [x] Gateway Dapr invocation of notification `/ready` returns the expected

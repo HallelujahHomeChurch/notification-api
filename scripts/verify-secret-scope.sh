@@ -75,7 +75,8 @@ for secret in \
   notification-encryption-keys-json \
   notification-hash-keys-json \
   notification-smtp-username \
-  notification-smtp-password
+  notification-smtp-password \
+  notification-vapid-private-key
 do
   verify_secret "$secret"
 done
@@ -91,7 +92,8 @@ verify_assignments "$worker_principal" \
   "${vault_id}/secrets/notification-data-encryption-key|${role_id}" \
   "${vault_id}/secrets/notification-encryption-keys-json|${role_id}" \
   "${vault_id}/secrets/notification-smtp-username|${role_id}" \
-  "${vault_id}/secrets/notification-smtp-password|${role_id}"
+  "${vault_id}/secrets/notification-smtp-password|${role_id}" \
+  "${vault_id}/secrets/notification-vapid-private-key|${role_id}"
 verify_assignments "$migrate_principal" \
   "${vault_id}/secrets/notification-database-url|${role_id}"
 

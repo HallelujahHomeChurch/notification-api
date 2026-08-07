@@ -19,8 +19,10 @@ const (
 
 type DeliveryPayload struct {
 	Recipient           string
+	Title               string
 	Subject             string
 	Body                string
+	ActionURL           string
 	HTMLBody            string
 	MessageID           string
 	ListUnsubscribe     string

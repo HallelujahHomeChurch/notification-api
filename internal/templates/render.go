@@ -15,6 +15,31 @@ type Email struct {
 	OneClickUnsubscribe bool
 }
 
+type WebPush struct {
+	Target    string
+	Title     string
+	Body      string
+	ActionURL string
+}
+
+func RenderWebPush(definition Definition, locale, target string, payload map[string]string) (WebPush, error) {
+	canonical, err := ResolveVersion(definition.ID, definition.Version, definition.Channel)
+	if err != nil {
+		return WebPush{}, err
+	}
+	validated, err := validatePayload(canonical, payload)
+	if err != nil {
+		return WebPush{}, err
+	}
+	if !canonical.SupportedLocale[locale] {
+		locale = "en"
+	}
+	return WebPush{
+		Target: target, Title: validated["title"], Body: validated["body"],
+		ActionURL: validated["actionUrl"],
+	}, nil
+}
+
 func RenderEmail(definition Definition, locale, to string, payload map[string]string) (Email, error) {
 	canonical, err := ResolveVersion(definition.ID, definition.Version, definition.Channel)
 	if err != nil {

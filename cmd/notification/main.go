@@ -212,6 +212,13 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 	if err := providers.ValidateSMTPConfig(smtpConfig); err != nil {
 		return workerComponents{}, fmt.Errorf("validate SMTP config: %w", err)
 	}
+	webPushConfig := providers.WebPushConfig{
+		PublicKey: cfg.VAPIDPublicKey, PrivateKey: cfg.VAPIDPrivateKey,
+		Subject: cfg.VAPIDSubject, Logger: log.New(os.Stdout, "", log.LstdFlags),
+	}
+	if err := providers.ValidateWebPushConfig(webPushConfig); err != nil {
+		return workerComponents{}, fmt.Errorf("validate Web Push config: %w", err)
+	}
 	db, err := openDatabase(ctx, cfg)
 	if err != nil {
 		return workerComponents{}, err
@@ -225,8 +232,9 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		_ = db.Close()
 		return workerComponents{}, fmt.Errorf("create consumer: %w", err)
 	}
-	provider := providers.NewSMTP(smtpConfig)
-	deliveryWorker := worker.NewWithKeyring(db, provider, cfg.EncryptionKeys)
+	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
+		"email": providers.NewSMTP(smtpConfig), "web_push": providers.NewWebPush(webPushConfig),
+	}, cfg.EncryptionKeys)
 
 	return workerComponents{
 		http: httpProcess(cfg.Port, workerHealthHandler(db), cfg.ShutdownTimeout),

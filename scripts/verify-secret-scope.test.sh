@@ -62,7 +62,7 @@ case "$1 $2" in
         secrets=(notification-database-url notification-data-encryption-key notification-hash-key notification-encryption-keys-json notification-hash-keys-json)
         ;;
       worker)
-        secrets=(notification-database-url notification-data-encryption-key notification-encryption-keys-json notification-smtp-username notification-smtp-password)
+		secrets=(notification-database-url notification-data-encryption-key notification-encryption-keys-json notification-smtp-username notification-smtp-password notification-vapid-private-key)
         ;;
       migrate)
         secrets=(notification-database-url)

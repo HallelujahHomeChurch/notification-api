@@ -9,7 +9,7 @@ scope, API, worker, migration job, identities, and alerts in resource group
 - Existing `alive-env`, `alive` ACR, `alive-vnet/aca`, `alive-env-logs`, and
   `RecommendedAlertRules-AG-1`.
 - Private PostgreSQL reachable from the Container Apps environment.
-- SMTP endpoint and sender.
+- SMTP endpoint and sender, plus one generated VAPID key pair.
 - GitHub environment `production` with a required reviewer, self-review
   disabled, and deployment branches limited to `main`.
 - Repository variable `PRODUCTION_DEPLOY_ENABLED=true` only after that
@@ -21,7 +21,7 @@ the ACR image reference itself. Tags and `latest` are not deployment inputs.
 ## Bootstrap the dedicated vault
 
 `secret-scope.bicep` creates an RBAC-enabled, purge-protected vault restricted
-to the ACA subnet. Its secure parameters create seven notification-only
+to the ACA subnet. Its secure parameters create eight notification-only
 secrets. Role assignments are scoped to the exact secrets consumed by each
 identity; no notification identity receives vault-wide `list`.
 
@@ -39,13 +39,14 @@ az deployment group what-if \
     encryptionKeysJSON="${ENCRYPTION_KEYS_JSON}" \
     hashKeysJSON="${HASH_KEYS_JSON}" \
     smtpUsername="${SMTP_USERNAME}" \
-    smtpPassword="${SMTP_PASSWORD}"
+    smtpPassword="${SMTP_PASSWORD}" \
+    vapidPrivateKey="${VAPID_PRIVATE_KEY}"
 ```
 
 After review, an administrator may replace `what-if` with `create`. Never use
 shell tracing, echo these variables, or save them in a parameter file. Wait for
 RBAC propagation, then run `scripts/verify-secret-scope.sh`; it validates the
-seven ARM secret resources and exact secret-level assignments without reading
+eight ARM secret resources and exact secret-level assignments without reading
 their values.
 
 The initial runtime release supplies both legacy and versioned keyring
@@ -78,7 +79,7 @@ The release workflow performs:
 3. Digest resolution and complete `alerts.bicep` plus `main.bicep` what-if.
 4. Upload of the what-if artifact.
 5. GitHub `production` environment approval.
-6. Dedicated vault, seven secrets, and exact RBAC preflight.
+6. Dedicated vault, eight secrets, and exact RBAC preflight.
 7. A fresh what-if immediately before apply.
 8. Alert deployment, migration-only deployment, and one successful migration.
 9. API/worker deployment by digest, exact revision verification, and gateway

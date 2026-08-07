@@ -158,6 +158,26 @@ func TestWorkerResolvesPersistedTemplateVersion(t *testing.T) {
 	}
 }
 
+func TestWorkerRoutesWebPushChannel(t *testing.T) {
+	repository := webPushDeliveryRepository(t)
+	emailProvider := &fakeProvider{}
+	pushProvider := &fakeProvider{receipt: providers.ProviderReceipt{Provider: "webpush"}}
+	instance := newWorkerWithProviders(repository, map[string]providers.Provider{
+		"email": emailProvider, "web_push": pushProvider,
+	}, map[string][]byte{"legacy-v1": testKey})
+
+	if err := instance.Process(context.Background(), &fakeMessage{id: "delivery-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if emailProvider.calls != 0 || pushProvider.calls != 1 {
+		t.Fatalf("email calls=%d push calls=%d", emailProvider.calls, pushProvider.calls)
+	}
+	payload := pushProvider.payloads[0]
+	if payload.Title != "八月消息" || payload.ActionURL == "" || payload.Recipient == "" {
+		t.Fatalf("push payload = %#v", payload)
+	}
+}
+
 func TestProviderSuccessFinishesAfterParentCancellation(t *testing.T) {
 	repository := deliveryRepository(t, nil, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -372,6 +392,29 @@ func deliveryRepository(t *testing.T, events *[]string, attempt int) *fakeReposi
 			},
 		},
 	}
+}
+
+func webPushDeliveryRepository(t *testing.T) *fakeRepository {
+	t.Helper()
+	repository := deliveryRepository(t, nil, 1)
+	target, err := notificationcrypto.Encrypt(testKey, []byte("message-1:target"), []byte(
+		`{"endpoint":"https://push.example.test/subscription","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := notificationcrypto.Encrypt(testKey, []byte("message-1:payload"), []byte(
+		`{"locale":"zh-Hant","fields":{"title":"八月消息","body":"教會近況","actionUrl":"https://www.alive.org.tw/zh-Hant/news"}}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.claimResult.Claim.TemplateID = "engagement.web-push"
+	repository.claimResult.Claim.TemplateVersion = 1
+	repository.claimResult.Claim.Channel = "web_push"
+	repository.claimResult.Claim.TargetCiphertext = target
+	repository.claimResult.Claim.PayloadCiphertext = payload
+	return repository
 }
 
 type fakeRepository struct {

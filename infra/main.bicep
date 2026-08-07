@@ -15,6 +15,8 @@ param queueName string = 'notifications-email'
 param smtpAddr string
 param smtpFrom string
 param smtpFromName string = '哈利路亞家教會'
+param vapidPublicKey string
+param vapidSubject string = 'mailto:support@alive.org.tw'
 param smtpAuthenticationEnabled bool = true
 @minValue(1)
 param notificationTemplateDailyLimit int = 1000
@@ -23,6 +25,7 @@ param activeEncryptionKeyID string = 'legacy-v1'
 param activeHashKeyID string = 'legacy-v1'
 param smtpUsernameSecretName string = 'notification-smtp-username'
 param smtpPasswordSecretName string = 'notification-smtp-password'
+param vapidPrivateKeySecretName string = 'notification-vapid-private-key'
 
 var acrPullRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var serviceBusSenderRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
@@ -34,6 +37,7 @@ var encryptionKeysSecretUrl = '${vault.properties.vaultUri}secrets/notification-
 var hashKeysSecretUrl = '${vault.properties.vaultUri}secrets/notification-hash-keys-json'
 var smtpUsernameSecretUrl = '${vault.properties.vaultUri}secrets/${smtpUsernameSecretName}'
 var smtpPasswordSecretUrl = '${vault.properties.vaultUri}secrets/${smtpPasswordSecretName}'
+var vapidPrivateKeySecretUrl = '${vault.properties.vaultUri}secrets/${vapidPrivateKeySecretName}'
 var legacyDatabaseSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-database-url'
 var legacyEncryptionSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-data-encryption-key'
 var legacyHashSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-hash-key'
@@ -302,6 +306,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         { name: 'database-url-v2', keyVaultUrl: databaseSecretUrl, identity: workerIdentity.id }
         { name: 'data-encryption-key-v2', keyVaultUrl: encryptionSecretUrl, identity: workerIdentity.id }
         { name: 'encryption-keys-json-v2', keyVaultUrl: encryptionKeysSecretUrl, identity: workerIdentity.id }
+        { name: 'vapid-private-key', keyVaultUrl: vapidPrivateKeySecretUrl, identity: workerIdentity.id }
       ], smtpAuthenticationEnabled ? [
         { name: 'smtp-username', keyVaultUrl: legacySMTPUsernameSecretUrl, identity: workerIdentity.id }
         { name: 'smtp-password', keyVaultUrl: legacySMTPPasswordSecretUrl, identity: workerIdentity.id }
@@ -324,6 +329,9 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'SMTP_ADDR', value: smtpAddr }
             { name: 'SMTP_FROM', value: smtpFrom }
             { name: 'SMTP_FROM_NAME', value: smtpFromName }
+            { name: 'VAPID_PUBLIC_KEY', value: vapidPublicKey }
+            { name: 'VAPID_PRIVATE_KEY', secretRef: 'vapid-private-key' }
+            { name: 'VAPID_SUBJECT', value: vapidSubject }
           ], smtpAuthenticationEnabled ? [
             { name: 'SMTP_USERNAME', secretRef: 'smtp-username-v2' }
             { name: 'SMTP_PASSWORD', secretRef: 'smtp-password-v2' }

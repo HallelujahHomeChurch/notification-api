@@ -76,6 +76,8 @@ assert_not_contains "${workflow}" '--mode Complete' "resource-group what-if must
 assert_contains "${workflow}" '(?s)  deploy:\n.*?Capture runtime state and preflight monitoring.*?az deployment group what-if.*?infra/alerts\.bicep.*?az deployment group what-if.*?infra/main\.bicep.*?az deployment group create' "deploy must finish preflight and both what-if checks before any deployment create"
 assert_contains "${workflow}" 'vars\.SMTP_ADDR' "SMTP_ADDR must come from repository variables"
 assert_contains "${workflow}" 'vars\.SMTP_FROM' "SMTP_FROM must come from repository variables"
+assert_contains "${workflow}" 'vars\.VAPID_PUBLIC_KEY' "VAPID_PUBLIC_KEY must come from repository variables"
+assert_contains "${workflow}" 'vars\.VAPID_SUBJECT' "VAPID_SUBJECT must come from repository variables"
 assert_contains "${bicep}" "param smtpFromName string = '哈利路亞家教會'" "SMTP sender display name must remain branded"
 assert_contains "${bicep}" "name: 'SMTP_FROM_NAME', value: smtpFromName" "worker must receive the branded SMTP sender name"
 assert_contains "${bicep}" 'minReplicas: 1' "notification worker must avoid scale-to-zero delivery latency"
@@ -134,7 +136,8 @@ assert_not_contains "${bicep}" "secrets: \\['get', 'list'\\]" "runtime template 
 assert_contains "${secret_bicep}" 'enableRbacAuthorization:[[:space:]]*true' "notification vault must use RBAC"
 assert_contains "${secret_bicep}" 'enablePurgeProtection:[[:space:]]*true' "notification vault must enable purge protection"
 assert_contains "${secret_bicep}" "defaultAction:[[:space:]]*'Deny'" "notification vault network must default deny"
-assert_contains "${secret_bicep}" 'scope:[[:space:]]*(databaseSecret|encryptionSecret|hashSecret|encryptionKeysSecret|hashKeysSecret|smtpUsernameSecret|smtpPasswordSecret)' "secret permissions must use secret-level scopes"
+assert_contains "${secret_bicep}" 'scope:[[:space:]]*(databaseSecret|encryptionSecret|hashSecret|encryptionKeysSecret|hashKeysSecret|smtpUsernameSecret|smtpPasswordSecret|vapidPrivateKeySecret)' "secret permissions must use secret-level scopes"
+assert_contains "${bicep}" "name: 'VAPID_PRIVATE_KEY', secretRef: 'vapid-private-key'" "worker must receive VAPID private key from Key Vault"
 assert_not_contains "${secret_bicep}" "secrets:[[:space:]]*\\[[^]]*list" "notification identities must not list vault secrets"
 for alert in \
   notification-api-rate-limited \

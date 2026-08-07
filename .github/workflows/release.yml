@@ -77,6 +77,8 @@ jobs:
       SMTP_ADDR: ${{ vars.SMTP_ADDR }}
       SMTP_FROM: ${{ vars.SMTP_FROM }}
       SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
+      VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+      VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,6 +103,8 @@ jobs:
             SMTP_ADDR
             SMTP_FROM
             SMTP_AUTHENTICATION_ENABLED
+            VAPID_PUBLIC_KEY
+            VAPID_SUBJECT
             NOTIFICATION_TEMPLATE_DAILY_LIMIT
             NOTIFICATION_VAULT_NAME
             ACTIVE_ENCRYPTION_KEY_ID
@@ -216,6 +220,8 @@ jobs:
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
               smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              vapidPublicKey="${VAPID_PUBLIC_KEY}" \
+              vapidSubject="${VAPID_SUBJECT}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
               activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
@@ -256,6 +262,8 @@ jobs:
       SMTP_ADDR: ${{ vars.SMTP_ADDR }}
       SMTP_FROM: ${{ vars.SMTP_FROM }}
       SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
+      VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+      VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -280,6 +288,8 @@ jobs:
             SMTP_ADDR
             SMTP_FROM
             SMTP_AUTHENTICATION_ENABLED
+            VAPID_PUBLIC_KEY
+            VAPID_SUBJECT
             NOTIFICATION_TEMPLATE_DAILY_LIMIT
             NOTIFICATION_VAULT_NAME
             ACTIVE_ENCRYPTION_KEY_ID
@@ -417,6 +427,8 @@ jobs:
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
               smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              vapidPublicKey="${VAPID_PUBLIC_KEY}" \
+              vapidSubject="${VAPID_SUBJECT}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
               activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
@@ -450,6 +462,8 @@ jobs:
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
               smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              vapidPublicKey="${VAPID_PUBLIC_KEY}" \
+              vapidSubject="${VAPID_SUBJECT}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
               activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
@@ -511,6 +525,8 @@ jobs:
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
               smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              vapidPublicKey="${VAPID_PUBLIC_KEY}" \
+              vapidSubject="${VAPID_SUBJECT}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
               activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \

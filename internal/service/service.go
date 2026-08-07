@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 
@@ -95,10 +97,7 @@ func (s *Service) Send(
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
-	if request.Target.Type != "email" || definition.Channel != "email" {
-		return Result{}, ErrInvalidRequest
-	}
-	target, err := normalizeEmail(request.Target.Address)
+	target, provider, err := normalizeTarget(request.Target, definition.Channel)
 	if err != nil {
 		return Result{}, err
 	}
@@ -181,7 +180,7 @@ func (s *Service) Send(
 		PayloadCiphertext: payloadCiphertext,
 		ResourceType:      request.Resource.Type,
 		ResourceID:        request.Resource.ID,
-		Provider:          "smtp",
+		Provider:          provider,
 		RateLimits:        s.config.RateLimits,
 		ExpiresAfter:      definition.TTL,
 	})
@@ -247,6 +246,47 @@ func normalizeEmail(value string) (string, error) {
 		return "", fmt.Errorf("%w: invalid email", ErrInvalidRequest)
 	}
 	return normalized, nil
+}
+
+func normalizeTarget(target contracts.Target, channel string) (string, string, error) {
+	switch {
+	case channel == "email" && target.Type == "email":
+		normalized, err := normalizeEmail(target.Address)
+		return normalized, "smtp", err
+	case channel == "web_push" && target.Type == "web_push":
+		normalized, err := normalizeWebPushSubscription(target.Address)
+		return normalized, "webpush", err
+	default:
+		return "", "", ErrInvalidRequest
+	}
+}
+
+func normalizeWebPushSubscription(value string) (string, error) {
+	var subscription struct {
+		Endpoint string `json:"endpoint"`
+		Keys     struct {
+			P256dh string `json:"p256dh"`
+			Auth   string `json:"auth"`
+		} `json:"keys"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&subscription); err != nil {
+		return "", ErrInvalidRequest
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return "", ErrInvalidRequest
+	}
+	endpoint, err := url.Parse(subscription.Endpoint)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil ||
+		strings.TrimSpace(subscription.Keys.P256dh) == "" || strings.TrimSpace(subscription.Keys.Auth) == "" {
+		return "", ErrInvalidRequest
+	}
+	normalized, err := json.Marshal(subscription)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid web push subscription", ErrInvalidRequest)
+	}
+	return string(normalized), nil
 }
 
 func validIdempotencyKey(value string) bool {

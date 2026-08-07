@@ -310,6 +310,38 @@ func TestSendDoesNotPersistWhenNotificationsDisabled(t *testing.T) {
 	}
 }
 
+func TestSendCreatesWebPushIntent(t *testing.T) {
+	repository := &memoryRepository{}
+	svc := New(repository, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey})
+	request := contracts.SendRequest{
+		TemplateID: "engagement.web-push",
+		Channel:    "web_push",
+		Target: contracts.Target{
+			Type:    "web_push",
+			Address: `{"endpoint":"https://push.example.test/subscription","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+		},
+		Locale: "zh-Hant",
+		Payload: map[string]string{
+			"title": "八月消息", "body": "教會近況",
+			"actionUrl": "https://www.alive.org.tw/zh-Hant/news",
+		},
+		Resource: contracts.Resource{Type: "campaign", ID: "campaign-1"},
+	}
+
+	if _, err := svc.Send(context.Background(), "engagement-api", "push-1", request); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	params := repository.creates[0]
+	if params.Channel != "web_push" || params.TargetType != "web_push" || params.Provider != "webpush" {
+		t.Fatalf("Create params = %#v", params)
+	}
+
+	request.Target.Address = `{"endpoint":"javascript:alert(1)","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`
+	if _, err := svc.Send(context.Background(), "engagement-api", "push-2", request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("invalid subscription error = %v", err)
+	}
+}
+
 func TestSendRejectsInvalidIdempotencyKey(t *testing.T) {
 	svc := New(&memoryRepository{}, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey})
 	for _, key := range []string{"", "contains space", "line\nbreak"} {

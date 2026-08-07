@@ -45,6 +45,9 @@ type Config struct {
 	SMTPPassword               string
 	SMTPFrom                   string
 	SMTPFromName               string
+	VAPIDPublicKey             string
+	VAPIDPrivateKey            string
+	VAPIDSubject               string
 	NotificationsDisabled      bool
 	TemplateDailyLimit         int
 	ShutdownTimeout            time.Duration
@@ -130,6 +133,9 @@ func Load() (Config, error) {
 		SMTPPassword:               os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:                   os.Getenv("SMTP_FROM"),
 		SMTPFromName:               env("SMTP_FROM_NAME", "哈利路亞家教會"),
+		VAPIDPublicKey:             os.Getenv("VAPID_PUBLIC_KEY"),
+		VAPIDPrivateKey:            os.Getenv("VAPID_PRIVATE_KEY"),
+		VAPIDSubject:               os.Getenv("VAPID_SUBJECT"),
 		NotificationsDisabled:      notificationsDisabled,
 		TemplateDailyLimit:         templateDailyLimit,
 		ShutdownTimeout:            time.Duration(shutdownTimeoutSeconds) * time.Second,
@@ -183,6 +189,9 @@ func (c Config) Validate(mode string) error {
 		}
 		if c.SMTPAddr == "" || c.SMTPFrom == "" {
 			return fmt.Errorf("SMTP_ADDR and SMTP_FROM are required")
+		}
+		if c.VAPIDPublicKey == "" || c.VAPIDPrivateKey == "" || c.VAPIDSubject == "" {
+			return fmt.Errorf("VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT are required")
 		}
 		return nil
 	default:

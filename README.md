@@ -16,8 +16,8 @@ go run ./cmd/notification worker
 
 The durable runtime requires PostgreSQL and Service Bus. For local development,
 use the Azure Service Bus emulator through `SERVICEBUS_CONNECTION_STRING`.
-Worker mode also requires `SMTP_ADDR` and `SMTP_FROM`; there is no log-email
-fallback.
+Worker mode also requires SMTP and VAPID configuration; there is no log-only
+delivery fallback.
 
 ## Azure Queue Mode
 
@@ -48,7 +48,7 @@ Configuration is validated per command:
 
 - `migrate`: `DATABASE_URL`
 - `api`: database, encryption/hash keys, allowed callers, and Service Bus
-- `worker`: database, encryption key, Service Bus, and valid SMTP settings
+- `worker`: database, encryption key, Service Bus, SMTP, and VAPID settings
 
 Production always rejects the development caller header and Service Bus
 connection strings; managed identity uses `SERVICEBUS_NAMESPACE`.
@@ -56,6 +56,11 @@ connection strings; managed identity uses `SERVICEBUS_NAMESPACE`.
 Email delivery is at-least-once. Retries reuse a stable Internet `Message-ID`,
 while the PostgreSQL idempotency key prevents duplicate notification intents.
 SMTP does not provide an exactly-once delivery guarantee.
+
+Web Push uses `engagement.web-push`, a `web_push` target containing serialized
+`PushSubscription` JSON, and a payload with `title`, `body`, and optional
+`actionUrl`. HTTP 404/410 permanently invalidate the endpoint; HTTP 429 and
+5xx responses use the existing durable retry policy.
 
 ## API
 
@@ -88,6 +93,26 @@ Content-Type: application/json
 ```
 
 See `docs/openapi.yaml` for the complete private contract.
+
+Web Push example:
+
+```json
+{
+  "templateId": "engagement.web-push",
+  "channel": "web_push",
+  "target": {
+    "type": "web_push",
+    "address": "{\"endpoint\":\"https://push.example/...\",\"keys\":{\"p256dh\":\"...\",\"auth\":\"...\"}}"
+  },
+  "locale": "zh-Hant",
+  "payload": {
+    "title": "最新消息",
+    "body": "教會近況與重要公告",
+    "actionUrl": "https://www.alive.org.tw/zh-Hant/news"
+  },
+  "resource": {"type": "campaign", "id": "campaign-id"}
+}
+```
 
 ## Production Operations
 
