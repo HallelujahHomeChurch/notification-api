@@ -40,7 +40,8 @@ func TestValidateNewsletterTemplate(t *testing.T) {
 	}
 	request := verificationRequest(map[string]string{
 		"subject": "August news", "body": "Church updates",
-		"unsubscribeUrl": "https://www.alive.org.tw/zh-Hant/newsletter/unsubscribe?token=opaque",
+		"unsubscribeUrl":         "https://www.alive.org.tw/zh-Hant/newsletter/unsubscribe?token=opaque",
+		"oneClickUnsubscribeUrl": "https://www.alive.org.tw/api/engagement/v1/newsletter/unsubscribe?token=opaque",
 	})
 	request.TemplateID = definition.ID
 	if _, err := Validate(definition, "engagement-api", request); err != nil {
@@ -49,6 +50,10 @@ func TestValidateNewsletterTemplate(t *testing.T) {
 	request.Payload["subject"] = "unsafe\r\nBcc: other@example.test"
 	if _, err := Validate(definition, "engagement-api", request); !errors.Is(err, ErrInvalidPayload) {
 		t.Fatalf("header injection error = %v", err)
+	}
+	delete(request.Payload, "oneClickUnsubscribeUrl")
+	if _, err := Validate(definition, "engagement-api", request); !errors.Is(err, ErrInvalidPayload) {
+		t.Fatalf("missing one-click unsubscribe URL error = %v", err)
 	}
 }
 

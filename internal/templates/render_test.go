@@ -51,8 +51,10 @@ func TestRenderCurrentVerificationEmailHasBrandedHTMLAndPlainTextFallback(t *tes
 
 func TestRenderNewsletterEscapesContentAndAddsUnsubscribeMetadata(t *testing.T) {
 	unsubscribeURL := "https://www.alive.org.tw/zh-Hant/newsletter/unsubscribe?token=opaque"
+	oneClickURL := "https://www.alive.org.tw/api/engagement/v1/newsletter/unsubscribe?token=opaque"
 	email, err := RenderEmail(mustResolve(t, "engagement.newsletter"), "zh-Hant", "user@example.test", map[string]string{
 		"subject": "八月消息", "body": "第一行\n<script>alert(1)</script>", "unsubscribeUrl": unsubscribeURL,
+		"oneClickUnsubscribeUrl": oneClickURL,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +65,7 @@ func TestRenderNewsletterEscapesContentAndAddsUnsubscribeMetadata(t *testing.T) 
 	if strings.Contains(email.HTMLBody, "<script>") || !strings.Contains(email.HTMLBody, "&lt;script&gt;") {
 		t.Fatalf("HTML was not escaped: %s", email.HTMLBody)
 	}
-	if email.ListUnsubscribe != "<"+unsubscribeURL+">" || !email.OneClickUnsubscribe {
+	if email.ListUnsubscribe != "<"+oneClickURL+">" || !email.OneClickUnsubscribe {
 		t.Fatalf("unsubscribe metadata = %#v", email)
 	}
 }
