@@ -237,7 +237,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'NOTIFICATION_ENCRYPTION_KEYS_JSON', secretRef: 'encryption-keys-json-v2' }
             { name: 'NOTIFICATION_ACTIVE_HASH_KEY_ID', value: activeHashKeyID }
             { name: 'NOTIFICATION_HASH_KEYS_JSON', secretRef: 'hash-keys-json-v2' }
-            { name: 'NOTIFICATION_ALLOWED_CALLERS', value: 'account-api,hhc-web-api' }
+            { name: 'NOTIFICATION_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,engagement-api' }
             { name: 'NOTIFICATION_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'NOTIFICATION_TEMPLATE_DAILY_LIMIT', value: '${notificationTemplateDailyLimit}' }
             { name: 'NOTIFICATIONS_DISABLED', value: toLower(string(notificationsDisabled)) }
