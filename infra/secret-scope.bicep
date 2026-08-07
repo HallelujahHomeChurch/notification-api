@@ -22,6 +22,8 @@ param hashKeysJSON string
 param smtpUsername string
 @secure()
 param smtpPassword string
+@secure()
+param vapidPrivateKey string
 
 var secretsUserRole = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
@@ -133,6 +135,14 @@ resource smtpPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   }
 }
 
+resource vapidPrivateKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: vault
+  name: 'notification-vapid-private-key'
+  properties: {
+    value: vapidPrivateKey
+  }
+}
+
 resource apiDatabaseAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(databaseSecret.id, apiIdentity.id, 'secret-read')
   scope: databaseSecret
@@ -236,6 +246,16 @@ resource workerSMTPUsernameAccess 'Microsoft.Authorization/roleAssignments@2022-
 resource workerSMTPPasswordAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(smtpPasswordSecret.id, workerIdentity.id, 'secret-read')
   scope: smtpPasswordSecret
+  properties: {
+    principalId: workerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: secretsUserRole
+  }
+}
+
+resource workerVAPIDPrivateKeyAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(vapidPrivateKeySecret.id, workerIdentity.id, 'secret-read')
+  scope: vapidPrivateKeySecret
   properties: {
     principalId: workerIdentity.properties.principalId
     principalType: 'ServicePrincipal'

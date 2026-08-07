@@ -64,7 +64,7 @@ type postgresStore struct {
 
 type Worker struct {
 	repository      repository
-	provider        providers.Provider
+	providers       map[string]providers.Provider
 	keys            map[string][]byte
 	retryDelay      func(int) time.Duration
 	newID           func() string
@@ -77,6 +77,10 @@ func New(db *sql.DB, provider providers.Provider, encryptionKey []byte) *Worker 
 
 func NewWithKeyring(db *sql.DB, provider providers.Provider, keys map[string][]byte) *Worker {
 	return newWorkerWithKeyring(postgresStore{db: db}, provider, keys)
+}
+
+func NewWithProviders(db *sql.DB, configured map[string]providers.Provider, keys map[string][]byte) *Worker {
+	return newWorkerWithProviders(postgresStore{db: db}, configured, keys)
 }
 
 func newWorker(repository repository, provider providers.Provider, encryptionKey []byte) *Worker {
@@ -92,9 +96,17 @@ func newWorkerWithKeyring(
 	provider providers.Provider,
 	keys map[string][]byte,
 ) *Worker {
+	return newWorkerWithProviders(repository, map[string]providers.Provider{"email": provider}, keys)
+}
+
+func newWorkerWithProviders(
+	repository repository,
+	configured map[string]providers.Provider,
+	keys map[string][]byte,
+) *Worker {
 	return &Worker{
 		repository:      repository,
-		provider:        provider,
+		providers:       configured,
 		keys:            keys,
 		retryDelay:      retryDelay,
 		newID:           uuid.NewString,
@@ -137,7 +149,12 @@ func (w *Worker) Process(ctx context.Context, message queue.BrokerMessage) error
 	}
 
 	providerCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-	receipt, providerErr := w.provider.Send(providerCtx, payload)
+	provider, ok := w.providers[claimed.Channel]
+	if !ok {
+		cancel()
+		return fmt.Errorf("provider for channel %q is not configured", claimed.Channel)
+	}
+	receipt, providerErr := provider.Send(providerCtx, payload)
 	cancel()
 	if providerErr == nil {
 		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
@@ -216,24 +233,28 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 	if err != nil {
 		return providers.DeliveryPayload{}, err
 	}
-	email, err := templates.RenderEmail(
-		definition,
-		envelope.Locale,
-		string(target),
-		envelope.Fields,
-	)
-	if err != nil {
-		return providers.DeliveryPayload{}, err
+	switch claimed.Channel {
+	case "email":
+		email, err := templates.RenderEmail(definition, envelope.Locale, string(target), envelope.Fields)
+		if err != nil {
+			return providers.DeliveryPayload{}, err
+		}
+		return providers.DeliveryPayload{
+			Recipient: email.To, Subject: email.Subject, Body: email.Body, HTMLBody: email.HTMLBody,
+			MessageID:       fmt.Sprintf("<%s@notification.alive.org.tw>", claimed.DeliveryID),
+			ListUnsubscribe: email.ListUnsubscribe, OneClickUnsubscribe: email.OneClickUnsubscribe,
+		}, nil
+	case "web_push":
+		push, err := templates.RenderWebPush(definition, envelope.Locale, string(target), envelope.Fields)
+		if err != nil {
+			return providers.DeliveryPayload{}, err
+		}
+		return providers.DeliveryPayload{
+			Recipient: push.Target, Title: push.Title, Body: push.Body, ActionURL: push.ActionURL,
+		}, nil
+	default:
+		return providers.DeliveryPayload{}, fmt.Errorf("unsupported delivery channel %q", claimed.Channel)
 	}
-	return providers.DeliveryPayload{
-		Recipient:           email.To,
-		Subject:             email.Subject,
-		Body:                email.Body,
-		HTMLBody:            email.HTMLBody,
-		MessageID:           fmt.Sprintf("<%s@notification.alive.org.tw>", claimed.DeliveryID),
-		ListUnsubscribe:     email.ListUnsubscribe,
-		OneClickUnsubscribe: email.OneClickUnsubscribe,
-	}, nil
 }
 
 func classifyProviderError(err error) (providers.ErrorKind, bool, time.Duration) {

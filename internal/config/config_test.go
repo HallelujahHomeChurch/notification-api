@@ -363,6 +363,9 @@ func TestValidateModeRequirements(t *testing.T) {
 		ServiceBusQueueName:        "notifications-email",
 		SMTPAddr:                   "smtp.example.test:587",
 		SMTPFrom:                   "noreply@alive.org.tw",
+		VAPIDPublicKey:             "public-key",
+		VAPIDPrivateKey:            "private-key",
+		VAPIDSubject:               "mailto:support@alive.org.tw",
 	}
 
 	migrate := Config{
@@ -400,6 +403,9 @@ func TestValidateModeRequirements(t *testing.T) {
 		{name: "worker needs encryption", mode: "worker", edit: func(c *Config) { c.DataEncryptionKey = nil }},
 		{name: "worker needs service bus", mode: "worker", edit: func(c *Config) { c.QueueDriver = "memory" }},
 		{name: "worker needs smtp", mode: "worker", edit: func(c *Config) { c.SMTPAddr = "" }},
+		{name: "worker needs VAPID public key", mode: "worker", edit: func(c *Config) { c.VAPIDPublicKey = "" }},
+		{name: "worker needs VAPID private key", mode: "worker", edit: func(c *Config) { c.VAPIDPrivateKey = "" }},
+		{name: "worker needs VAPID subject", mode: "worker", edit: func(c *Config) { c.VAPIDSubject = "" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := base
@@ -440,6 +446,9 @@ func validProductionModeConfig(mode string) Config {
 		ServiceBusQueueName: "notifications-email",
 		SMTPAddr:            "smtp.example.test:587",
 		SMTPFrom:            "noreply@alive.org.tw",
+		VAPIDPublicKey:      "public-key",
+		VAPIDPrivateKey:     "private-key",
+		VAPIDSubject:        "mailto:support@alive.org.tw",
 	}
 	if mode == "api" {
 		cfg.AllowedCallers = []string{"account-api"}
@@ -460,6 +469,9 @@ func setProductionEnv(t *testing.T) {
 	t.Setenv("SERVICEBUS_NAMESPACE", "notification.servicebus.windows.net")
 	t.Setenv("SMTP_ADDR", "smtp.example.test:587")
 	t.Setenv("SMTP_FROM", "noreply@example.test")
+	t.Setenv("VAPID_PUBLIC_KEY", "public-key")
+	t.Setenv("VAPID_PRIVATE_KEY", "private-key")
+	t.Setenv("VAPID_SUBJECT", "mailto:support@alive.org.tw")
 }
 
 func clearConfigEnv(t *testing.T) {
@@ -471,6 +483,7 @@ func clearConfigEnv(t *testing.T) {
 		"NOTIFICATION_ACTIVE_HASH_KEY_ID", "NOTIFICATION_HASH_KEYS_JSON",
 		"QUEUE_DRIVER", "SERVICEBUS_NAMESPACE", "SERVICEBUS_QUEUE_NAME", "SERVICEBUS_CONNECTION_STRING",
 		"SMTP_ADDR", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM", "NOTIFICATIONS_DISABLED",
+		"VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT",
 		"NOTIFICATION_TEMPLATE_DAILY_LIMIT", "SHUTDOWN_TIMEOUT_SECONDS",
 		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME",
 	} {

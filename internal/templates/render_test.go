@@ -70,6 +70,26 @@ func TestRenderNewsletterEscapesContentAndAddsUnsubscribeMetadata(t *testing.T) 
 	}
 }
 
+func TestRenderWebPushPayload(t *testing.T) {
+	push, err := RenderWebPush(
+		mustResolveChannel(t, "engagement.web-push", "web_push"),
+		"zh-Hant",
+		`{"endpoint":"https://push.example.test/subscription","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+		map[string]string{
+			"title":     "八月消息",
+			"body":      "教會近況",
+			"actionUrl": "https://www.alive.org.tw/zh-Hant/news",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if push.Target == "" || push.Title != "八月消息" || push.Body != "教會近況" ||
+		push.ActionURL != "https://www.alive.org.tw/zh-Hant/news" {
+		t.Fatalf("RenderWebPush() = %#v", push)
+	}
+}
+
 func TestRenderCurrentActionEmailsHaveBrandedHTML(t *testing.T) {
 	tests := []struct {
 		templateID string
@@ -218,4 +238,13 @@ func TestQueuedVersionRendersAfterNewVersionBecomesCurrent(t *testing.T) {
 	}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Fatalf("RenderEmail(unimplemented v3) error = %v, want ErrUnknownTemplate", err)
 	}
+}
+
+func mustResolveChannel(t *testing.T, templateID, channel string) Definition {
+	t.Helper()
+	definition, err := Resolve(templateID, channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return definition
 }

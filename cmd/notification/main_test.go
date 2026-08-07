@@ -225,11 +225,25 @@ func TestBuildWorkerRejectsInvalidSMTPBeforeDatabase(t *testing.T) {
 		ServiceBusQueueName:        "notifications-email",
 		SMTPAddr:                   "smtp.example.test",
 		SMTPFrom:                   "noreply@alive.org.tw",
+		VAPIDPublicKey:             "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+		VAPIDPrivateKey:            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+		VAPIDSubject:               "mailto:support@alive.org.tw",
 	}
 
 	_, err := buildWorker(context.Background(), cfg)
 	if err == nil || !strings.Contains(err.Error(), "SMTP") {
 		t.Fatalf("buildWorker() error = %v, want SMTP config error before database", err)
+	}
+}
+
+func TestBuildWorkerRejectsInvalidWebPushBeforeDatabase(t *testing.T) {
+	cfg, _ := testConfig()
+	cfg.DatabaseURL = "postgres://notification:password@127.0.0.1:1/notification"
+	cfg.VAPIDSubject = "not-a-subject"
+
+	_, err := buildWorker(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "Web Push") {
+		t.Fatalf("buildWorker() error = %v, want Web Push config error before database", err)
 	}
 }
 
@@ -246,6 +260,9 @@ func testConfig() (config.Config, error) {
 		ServiceBusQueueName:        "notifications-email",
 		SMTPAddr:                   "smtp.example.test:587",
 		SMTPFrom:                   "noreply@alive.org.tw",
+		VAPIDPublicKey:             "BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+		VAPIDPrivateKey:            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+		VAPIDSubject:               "mailto:support@alive.org.tw",
 	}, nil
 }
 

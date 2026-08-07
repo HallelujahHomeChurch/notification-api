@@ -139,6 +139,18 @@ var definitions = map[string]map[int]Definition{
 			TTL:             7 * 24 * time.Hour,
 		},
 	},
+	"engagement.web-push": {
+		1: {
+			ID:              "engagement.web-push",
+			Version:         1,
+			Channel:         "web_push",
+			AllowedCallers:  set("engagement-api"),
+			RequiredFields:  set("title", "body"),
+			AllowedFields:   set("title", "body", "actionUrl"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             24 * time.Hour,
+		},
+	},
 }
 
 var currentVersions = map[string]int{
@@ -147,6 +159,7 @@ var currentVersions = map[string]int{
 	"account.oauth-link-confirmation": 2,
 	"account.oauth-onboarding-code":   2,
 	"engagement.newsletter":           2,
+	"engagement.web-push":             1,
 }
 
 func Resolve(templateID, channel string) (Definition, error) {
@@ -206,12 +219,12 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 			validated[key] = value
 			continue
 		}
-		if key == "subject" || key == "body" {
+		if key == "subject" || key == "title" || key == "body" {
 			maximum := 200
 			if key == "body" {
 				maximum = 20000
 			}
-			if strings.TrimSpace(value) == "" || len(value) > maximum || key == "subject" && strings.ContainsAny(value, "\r\n") {
+			if strings.TrimSpace(value) == "" || len(value) > maximum || key != "body" && strings.ContainsAny(value, "\r\n") {
 				return nil, fmt.Errorf("%w: invalid %s", ErrInvalidPayload, key)
 			}
 			validated[key] = strings.TrimSpace(value)

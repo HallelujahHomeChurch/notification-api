@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0
 	github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus v1.10.0
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 )

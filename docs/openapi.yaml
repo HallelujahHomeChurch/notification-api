@@ -97,6 +97,7 @@ components:
           example: account.verify-email
         channel:
           type: string
+          enum: [email, web_push]
           example: email
         target:
           $ref: '#/components/schemas/Target'
@@ -118,10 +119,11 @@ components:
       properties:
         type:
           type: string
+          enum: [email, web_push]
           example: email
         address:
           type: string
-          format: email
+          description: Email address or serialized PushSubscription JSON, according to target type.
     Resource:
       type: object
       additionalProperties: false
