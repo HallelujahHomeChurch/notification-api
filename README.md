@@ -1,6 +1,6 @@
 # notification-api
 
-Internal email notification service for HHC account workflows.
+Internal notification delivery service for HHC account and engagement workflows.
 
 ## Local Development
 

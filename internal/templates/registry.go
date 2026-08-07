@@ -117,6 +117,18 @@ var definitions = map[string]map[int]Definition{
 			TTL:             15 * time.Minute,
 		},
 	},
+	"engagement.newsletter": {
+		1: {
+			ID:              "engagement.newsletter",
+			Version:         1,
+			Channel:         "email",
+			AllowedCallers:  set("engagement-api"),
+			RequiredFields:  set("subject", "body", "unsubscribeUrl"),
+			AllowedFields:   set("subject", "body", "actionUrl", "unsubscribeUrl"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             7 * 24 * time.Hour,
+		},
+	},
 }
 
 var currentVersions = map[string]int{
@@ -124,6 +136,7 @@ var currentVersions = map[string]int{
 	"account.reset-password":          2,
 	"account.oauth-link-confirmation": 2,
 	"account.oauth-onboarding-code":   2,
+	"engagement.newsletter":           1,
 }
 
 func Resolve(templateID, channel string) (Definition, error) {
@@ -181,6 +194,17 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 				return nil, fmt.Errorf("%w: code must contain six digits", ErrInvalidPayload)
 			}
 			validated[key] = value
+			continue
+		}
+		if key == "subject" || key == "body" {
+			maximum := 200
+			if key == "body" {
+				maximum = 20000
+			}
+			if strings.TrimSpace(value) == "" || len(value) > maximum || key == "subject" && strings.ContainsAny(value, "\r\n") {
+				return nil, fmt.Errorf("%w: invalid %s", ErrInvalidPayload, key)
+			}
+			validated[key] = strings.TrimSpace(value)
 			continue
 		}
 		parsed, err := url.Parse(value)

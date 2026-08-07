@@ -3,13 +3,16 @@ package templates
 import (
 	"fmt"
 	"html"
+	"strings"
 )
 
 type Email struct {
-	To       string
-	Subject  string
-	Body     string
-	HTMLBody string
+	To                  string
+	Subject             string
+	Body                string
+	HTMLBody            string
+	ListUnsubscribe     string
+	OneClickUnsubscribe bool
 }
 
 func RenderEmail(definition Definition, locale, to string, payload map[string]string) (Email, error) {
@@ -42,6 +45,8 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 		return renderOAuthOnboardingCodeEmailV1(locale, to, validated["code"]), nil
 	case canonical.ID == "account.oauth-onboarding-code" && canonical.Version == 2:
 		return renderOAuthOnboardingCodeEmail(locale, to, validated["code"], validated["provider"]), nil
+	case canonical.ID == "engagement.newsletter" && canonical.Version == 1:
+		return renderNewsletterEmail(locale, to, validated), nil
 	default:
 		return Email{}, fmt.Errorf(
 			"%w: %s version %d",
@@ -50,6 +55,28 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 			canonical.Version,
 		)
 	}
+}
+
+func renderNewsletterEmail(locale, to string, payload map[string]string) Email {
+	church, unsubscribe, readMore := "Hallelujah Home Church", "Unsubscribe", "Read more"
+	if locale == "zh-Hant" {
+		church, unsubscribe, readMore = "哈利路亞家教會", "取消訂閱", "閱讀更多"
+	}
+	if locale == "zh-Hans" {
+		church, unsubscribe, readMore = "哈利路亚家教会", "取消订阅", "阅读更多"
+	}
+	action := ""
+	if payload["actionUrl"] != "" {
+		action = fmt.Sprintf(`<p style="margin:28px 0"><a href="%s" style="display:inline-block;background:#c75d55;color:#fffaf5;text-decoration:none;font-weight:700;padding:13px 22px;border-radius:6px">%s</a></p>`, html.EscapeString(payload["actionUrl"]), html.EscapeString(readMore))
+	}
+	bodyHTML := strings.ReplaceAll(html.EscapeString(payload["body"]), "\n", "<br>")
+	htmlBody := fmt.Sprintf(`<!doctype html><html lang="%s"><body style="margin:0;background:#fbf5eb;color:#342d2b;font-family:Arial,'Noto Sans TC',sans-serif"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#fbf5eb;padding:32px 16px"><tr><td align="center"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fffdf9;border:1px solid #eaded2;border-radius:8px"><tr><td style="padding:32px"><p style="margin:0 0 28px;color:#b94f47;font-size:16px;font-weight:700">%s</p><h1 style="margin:0 0 20px;font-size:26px;line-height:1.35">%s</h1><p style="margin:0;color:#665c58;font-size:16px;line-height:1.75">%s</p>%s<p style="margin:32px 0 0;padding-top:20px;border-top:1px solid #eaded2;color:#827773;font-size:13px"><a href="%s" style="color:#827773">%s</a></p></td></tr></table></td></tr></table></body></html>`, html.EscapeString(locale), html.EscapeString(church), html.EscapeString(payload["subject"]), bodyHTML, action, html.EscapeString(payload["unsubscribeUrl"]), html.EscapeString(unsubscribe))
+	body := payload["body"]
+	if payload["actionUrl"] != "" {
+		body += "\n\n" + payload["actionUrl"]
+	}
+	body += "\n\n" + unsubscribe + ": " + payload["unsubscribeUrl"] + "\n"
+	return Email{To: to, Subject: payload["subject"], Body: body, HTMLBody: htmlBody, ListUnsubscribe: "<" + payload["unsubscribeUrl"] + ">", OneClickUnsubscribe: true}
 }
 
 func renderOAuthOnboardingCodeEmailV1(locale, to, code string) Email {

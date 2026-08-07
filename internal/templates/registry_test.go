@@ -33,6 +33,25 @@ func TestResolveAccountTemplates(t *testing.T) {
 	}
 }
 
+func TestValidateNewsletterTemplate(t *testing.T) {
+	definition, err := Resolve("engagement.newsletter", "email")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := verificationRequest(map[string]string{
+		"subject": "August news", "body": "Church updates",
+		"unsubscribeUrl": "https://www.alive.org.tw/zh-Hant/newsletter/unsubscribe?token=opaque",
+	})
+	request.TemplateID = definition.ID
+	if _, err := Validate(definition, "engagement-api", request); err != nil {
+		t.Fatal(err)
+	}
+	request.Payload["subject"] = "unsafe\r\nBcc: other@example.test"
+	if _, err := Validate(definition, "engagement-api", request); !errors.Is(err, ErrInvalidPayload) {
+		t.Fatalf("header injection error = %v", err)
+	}
+}
+
 func TestValidateOAuthOnboardingCode(t *testing.T) {
 	definition := mustResolve(t, "account.oauth-onboarding-code")
 	request := verificationRequest(map[string]string{"code": "123456", "provider": "line"})

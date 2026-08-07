@@ -148,6 +148,9 @@ func (s *SMTP) validate(payload DeliveryPayload) (string, error) {
 	if strings.ContainsAny(payload.Subject, "\r\n") {
 		return "", errors.New("invalid subject")
 	}
+	if strings.ContainsAny(payload.ListUnsubscribe, "\r\n") {
+		return "", errors.New("invalid unsubscribe header")
+	}
 	if !validMessageID(payload.MessageID) {
 		return "", errors.New("invalid message ID")
 	}
@@ -298,16 +301,7 @@ func writeMessage(writer io.Writer, from, fromName string, payload DeliveryPaylo
 	if payload.HTMLBody != "" {
 		return writeMultipartMessage(writer, fromHeader, payload)
 	}
-	headers := strings.Join([]string{
-		"From: " + fromHeader,
-		"To: " + payload.Recipient,
-		"Subject: " + mime.QEncoding.Encode("UTF-8", payload.Subject),
-		"Message-ID: " + payload.MessageID,
-		"MIME-Version: 1.0",
-		"Content-Type: text/plain; charset=UTF-8",
-		"Content-Transfer-Encoding: quoted-printable",
-		"",
-	}, "\r\n")
+	headers := strings.Join(messageHeaders(fromHeader, payload, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: quoted-printable"), "\r\n")
 	if _, err := io.WriteString(writer, headers+"\r\n"); err != nil {
 		return fmt.Errorf("write headers: %w", err)
 	}
@@ -323,15 +317,7 @@ func writeMessage(writer io.Writer, from, fromName string, payload DeliveryPaylo
 
 func writeMultipartMessage(writer io.Writer, from string, payload DeliveryPayload) error {
 	multipartWriter := multipart.NewWriter(writer)
-	headers := strings.Join([]string{
-		"From: " + from,
-		"To: " + payload.Recipient,
-		"Subject: " + mime.QEncoding.Encode("UTF-8", payload.Subject),
-		"Message-ID: " + payload.MessageID,
-		"MIME-Version: 1.0",
-		"Content-Type: multipart/alternative; boundary=" + strconv.Quote(multipartWriter.Boundary()),
-		"",
-	}, "\r\n")
+	headers := strings.Join(messageHeaders(from, payload, "Content-Type: multipart/alternative; boundary="+strconv.Quote(multipartWriter.Boundary())), "\r\n")
 	if _, err := io.WriteString(writer, headers+"\r\n"); err != nil {
 		return fmt.Errorf("write headers: %w", err)
 	}
@@ -361,4 +347,15 @@ func writeMultipartMessage(writer io.Writer, from string, payload DeliveryPayloa
 		return fmt.Errorf("close MIME message: %w", err)
 	}
 	return nil
+}
+
+func messageHeaders(from string, payload DeliveryPayload, extra ...string) []string {
+	headers := []string{"From: " + from, "To: " + payload.Recipient, "Subject: " + mime.QEncoding.Encode("UTF-8", payload.Subject), "Message-ID: " + payload.MessageID, "MIME-Version: 1.0"}
+	if payload.ListUnsubscribe != "" {
+		headers = append(headers, "List-Unsubscribe: "+payload.ListUnsubscribe)
+		if payload.OneClickUnsubscribe {
+			headers = append(headers, "List-Unsubscribe-Post: List-Unsubscribe=One-Click")
+		}
+	}
+	return append(headers, append(extra, "")...)
 }
