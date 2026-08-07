@@ -128,6 +128,16 @@ var definitions = map[string]map[int]Definition{
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
 			TTL:             7 * 24 * time.Hour,
 		},
+		2: {
+			ID:              "engagement.newsletter",
+			Version:         2,
+			Channel:         "email",
+			AllowedCallers:  set("engagement-api"),
+			RequiredFields:  set("subject", "body", "unsubscribeUrl", "oneClickUnsubscribeUrl"),
+			AllowedFields:   set("subject", "body", "actionUrl", "unsubscribeUrl", "oneClickUnsubscribeUrl"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             7 * 24 * time.Hour,
+		},
 	},
 }
 
@@ -136,7 +146,7 @@ var currentVersions = map[string]int{
 	"account.reset-password":          2,
 	"account.oauth-link-confirmation": 2,
 	"account.oauth-onboarding-code":   2,
-	"engagement.newsletter":           1,
+	"engagement.newsletter":           2,
 }
 
 func Resolve(templateID, channel string) (Definition, error) {

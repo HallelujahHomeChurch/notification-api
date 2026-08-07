@@ -47,6 +47,8 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 		return renderOAuthOnboardingCodeEmail(locale, to, validated["code"], validated["provider"]), nil
 	case canonical.ID == "engagement.newsletter" && canonical.Version == 1:
 		return renderNewsletterEmail(locale, to, validated), nil
+	case canonical.ID == "engagement.newsletter" && canonical.Version == 2:
+		return renderNewsletterEmail(locale, to, validated), nil
 	default:
 		return Email{}, fmt.Errorf(
 			"%w: %s version %d",
@@ -76,7 +78,11 @@ func renderNewsletterEmail(locale, to string, payload map[string]string) Email {
 		body += "\n\n" + payload["actionUrl"]
 	}
 	body += "\n\n" + unsubscribe + ": " + payload["unsubscribeUrl"] + "\n"
-	return Email{To: to, Subject: payload["subject"], Body: body, HTMLBody: htmlBody, ListUnsubscribe: "<" + payload["unsubscribeUrl"] + ">", OneClickUnsubscribe: true}
+	oneClickURL := payload["oneClickUnsubscribeUrl"]
+	if oneClickURL == "" {
+		oneClickURL = payload["unsubscribeUrl"]
+	}
+	return Email{To: to, Subject: payload["subject"], Body: body, HTMLBody: htmlBody, ListUnsubscribe: "<" + oneClickURL + ">", OneClickUnsubscribe: true}
 }
 
 func renderOAuthOnboardingCodeEmailV1(locale, to, code string) Email {
