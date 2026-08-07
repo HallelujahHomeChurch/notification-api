@@ -18,11 +18,13 @@ const (
 )
 
 type DeliveryPayload struct {
-	Recipient string
-	Subject   string
-	Body      string
-	HTMLBody  string
-	MessageID string
+	Recipient           string
+	Subject             string
+	Body                string
+	HTMLBody            string
+	MessageID           string
+	ListUnsubscribe     string
+	OneClickUnsubscribe bool
 }
 
 type ProviderReceipt struct {

@@ -31,11 +31,13 @@ import (
 func TestWriteMessageUsesDisplayNameAndHTMLAlternative(t *testing.T) {
 	var message bytes.Buffer
 	payload := DeliveryPayload{
-		Recipient: "person@example.test",
-		Subject:   "驗證您的 Email",
-		Body:      "Open https://account.alive.org.tw/verify-email?token=opaque",
-		HTMLBody:  `<a href="https://account.alive.org.tw/verify-email?token=opaque">驗證 Email</a>`,
-		MessageID: "<delivery-1@notification.alive.org.tw>",
+		Recipient:           "person@example.test",
+		Subject:             "驗證您的 Email",
+		Body:                "Open https://account.alive.org.tw/verify-email?token=opaque",
+		HTMLBody:            `<a href="https://account.alive.org.tw/verify-email?token=opaque">驗證 Email</a>`,
+		MessageID:           "<delivery-1@notification.alive.org.tw>",
+		ListUnsubscribe:     "<https://www.alive.org.tw/newsletter/unsubscribe?token=opaque>",
+		OneClickUnsubscribe: true,
 	}
 	if err := writeMessage(&message, "no-reply@alive.org.tw", "哈利路亞家教會", payload); err != nil {
 		t.Fatal(err)
@@ -47,6 +49,9 @@ func TestWriteMessageUsesDisplayNameAndHTMLAlternative(t *testing.T) {
 	from, err := mail.ParseAddress(parsed.Header.Get("From"))
 	if err != nil || from.Name != "哈利路亞家教會" || from.Address != "no-reply@alive.org.tw" {
 		t.Fatalf("From = %#v, error = %v", from, err)
+	}
+	if parsed.Header.Get("List-Unsubscribe") != payload.ListUnsubscribe || parsed.Header.Get("List-Unsubscribe-Post") != "List-Unsubscribe=One-Click" {
+		t.Fatalf("unsubscribe headers = %#v", parsed.Header)
 	}
 	mediaType, params, err := mime.ParseMediaType(parsed.Header.Get("Content-Type"))
 	if err != nil || mediaType != "multipart/alternative" {

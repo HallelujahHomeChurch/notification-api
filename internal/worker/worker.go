@@ -226,11 +226,13 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 		return providers.DeliveryPayload{}, err
 	}
 	return providers.DeliveryPayload{
-		Recipient: email.To,
-		Subject:   email.Subject,
-		Body:      email.Body,
-		HTMLBody:  email.HTMLBody,
-		MessageID: fmt.Sprintf("<%s@notification.alive.org.tw>", claimed.DeliveryID),
+		Recipient:           email.To,
+		Subject:             email.Subject,
+		Body:                email.Body,
+		HTMLBody:            email.HTMLBody,
+		MessageID:           fmt.Sprintf("<%s@notification.alive.org.tw>", claimed.DeliveryID),
+		ListUnsubscribe:     email.ListUnsubscribe,
+		OneClickUnsubscribe: email.OneClickUnsubscribe,
 	}, nil
 }
 
