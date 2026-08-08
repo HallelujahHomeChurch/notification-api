@@ -157,10 +157,14 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 		handleServiceError(w, r, err)
 		return
 	}
-	writeEnvelope(w, http.StatusOK, r, map[string]any{
+	data := map[string]any{
 		"messageId": result.MessageID,
 		"status":    result.Status,
-	}, nil)
+	}
+	if result.FailureCode != "" {
+		data["failureCode"] = result.FailureCode
+	}
+	writeEnvelope(w, http.StatusOK, r, data, nil)
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) bool {

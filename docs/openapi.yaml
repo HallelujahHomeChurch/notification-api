@@ -175,6 +175,10 @@ components:
             status:
               type: string
               enum: [queued, sending, sent, failed, dead_lettered]
+            failureCode:
+              type: string
+              description: Stable, non-sensitive failure category for terminal delivery failures.
+              enum: [temporary, rate_limited, acceptance_unknown, permanent, invalid_endpoint, suppressed, expired]
         meta:
           type: object
           required: [requestId]

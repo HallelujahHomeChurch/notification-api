@@ -184,7 +184,7 @@ func TestStatusIsScopedToCaller(t *testing.T) {
 		if caller != "account-api" || messageID != "message-1" {
 			return service.Result{}, service.ErrNotFound
 		}
-		return service.Result{MessageID: messageID, Status: contracts.MessageStatusSent, TemplateVersion: 1}, nil
+		return service.Result{MessageID: messageID, Status: contracts.MessageStatusFailed, TemplateVersion: 1, FailureCode: "invalid_endpoint"}, nil
 	}}
 	handler := New(svc, &fakePinger{}, []string{"account-api", "hhc-web-api"}, false)
 
@@ -195,7 +195,7 @@ func TestStatusIsScopedToCaller(t *testing.T) {
 		t.Fatalf("same caller status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body)
 	}
 	envelope := decodeEnvelope(t, response)
-	if envelope.Data["messageId"] != "message-1" || envelope.Data["status"] != "sent" {
+	if envelope.Data["messageId"] != "message-1" || envelope.Data["status"] != "failed" || envelope.Data["failureCode"] != "invalid_endpoint" {
 		t.Fatalf("data = %#v", envelope.Data)
 	}
 
