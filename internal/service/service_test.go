@@ -322,7 +322,7 @@ func TestSendCreatesWebPushIntent(t *testing.T) {
 		},
 		Locale: "zh-Hant",
 		Payload: map[string]string{
-			"title": "八月消息", "body": "教會近況",
+			"title": "八月消息", "body": "教會近況", "clickBehavior": "url",
 			"actionUrl": "https://www.alive.org.tw/zh-Hant/news",
 		},
 		Resource: contracts.Resource{Type: "campaign", ID: "campaign-1"},

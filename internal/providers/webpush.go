@@ -77,10 +77,11 @@ func (w *WebPush) Send(ctx context.Context, payload DeliveryPayload) (ProviderRe
 		return ProviderReceipt{}, w.failed(ErrorInvalidEndpoint, "validate", errors.New("invalid web push subscription"))
 	}
 	message, err := json.Marshal(struct {
-		Title     string `json:"title"`
-		Body      string `json:"body"`
-		ActionURL string `json:"actionUrl"`
-	}{payload.Title, payload.Body, payload.ActionURL})
+		Title         string `json:"title"`
+		Body          string `json:"body"`
+		ClickBehavior string `json:"clickBehavior"`
+		ActionURL     string `json:"actionUrl,omitempty"`
+	}{payload.Title, payload.Body, payload.ClickBehavior, payload.ActionURL})
 	if err != nil {
 		return ProviderReceipt{}, w.failed(ErrorPermanent, "encode", err)
 	}

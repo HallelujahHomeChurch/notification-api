@@ -3,6 +3,7 @@ package providers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -45,6 +46,7 @@ func TestWebPushSendsExpectedPayload(t *testing.T) {
 	provider.send = func(_ context.Context, message []byte, subscription *webpush.Subscription, options *webpush.Options) (*http.Response, error) {
 		if subscription.Endpoint != "https://push.example.test/subscription" ||
 			!strings.Contains(string(message), `"title":"八月消息"`) ||
+			!strings.Contains(string(message), `"clickBehavior":"url"`) ||
 			!strings.Contains(string(message), `"actionUrl":"https://www.alive.org.tw/zh-Hant/news"`) ||
 			options.Subscriber != "support@alive.org.tw" ||
 			options.VAPIDPublicKey != testVAPIDPublicKey || options.VAPIDPrivateKey != testVAPIDPrivateKey {
@@ -55,10 +57,38 @@ func TestWebPushSendsExpectedPayload(t *testing.T) {
 
 	receipt, err := provider.Send(context.Background(), DeliveryPayload{
 		Recipient: `{"endpoint":"https://push.example.test/subscription","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
-		Title:     "八月消息", Body: "教會近況", ActionURL: "https://www.alive.org.tw/zh-Hant/news",
+		Title:     "八月消息", Body: "教會近況", ClickBehavior: "url",
+		ActionURL: "https://www.alive.org.tw/zh-Hant/news",
 	})
 	if err != nil || receipt.Provider != "webpush" || receipt.AcceptedAt.IsZero() {
 		t.Fatalf("receipt=%#v error=%v", receipt, err)
+	}
+}
+
+func TestWebPushDismissPayloadOmitsActionURL(t *testing.T) {
+	provider := NewWebPush(WebPushConfig{
+		PublicKey: testVAPIDPublicKey, PrivateKey: testVAPIDPrivateKey, Subject: "mailto:support@alive.org.tw",
+	})
+	provider.send = func(_ context.Context, message []byte, _ *webpush.Subscription, _ *webpush.Options) (*http.Response, error) {
+		var payload map[string]string
+		if err := json.Unmarshal(message, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["clickBehavior"] != "dismiss" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		if _, exists := payload["actionUrl"]; exists {
+			t.Fatalf("dismiss payload includes actionUrl: %#v", payload)
+		}
+		return &http.Response{StatusCode: http.StatusCreated, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}
+
+	_, err := provider.Send(context.Background(), DeliveryPayload{
+		Recipient: `{"endpoint":"https://push.example.test/subscription","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+		Title:     "八月消息", Body: "教會近況", ClickBehavior: "dismiss",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

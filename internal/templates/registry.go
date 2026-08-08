@@ -150,6 +150,16 @@ var definitions = map[string]map[int]Definition{
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
 			TTL:             24 * time.Hour,
 		},
+		2: {
+			ID:              "engagement.web-push",
+			Version:         2,
+			Channel:         "web_push",
+			AllowedCallers:  set("engagement-api"),
+			RequiredFields:  set("title", "body", "clickBehavior"),
+			AllowedFields:   set("title", "body", "clickBehavior", "actionUrl"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             24 * time.Hour,
+		},
 	},
 }
 
@@ -159,7 +169,7 @@ var currentVersions = map[string]int{
 	"account.oauth-link-confirmation": 2,
 	"account.oauth-onboarding-code":   2,
 	"engagement.newsletter":           2,
-	"engagement.web-push":             1,
+	"engagement.web-push":             2,
 }
 
 func Resolve(templateID, channel string) (Definition, error) {
@@ -219,6 +229,13 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 			validated[key] = value
 			continue
 		}
+		if key == "clickBehavior" {
+			if value != "home" && value != "url" && value != "dismiss" {
+				return nil, fmt.Errorf("%w: unsupported click behavior", ErrInvalidPayload)
+			}
+			validated[key] = value
+			continue
+		}
 		if key == "subject" || key == "title" || key == "body" {
 			maximum := 200
 			if key == "body" {
@@ -245,6 +262,18 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 	for key := range definition.RequiredFields {
 		if validated[key] == "" {
 			return nil, fmt.Errorf("%w: %s is required", ErrInvalidPayload, key)
+		}
+	}
+	if definition.ID == "engagement.web-push" && definition.Version >= 2 {
+		switch validated["clickBehavior"] {
+		case "url":
+			if validated["actionUrl"] == "" {
+				return nil, fmt.Errorf("%w: actionUrl is required for URL clicks", ErrInvalidPayload)
+			}
+		case "home", "dismiss":
+			if validated["actionUrl"] != "" {
+				return nil, fmt.Errorf("%w: actionUrl is not allowed for this click behavior", ErrInvalidPayload)
+			}
 		}
 	}
 	return validated, nil
