@@ -250,7 +250,8 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 			return providers.DeliveryPayload{}, err
 		}
 		return providers.DeliveryPayload{
-			Recipient: push.Target, Title: push.Title, Body: push.Body, ActionURL: push.ActionURL,
+			Recipient: push.Target, Title: push.Title, Body: push.Body,
+			ClickBehavior: push.ClickBehavior, ActionURL: push.ActionURL,
 		}, nil
 	default:
 		return providers.DeliveryPayload{}, fmt.Errorf("unsupported delivery channel %q", claimed.Channel)

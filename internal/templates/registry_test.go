@@ -66,9 +66,10 @@ func TestValidateWebPushTemplate(t *testing.T) {
 		TemplateID: definition.ID,
 		Channel:    definition.Channel,
 		Payload: map[string]string{
-			"title":     "August news",
-			"body":      "Church updates",
-			"actionUrl": "https://www.alive.org.tw/zh-Hant/news",
+			"title":         "August news",
+			"body":          "Church updates",
+			"clickBehavior": "url",
+			"actionUrl":     "https://www.alive.org.tw/zh-Hant/news",
 		},
 	}
 	if _, err := Validate(definition, "engagement-api", request); err != nil {
@@ -77,6 +78,35 @@ func TestValidateWebPushTemplate(t *testing.T) {
 	request.Payload["title"] = "unsafe\r\nheader"
 	if _, err := Validate(definition, "engagement-api", request); !errors.Is(err, ErrInvalidPayload) {
 		t.Fatalf("header injection error = %v", err)
+	}
+}
+
+func TestValidateWebPushClickBehavior(t *testing.T) {
+	definition, err := Resolve("engagement.web-push", "web_push")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := contracts.SendRequest{TemplateID: definition.ID, Channel: definition.Channel}
+	for _, test := range []struct {
+		name    string
+		payload map[string]string
+		valid   bool
+	}{
+		{name: "home", payload: map[string]string{"title": "消息", "body": "內容", "clickBehavior": "home"}, valid: true},
+		{name: "dismiss", payload: map[string]string{"title": "消息", "body": "內容", "clickBehavior": "dismiss"}, valid: true},
+		{name: "url", payload: map[string]string{"title": "消息", "body": "內容", "clickBehavior": "url", "actionUrl": "https://www.alive.org.tw/zh-Hant/news"}, valid: true},
+		{name: "url missing target", payload: map[string]string{"title": "消息", "body": "內容", "clickBehavior": "url"}},
+		{name: "dismiss with target", payload: map[string]string{"title": "消息", "body": "內容", "clickBehavior": "dismiss", "actionUrl": "https://www.alive.org.tw/zh-Hant/news"}},
+		{name: "unknown", payload: map[string]string{"title": "消息", "body": "內容", "clickBehavior": "unknown"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := base
+			request.Payload = test.payload
+			_, err := Validate(definition, "engagement-api", request)
+			if (err == nil) != test.valid {
+				t.Fatalf("Validate() error = %v, valid = %v", err, test.valid)
+			}
+		})
 	}
 }
 

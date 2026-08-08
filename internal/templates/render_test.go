@@ -76,16 +76,17 @@ func TestRenderWebPushPayload(t *testing.T) {
 		"zh-Hant",
 		`{"endpoint":"https://push.example.test/subscription","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
 		map[string]string{
-			"title":     "八月消息",
-			"body":      "教會近況",
-			"actionUrl": "https://www.alive.org.tw/zh-Hant/news",
+			"title":         "八月消息",
+			"body":          "教會近況",
+			"clickBehavior": "url",
+			"actionUrl":     "https://www.alive.org.tw/zh-Hant/news",
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if push.Target == "" || push.Title != "八月消息" || push.Body != "教會近況" ||
-		push.ActionURL != "https://www.alive.org.tw/zh-Hant/news" {
+		push.ClickBehavior != "url" || push.ActionURL != "https://www.alive.org.tw/zh-Hant/news" {
 		t.Fatalf("RenderWebPush() = %#v", push)
 	}
 }

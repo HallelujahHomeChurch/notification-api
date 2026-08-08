@@ -16,10 +16,11 @@ type Email struct {
 }
 
 type WebPush struct {
-	Target    string
-	Title     string
-	Body      string
-	ActionURL string
+	Target        string
+	Title         string
+	Body          string
+	ClickBehavior string
+	ActionURL     string
 }
 
 func RenderWebPush(definition Definition, locale, target string, payload map[string]string) (WebPush, error) {
@@ -34,9 +35,17 @@ func RenderWebPush(definition Definition, locale, target string, payload map[str
 	if !canonical.SupportedLocale[locale] {
 		locale = "en"
 	}
+	clickBehavior := validated["clickBehavior"]
+	if clickBehavior == "" {
+		if validated["actionUrl"] == "" {
+			clickBehavior = "home"
+		} else {
+			clickBehavior = "url"
+		}
+	}
 	return WebPush{
 		Target: target, Title: validated["title"], Body: validated["body"],
-		ActionURL: validated["actionUrl"],
+		ClickBehavior: clickBehavior, ActionURL: validated["actionUrl"],
 	}, nil
 }
 

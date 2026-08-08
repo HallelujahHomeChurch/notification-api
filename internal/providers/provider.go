@@ -22,6 +22,7 @@ type DeliveryPayload struct {
 	Title               string
 	Subject             string
 	Body                string
+	ClickBehavior       string
 	ActionURL           string
 	HTMLBody            string
 	MessageID           string
