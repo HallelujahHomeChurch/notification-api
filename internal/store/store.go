@@ -23,6 +23,7 @@ type Message struct {
 	HashKeyID       string
 	TemplateVersion int
 	Status          contracts.MessageStatus
+	FailureCode     string
 }
 
 type RateLimit struct {
@@ -283,9 +284,11 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 func (s *Store) Get(ctx context.Context, caller, messageID string) (Message, error) {
 	var message Message
 	err := s.db.QueryRowContext(ctx, `
-			SELECT id, caller_app_id, request_hash, hash_key_id, template_version, status
-		FROM notification_messages
-		WHERE id=$1 AND caller_app_id=$2`,
+			SELECT m.id, m.caller_app_id, m.request_hash, m.hash_key_id, m.template_version, m.status,
+				COALESCE((SELECT d.last_error_code FROM notification_deliveries d
+					WHERE d.message_id=m.id ORDER BY d.updated_at DESC LIMIT 1), '')
+			FROM notification_messages m
+			WHERE m.id=$1 AND m.caller_app_id=$2`,
 		messageID, caller,
 	).Scan(
 		&message.ID,
@@ -294,6 +297,7 @@ func (s *Store) Get(ctx context.Context, caller, messageID string) (Message, err
 		&message.HashKeyID,
 		&message.TemplateVersion,
 		&message.Status,
+		&message.FailureCode,
 	)
 	return message, err
 }

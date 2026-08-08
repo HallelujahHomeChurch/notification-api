@@ -56,6 +56,7 @@ type Result struct {
 	Status          contracts.MessageStatus
 	TemplateVersion int
 	Replayed        bool
+	FailureCode     string
 }
 
 type repository interface {
@@ -307,5 +308,6 @@ func resultFromMessage(message store.Message, replayed bool) Result {
 		Status:          message.Status,
 		TemplateVersion: message.TemplateVersion,
 		Replayed:        replayed,
+		FailureCode:     message.FailureCode,
 	}
 }

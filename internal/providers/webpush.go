@@ -13,11 +13,23 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+)
+
+const (
+	maxWebPushResponseBodyBytes = 1024
+	maxWebPushProviderReasonLen = 256
+)
+
+var (
+	webPushSensitiveDetail = regexp.MustCompile(`(?i)(["']?[A-Z0-9_. -]*(?:endpoint|token|p256dh|auth(?:orization)?|private(?:[_ -]?key)?)[A-Z0-9_. -]*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,}\]]+)`)
+	webPushEmailDetail     = regexp.MustCompile(`(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b`)
+	webPushURLDetail       = regexp.MustCompile(`https?://[^\s"'<>]+`)
 )
 
 type WebPushConfig struct {
@@ -73,7 +85,7 @@ func (w *WebPush) Send(ctx context.Context, payload DeliveryPayload) (ProviderRe
 		return ProviderReceipt{}, w.failed(ErrorPermanent, "encode", err)
 	}
 	response, err := w.send(ctx, message, &subscription, &webpush.Options{
-		Subscriber: w.config.Subject, VAPIDPublicKey: w.config.PublicKey,
+		Subscriber: webPushSubscriber(w.config.Subject), VAPIDPublicKey: w.config.PublicKey,
 		VAPIDPrivateKey: w.config.PrivateKey, TTL: 24 * 60 * 60,
 	})
 	if err != nil {
@@ -83,14 +95,20 @@ func (w *WebPush) Send(ctx context.Context, payload DeliveryPayload) (ProviderRe
 		return ProviderReceipt{}, w.failed(ErrorTemporary, "send", err)
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, response.Body)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return ProviderReceipt{}, classifyWebPushResponse(response)
+		providerErr := classifyWebPushResponse(response, webPushProviderFamily(subscription.Endpoint))
+		w.logFailure(providerErr)
+		return ProviderReceipt{}, providerErr
 	}
+	_, _ = io.Copy(io.Discard, response.Body)
 	if w.config.Logger != nil {
 		w.config.Logger.Print("event=notification_provider_success provider=webpush")
 	}
 	return ProviderReceipt{Provider: "webpush", AcceptedAt: time.Now().UTC()}, nil
+}
+
+func webPushSubscriber(subject string) string {
+	return strings.TrimPrefix(subject, "mailto:")
 }
 
 func validSubscription(subscription webpush.Subscription) bool {
@@ -109,7 +127,7 @@ func validSubscription(subscription webpush.Subscription) bool {
 	return err == nil && len(auth) == 16
 }
 
-func classifyWebPushResponse(response *http.Response) error {
+func classifyWebPushResponse(response *http.Response, providerFamily string) *ProviderError {
 	kind := ErrorPermanent
 	switch {
 	case response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone:
@@ -119,10 +137,80 @@ func classifyWebPushResponse(response *http.Response) error {
 	case response.StatusCode >= 500:
 		kind = ErrorTemporary
 	}
-	return &ProviderError{
-		Kind: kind, Operation: "send", RetryAfter: parseRetryAfter(response.Header.Get("Retry-After")),
-		cause: fmt.Errorf("web push service returned HTTP %d", response.StatusCode),
+	providerErr := &ProviderError{
+		Kind:              kind,
+		Operation:         "send",
+		RetryAfter:        parseRetryAfter(response.Header.Get("Retry-After")),
+		HTTPStatus:        response.StatusCode,
+		ProviderRequestID: webPushRequestID(response.Header),
+		ProviderFamily:    providerFamily,
+		ProviderReason:    webPushProviderReason(response.Body),
 	}
+	providerErr.cause = fmt.Errorf(
+		"web push provider returned HTTP %d family=%s request_id=%q reason=%q",
+		providerErr.HTTPStatus,
+		providerErr.ProviderFamily,
+		providerErr.ProviderRequestID,
+		providerErr.ProviderReason,
+	)
+	return providerErr
+}
+
+func webPushProviderFamily(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "unknown"
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch {
+	case host == "web.push.apple.com" || strings.HasSuffix(host, ".push.apple.com"):
+		return "apple"
+	case host == "fcm.googleapis.com" || strings.HasSuffix(host, ".fcm.googleapis.com"):
+		return "fcm"
+	case host == "updates.push.services.mozilla.com" || strings.HasSuffix(host, ".push.services.mozilla.com"):
+		return "mozilla"
+	default:
+		return "unknown"
+	}
+}
+
+func webPushRequestID(header http.Header) string {
+	for _, name := range []string{"Apns-Id", "X-Request-Id", "Request-Id", "X-Amzn-Requestid", "X-Amz-Request-Id", "X-Goog-Request-Id"} {
+		if value := sanitizeWebPushDetail(header.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func webPushProviderReason(body io.Reader) string {
+	if body == nil {
+		return ""
+	}
+	contents, err := io.ReadAll(io.LimitReader(body, maxWebPushResponseBodyBytes))
+	if err != nil {
+		return ""
+	}
+	return sanitizeWebPushDetail(string(contents))
+}
+
+func sanitizeWebPushDetail(detail string) string {
+	detail = strings.ToValidUTF8(detail, "")
+	detail = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, detail)
+	detail = webPushSensitiveDetail.ReplaceAllString(detail, "$1[redacted]")
+	detail = webPushEmailDetail.ReplaceAllString(detail, "[redacted-email]")
+	detail = webPushURLDetail.ReplaceAllString(detail, "[redacted-url]")
+	detail = strings.Join(strings.Fields(detail), " ")
+	characters := []rune(detail)
+	if len(characters) > maxWebPushProviderReasonLen {
+		return string(characters[:maxWebPushProviderReasonLen])
+	}
+	return detail
 }
 
 func parseRetryAfter(value string) time.Duration {
@@ -138,8 +226,21 @@ func parseRetryAfter(value string) time.Duration {
 }
 
 func (w *WebPush) failed(kind ErrorKind, operation string, cause error) error {
+	providerErr := &ProviderError{Kind: kind, Operation: operation, cause: cause}
+	w.logFailure(providerErr)
+	return providerErr
+}
+
+func (w *WebPush) logFailure(providerErr *ProviderError) {
 	if w.config.Logger != nil {
-		w.config.Logger.Printf("event=notification_provider_failure provider=webpush kind=%s operation=%s", kind, operation)
+		w.config.Logger.Printf(
+			"event=notification_provider_failure provider=webpush kind=%s operation=%s http_status=%d provider_family=%s provider_request_id=%q provider_reason=%q",
+			providerErr.Kind,
+			providerErr.Operation,
+			providerErr.HTTPStatus,
+			providerErr.ProviderFamily,
+			providerErr.ProviderRequestID,
+			providerErr.ProviderReason,
+		)
 	}
-	return &ProviderError{Kind: kind, Operation: operation, cause: cause}
 }

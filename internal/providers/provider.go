@@ -36,10 +36,14 @@ type ProviderReceipt struct {
 }
 
 type ProviderError struct {
-	Kind       ErrorKind
-	Operation  string
-	RetryAfter time.Duration
-	cause      error
+	Kind              ErrorKind
+	Operation         string
+	RetryAfter        time.Duration
+	HTTPStatus        int
+	ProviderRequestID string
+	ProviderFamily    string
+	ProviderReason    string
+	cause             error
 }
 
 func (e *ProviderError) Error() string {
