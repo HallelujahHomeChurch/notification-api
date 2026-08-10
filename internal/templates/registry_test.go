@@ -33,6 +33,61 @@ func TestResolveAccountTemplates(t *testing.T) {
 	}
 }
 
+func TestJapaneseAndKoreanTemplateVersionsRemainDormantUntilConsumersSelectThem(t *testing.T) {
+	templates := map[string]string{
+		"account.verify-email":            "email",
+		"account.reset-password":          "email",
+		"account.oauth-link-confirmation": "email",
+		"account.oauth-onboarding-code":   "email",
+		"engagement.newsletter":           "email",
+		"engagement.web-push":             "web_push",
+	}
+	for templateID, channel := range templates {
+		t.Run(templateID, func(t *testing.T) {
+			current, err := Resolve(templateID, channel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.Version != 2 {
+				t.Fatalf("Resolve(%q).Version = %d, want historical version 2 until a consumer selects v3", templateID, current.Version)
+			}
+			future, err := ResolveVersion(templateID, 3, channel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, locale := range []string{"zh-Hant", "zh-Hans", "en", "ja", "ko"} {
+				if !future.SupportedLocale[locale] {
+					t.Fatalf("v3 locale %q is unsupported", locale)
+				}
+			}
+		})
+	}
+}
+
+func TestHistoricalTemplateVersionsKeepTheirThreeLocaleContract(t *testing.T) {
+	templates := map[string]string{
+		"account.verify-email":            "email",
+		"account.reset-password":          "email",
+		"account.oauth-link-confirmation": "email",
+		"account.oauth-onboarding-code":   "email",
+		"engagement.newsletter":           "email",
+		"engagement.web-push":             "web_push",
+	}
+	for templateID, channel := range templates {
+		for _, version := range []int{1, 2} {
+			t.Run(templateID, func(t *testing.T) {
+				definition, err := ResolveVersion(templateID, version, channel)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(definition.SupportedLocale) != 3 || !definition.SupportedLocale["zh-Hant"] || !definition.SupportedLocale["zh-Hans"] || !definition.SupportedLocale["en"] || definition.SupportedLocale["ja"] || definition.SupportedLocale["ko"] {
+					t.Fatalf("historical v%d locales = %#v", version, definition.SupportedLocale)
+				}
+			})
+		}
+	}
+}
+
 func TestValidateNewsletterTemplate(t *testing.T) {
 	definition, err := Resolve("engagement.newsletter", "email")
 	if err != nil {
