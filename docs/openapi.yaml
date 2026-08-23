@@ -2,9 +2,6 @@ openapi: 3.1.0
 info:
   title: HHC Notification API
   version: 1.0.0
-  license:
-    name: Proprietary
-    identifier: LicenseRef-Proprietary
   description: |
     Private Dapr-invoked notification API. Callers create notification intents;
     notification-api owns durable provider delivery and status. Campaign and
@@ -41,11 +38,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
-        '405':
-          description: Method is not allowed.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /ready:
     get:
       tags: [Operations]
@@ -66,12 +58,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '405':
-          description: Method is not allowed.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+                $ref: '#/components/schemas/NotReadyErrorResponse'
   /priv/notifications/send:
     post:
       tags: [Private]
@@ -104,22 +91,22 @@ paths:
           description: Request or idempotency key is invalid.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/InvalidRequestErrorResponse' }
         '401':
           description: Dapr caller identity is missing.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/UnauthorizedErrorResponse' }
         '403':
           description: Caller or requested template is not allowed.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/ForbiddenErrorResponse' }
         '409':
           description: Idempotency key was reused with different request content.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/IdempotencyConflictErrorResponse' }
         '429':
           description: Caller or template rate limit was exceeded.
           headers:
@@ -128,17 +115,17 @@ paths:
               schema: { type: integer, minimum: 1 }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/RateLimitedErrorResponse' }
         '500':
           description: Notification intent could not be created.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/InternalErrorResponse' }
         '503':
           description: Creation of new notification intents is disabled.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/DisabledErrorResponse' }
   /priv/notifications/{messageId}:
     get:
       tags: [Private]
@@ -167,22 +154,22 @@ paths:
           description: Dapr caller identity is missing.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/UnauthorizedErrorResponse' }
         '403':
           description: Caller is not allowed.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/ForbiddenErrorResponse' }
         '404':
           description: Message does not exist or belongs to another caller.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/NotFoundErrorResponse' }
         '500':
           description: Notification status could not be read.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: '#/components/schemas/InternalErrorResponse' }
 components:
   securitySchemes:
     daprCaller:
@@ -195,7 +182,7 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      description: 1-200 visible ASCII characters. Retained for 30 days per caller.
+      description: 1-200 visible ASCII characters, retained until 730 days after the notification reaches a terminal state; non-terminal notifications retain it longer.
       schema:
         type: string
         minLength: 1
@@ -217,7 +204,14 @@ components:
     SendRequest:
       type: object
       additionalProperties: false
-      required: [templateId, channel, target, locale, payload, resource]
+      required: [templateId, channel, target, payload, resource]
+      oneOf:
+        - properties:
+            channel: { const: email }
+            target: { $ref: '#/components/schemas/EmailTarget' }
+        - properties:
+            channel: { const: web_push }
+            target: { $ref: '#/components/schemas/WebPushTarget' }
       properties:
         templateId:
           type: string
@@ -227,10 +221,12 @@ components:
           type: string
           enum: [email, web_push]
         target:
-          $ref: '#/components/schemas/Target'
+          oneOf:
+            - $ref: '#/components/schemas/EmailTarget'
+            - $ref: '#/components/schemas/WebPushTarget'
         locale:
           type: string
-          enum: [zh-Hant, zh-Hans, en, ja, ko]
+          description: Current v2 templates support zh-Hant, zh-Hans, and en. Unsupported or omitted locales fall back to en.
         payload:
           type: object
           description: Template-specific string fields validated by notification-api.
@@ -238,17 +234,27 @@ components:
             type: string
         resource:
           $ref: '#/components/schemas/Resource'
-    Target:
+    EmailTarget:
       type: object
       additionalProperties: false
       required: [type, address]
       properties:
-        type:
-          type: string
-          enum: [email, web_push]
+        type: { const: email }
         address:
           type: string
-          description: Email address or serialized PushSubscription JSON according to target type. Stored encrypted.
+          format: email
+          minLength: 1
+          description: Email address accepted by Go mail.ParseAddress after trimming and lowercase normalization. Stored encrypted.
+    WebPushTarget:
+      type: object
+      additionalProperties: false
+      required: [type, address]
+      properties:
+        type: { const: web_push }
+        address:
+          type: string
+          minLength: 1
+          description: Serialized strict JSON object containing an HTTPS endpoint and non-blank p256dh and auth keys; unknown fields are rejected. Stored encrypted.
     Resource:
       type: object
       additionalProperties: false
@@ -256,9 +262,11 @@ components:
       properties:
         type:
           type: string
+          pattern: '.*\S.*'
           description: Owning business resource type, such as account or campaign.
         id:
           type: string
+          pattern: '.*\S.*'
           description: Opaque identifier assigned by the owning caller.
     SendResponse:
       type: object
@@ -333,14 +341,66 @@ components:
           properties:
             code:
               type: string
-              enum:
-                - NTF_INVALID_REQUEST
-                - NTF_UNAUTHORIZED
-                - NTF_FORBIDDEN
-                - NTF_IDEMPOTENCY_CONFLICT
-                - NTF_RATE_LIMITED
-                - NTF_NOT_FOUND
-                - NTF_NOT_READY
-                - NTF_METHOD_NOT_ALLOWED
-                - NTF_DISABLED
-                - NTF_INTERNAL
+    InvalidRequestErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_INVALID_REQUEST }
+    UnauthorizedErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_UNAUTHORIZED }
+    ForbiddenErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_FORBIDDEN }
+    IdempotencyConflictErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_IDEMPOTENCY_CONFLICT }
+    RateLimitedErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_RATE_LIMITED }
+    NotFoundErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_NOT_FOUND }
+    NotReadyErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_NOT_READY }
+    DisabledErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_DISABLED }
+    InternalErrorResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - properties:
+            error:
+              properties:
+                code: { const: NTF_INTERNAL }
