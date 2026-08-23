@@ -2,27 +2,90 @@ openapi: 3.1.0
 info:
   title: HHC Notification API
   version: 1.0.0
-  description: Private Dapr-invoked notification API. It is not browser-facing.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+  description: |
+    Private Dapr-invoked notification API. Callers create notification intents;
+    notification-api owns durable provider delivery and status. Campaign and
+    consent state remain owned by engagement-api. Email delivery is at-least-once.
+    This API is not browser-callable, and catalog access grants no API authorization.
+servers:
+  - url: /v1.0/invoke/notification-api/method
+    description: Dapr sidecar invocation base available to authorized service callers only.
+tags:
+  - name: Public
+    description: Browser-callable public operations.
+  - name: Admin
+    description: Protected staff operations.
+  - name: Private
+    description: Service-to-service operations invoked through Dapr.
+  - name: Operations
+    description: Process health and readiness operations.
+x-hhc-service: notification-api
+x-hhc-owner: HHC Platform
+x-hhc-repository: HallelujahHomeChurch/notification-api
 paths:
   /health:
     get:
+      tags: [Operations]
+      x-hhc-visibility: operations
+      x-hhc-callers: []
       operationId: health
+      summary: Check whether the process is running
+      security: []
       responses:
         '200':
           description: Process is running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '405':
+          description: Method is not allowed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /ready:
     get:
+      tags: [Operations]
+      x-hhc-visibility: operations
+      x-hhc-callers: []
       operationId: ready
+      summary: Check whether required dependencies are ready
+      security: []
       responses:
         '200':
           description: Required dependencies are ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
         '503':
           description: A required dependency is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method is not allowed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /priv/notifications/send:
     post:
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, engagement-api]
       operationId: sendNotification
+      summary: Create a durable notification intent
+      description: |
+        Creates one caller-scoped notification intent. Repeating the same
+        Idempotency-Key and request returns the original intent; reusing the key
+        for different content returns a conflict. Provider delivery is asynchronous.
+      security:
+        - daprCaller: []
       parameters:
-        - $ref: '#/components/parameters/DaprCallerAppID'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -32,29 +95,67 @@ paths:
               $ref: '#/components/schemas/SendRequest'
       responses:
         '202':
-          description: Notification queued.
+          description: Notification intent accepted for durable delivery.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SendResponse'
         '400':
-          description: Invalid request or missing idempotency key.
+          description: Request or idempotency key is invalid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '401':
-          description: Missing Dapr caller identity.
+          description: Dapr caller identity is missing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '403':
-          description: Caller is not allowed.
+          description: Caller or requested template is not allowed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '409':
-          description: Idempotency key was reused with a different request.
+          description: Idempotency key was reused with different request content.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '429':
+          description: Caller or template rate limit was exceeded.
+          headers:
+            Retry-After:
+              description: Whole seconds until the caller may retry.
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500':
+          description: Notification intent could not be created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: Creation of new notification intents is disabled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /priv/notifications/{messageId}:
     get:
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api, engagement-api]
       operationId: getNotificationStatus
+      summary: Get caller-scoped durable delivery status
+      security:
+        - daprCaller: []
       parameters:
-        - $ref: '#/components/parameters/DaprCallerAppID'
         - name: messageId
           in: path
           required: true
+          description: Opaque notification intent identifier returned by sendNotification.
           schema:
             type: string
+            format: uuid
       responses:
         '200':
           description: Notification status for the original caller.
@@ -63,19 +164,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/NotificationStatusResponse'
         '401':
-          description: Missing Dapr caller identity.
+          description: Dapr caller identity is missing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '403':
           description: Caller is not allowed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404':
           description: Message does not exist or belongs to another caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500':
+          description: Notification status could not be read.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 components:
-  parameters:
-    DaprCallerAppID:
-      name: Dapr-Caller-App-Id
+  securitySchemes:
+    daprCaller:
+      type: apiKey
       in: header
-      required: true
-      schema:
-        type: string
+      name: Dapr-Caller-App-Id
+      description: Caller identity injected by Dapr and checked against the runtime allowlist.
+  parameters:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -87,6 +202,18 @@ components:
         maxLength: 200
         pattern: '^[\x21-\x7E]{1,200}$'
   schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: healthy }
+    ReadyResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: ready }
     SendRequest:
       type: object
       additionalProperties: false
@@ -94,22 +221,21 @@ components:
       properties:
         templateId:
           type: string
-          example: account.verify-email
+          description: Registered template identifier allowed for the authenticated caller.
+          examples: [account.verify-email]
         channel:
           type: string
           enum: [email, web_push]
-          example: email
         target:
           $ref: '#/components/schemas/Target'
         locale:
           type: string
-          example: zh-Hant
+          enum: [zh-Hant, zh-Hans, en, ja, ko]
         payload:
           type: object
+          description: Template-specific string fields validated by notification-api.
           additionalProperties:
             type: string
-          example:
-            verifyUrl: https://account.alive.org.tw/verify-email?token=opaque
         resource:
           $ref: '#/components/schemas/Resource'
     Target:
@@ -120,10 +246,9 @@ components:
         type:
           type: string
           enum: [email, web_push]
-          example: email
         address:
           type: string
-          description: Email address or serialized PushSubscription JSON, according to target type.
+          description: Email address or serialized PushSubscription JSON according to target type. Stored encrypted.
     Resource:
       type: object
       additionalProperties: false
@@ -131,62 +256,91 @@ components:
       properties:
         type:
           type: string
-          example: account
+          description: Owning business resource type, such as account or campaign.
         id:
           type: string
+          description: Opaque identifier assigned by the owning caller.
     SendResponse:
       type: object
+      additionalProperties: false
       required: [data, meta, error]
       properties:
         data:
           type: object
+          additionalProperties: false
           required: [messageId, status, templateVersion, replayed]
           properties:
             messageId:
               type: string
+              format: uuid
             status:
-              type: string
-              enum: [queued, sending, sent, failed, dead_lettered]
+              $ref: '#/components/schemas/MessageStatus'
             templateVersion:
               type: integer
+              minimum: 1
             replayed:
               type: boolean
         meta:
-          type: object
-          required: [requestId]
-          properties:
-            requestId:
-              type: string
+          $ref: '#/components/schemas/ResponseMeta'
         error:
-          type: ['null', object]
-          properties:
-            code:
-              type: string
+          type: 'null'
     NotificationStatusResponse:
       type: object
+      additionalProperties: false
       required: [data, meta, error]
       properties:
         data:
           type: object
+          additionalProperties: false
           required: [messageId, status]
           properties:
             messageId:
               type: string
+              format: uuid
             status:
-              type: string
-              enum: [queued, sending, sent, failed, dead_lettered]
+              $ref: '#/components/schemas/MessageStatus'
             failureCode:
               type: string
               description: Stable, non-sensitive failure category for terminal delivery failures.
               enum: [temporary, rate_limited, acceptance_unknown, permanent, invalid_endpoint, suppressed, expired]
         meta:
-          type: object
-          required: [requestId]
-          properties:
-            requestId:
-              type: string
+          $ref: '#/components/schemas/ResponseMeta'
         error:
-          type: ['null', object]
+          type: 'null'
+    MessageStatus:
+      type: string
+      enum: [queued, sending, sent, failed, dead_lettered]
+    ResponseMeta:
+      type: object
+      additionalProperties: false
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta, error]
+      properties:
+        data:
+          type: 'null'
+        meta:
+          $ref: '#/components/schemas/ResponseMeta'
+        error:
+          type: object
+          additionalProperties: false
+          required: [code]
           properties:
             code:
               type: string
+              enum:
+                - NTF_INVALID_REQUEST
+                - NTF_UNAUTHORIZED
+                - NTF_FORBIDDEN
+                - NTF_IDEMPOTENCY_CONFLICT
+                - NTF_RATE_LIMITED
+                - NTF_NOT_FOUND
+                - NTF_NOT_READY
+                - NTF_METHOD_NOT_ALLOWED
+                - NTF_DISABLED
+                - NTF_INTERNAL
