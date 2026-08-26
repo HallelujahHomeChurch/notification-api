@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"reflect"
+	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -35,6 +38,45 @@ func TestOpenAPIContract(t *testing.T) {
 	if errors := validateOpenAPI(string(document)); len(errors) != 0 {
 		t.Fatalf("invalid OpenAPI contract:\n- %s", strings.Join(errors, "\n- "))
 	}
+}
+
+func TestOpenAPITagDefinitionsMatchOperations(t *testing.T) {
+	document, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Operations", "Private"}
+	if got := topLevelTagNames(string(document)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("top-level tags = %v, want %v", got, want)
+	}
+	if got := operationTagNames(string(document)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("operation tags = %v, want %v", got, want)
+	}
+}
+
+func topLevelTagNames(document string) []string {
+	head, _, _ := strings.Cut(document, "paths:\n")
+	var tags []string
+	for _, line := range strings.Split(head, "\n") {
+		if strings.HasPrefix(line, "  - name: ") {
+			tags = append(tags, strings.TrimPrefix(line, "  - name: "))
+		}
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func operationTagNames(document string) []string {
+	tags := map[string]bool{}
+	for _, match := range regexp.MustCompile(`(?m)^      tags: \[([^]]+)\]$`).FindAllStringSubmatch(document, -1) {
+		tags[match[1]] = true
+	}
+	result := make([]string, 0, len(tags))
+	for tag := range tags {
+		result = append(result, tag)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func TestOpenAPIRejectsInvalidCatalogContracts(t *testing.T) {
