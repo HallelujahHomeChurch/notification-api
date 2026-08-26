@@ -79,6 +79,8 @@ assert_contains "${workflow}" 'vars\.SMTP_FROM' "SMTP_FROM must come from reposi
 assert_contains "${workflow}" 'vars\.VAPID_PUBLIC_KEY' "VAPID_PUBLIC_KEY must come from repository variables"
 assert_contains "${workflow}" 'vars\.VAPID_SUBJECT' "VAPID_SUBJECT must come from repository variables"
 assert_contains "${bicep}" "param smtpFromName string = '哈利路亞家教會'" "SMTP sender display name must remain branded"
+assert_contains "${bicep}" "NOTIFICATION_ALLOWED_CALLERS', value: 'account-api,engagement-api'" "notification callers must match contract"
+assert_not_contains "${bicep}" "NOTIFICATION_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,engagement-api'" "hhc-web-api must not call notification directly"
 assert_contains "${bicep}" "name: 'SMTP_FROM_NAME', value: smtpFromName" "worker must receive the branded SMTP sender name"
 assert_contains "${bicep}" 'minReplicas: 1' "notification worker must avoid scale-to-zero delivery latency"
 assert_contains "${workflow}" 'vars\.SMTP_AUTHENTICATION_ENABLED' "SMTP auth flag must come from repository variables"

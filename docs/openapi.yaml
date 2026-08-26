@@ -11,10 +11,6 @@ servers:
   - url: /v1.0/invoke/notification-api/method
     description: Dapr sidecar invocation base available to authorized service callers only.
 tags:
-  - name: Public
-    description: Browser-callable public operations.
-  - name: Admin
-    description: Protected staff operations.
   - name: Private
     description: Service-to-service operations invoked through Dapr.
   - name: Operations
