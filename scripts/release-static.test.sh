@@ -260,7 +260,7 @@ run_openapi_publication_case() {
           if [ -e "$blob" ] && [ "$overwrite" = false ]; then return 1; fi
           mkdir -p "$(dirname "$blob")"
           cp "$file" "$blob"
-          if [ "$name" = current.json ]; then printf pointer-upload\n >> "$POINTER_CASE_DIR/uploads"; else printf spec-upload\n >> "$POINTER_CASE_DIR/uploads"; fi
+          if [ "$name" = current.json ]; then printf "%s\n" pointer-upload >> "$POINTER_CASE_DIR/uploads"; else printf "%s\n" spec-upload >> "$POINTER_CASE_DIR/uploads"; fi
           ;;
       esac
     }
