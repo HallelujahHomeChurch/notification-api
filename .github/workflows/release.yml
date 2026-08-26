@@ -13,6 +13,12 @@ on:
       - infra/**
       - scripts/**
   workflow_dispatch:
+    inputs:
+      fail_openapi_before_pointer:
+        description: Test last-good API docs pointer preservation
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -249,6 +255,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      commit: ${{ steps.release_outputs.outputs.commit }}
+      image: ${{ steps.release_outputs.outputs.image }}
     env:
       IMAGE_REF: ${{ needs.plan.outputs.image_ref }}
       RESOURCE_GROUP: alive
@@ -602,6 +611,13 @@ jobs:
             exit 1
           fi
 
+      - name: Capture healthy release
+        id: release_outputs
+        shell: bash
+        run: |
+          echo "commit=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "image=${IMAGE_REF}" >> "${GITHUB_OUTPUT}"
+
       - name: Roll back runtime after failed deployment verification
         if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
         shell: bash
@@ -648,3 +664,146 @@ jobs:
           rollback "${API_APP_NAME}" "${PREVIOUS_API_REVISION}" "${PREVIOUS_API_IMAGE}" || rollback_status=1
           rollback "${WORKER_APP_NAME}" "${PREVIOUS_WORKER_REVISION}" "${PREVIOUS_WORKER_IMAGE}" || rollback_status=1
           exit "${rollback_status}"
+
+  publish_openapi:
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STORAGE_ACCOUNT: hhcapidocsprod
+      CONTAINER: api-docs-notification-api
+      API_DOCS_AZURE_CLIENT_ID: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      RELEASE_COMMIT: ${{ needs.deploy.outputs.commit }}
+      RELEASE_IMAGE: ${{ needs.deploy.outputs.image }}
+      FAIL_OPENAPI_BEFORE_POINTER: ${{ inputs.fail_openapi_before_pointer && github.run_attempt == 1 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate publication configuration
+        shell: bash
+        run: |
+          [[ "${RELEASE_COMMIT}" == "${GITHUB_SHA}" ]]
+          [[ "${RELEASE_IMAGE}" == alive.azurecr.io/alive/notification-api@sha256:* ]]
+          for name in API_DOCS_AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
+            test -n "${!name:-}" || { echo "Missing repository variable: ${name}" >&2; exit 1; }
+          done
+      - name: Sign in with API docs publisher identity
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.API_DOCS_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Publish production OpenAPI contract
+        shell: bash
+        run: |
+          spec_blob="specs/${GITHUB_SHA}/openapi.yaml"
+          spec_sha256="$(sha256sum docs/openapi.yaml | cut -d " " -f 1)"
+          is_canonical_run_id() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
+          if ! is_canonical_run_id "${GITHUB_RUN_ID}"; then
+            echo "Invalid GITHUB_RUN_ID: expected canonical positive decimal" >&2
+            exit 1
+          fi
+          spec_exists="$(az storage blob exists \
+            --account-name "${STORAGE_ACCOUNT}" \
+            --container-name "${CONTAINER}" \
+            --name "${spec_blob}" \
+            --auth-mode login \
+            --only-show-errors \
+            --query exists \
+            --output tsv)"
+          if [[ "${spec_exists}" == "true" ]]; then
+            existing_spec="$(mktemp)"
+            az storage blob download \
+              --account-name "${STORAGE_ACCOUNT}" \
+              --container-name "${CONTAINER}" \
+              --name "${spec_blob}" \
+              --file "${existing_spec}" \
+              --auth-mode login \
+              --no-progress \
+              --only-show-errors \
+              --output none
+            [[ "$(sha256sum "${existing_spec}" | cut -d " " -f 1)" == "${spec_sha256}" ]] || {
+              echo "Existing OpenAPI spec hash does not match" >&2
+              exit 1
+            }
+          else
+            az storage blob upload \
+              --account-name "${STORAGE_ACCOUNT}" \
+              --container-name "${CONTAINER}" \
+              --name "${spec_blob}" \
+              --file docs/openapi.yaml \
+              --auth-mode login \
+              --overwrite false \
+              --only-show-errors \
+              --output none
+          fi
+
+          jq -n \
+            --arg service notification-api \
+            --arg commit "${RELEASE_COMMIT}" \
+            --arg image "${RELEASE_IMAGE}" \
+            --arg specBlob "${spec_blob}" \
+            --arg specSha256 "${spec_sha256}" \
+            --arg releaseUrl "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg publishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{schemaVersion: 1, service: $service, commit: $commit, image: $image, specBlob: $specBlob, specSha256: $specSha256, releaseUrl: $releaseUrl, publishedAt: $publishedAt}' \
+            > current.json
+
+          if [[ "${FAIL_OPENAPI_BEFORE_POINTER}" == "true" ]]; then
+            echo "Requested failure before API docs pointer upload" >&2
+            exit 1
+          fi
+
+          pointer_exists="$(az storage blob exists \
+            --account-name "${STORAGE_ACCOUNT}" \
+            --container-name "${CONTAINER}" \
+            --name current.json \
+            --auth-mode login \
+            --only-show-errors \
+            --query exists \
+            --output tsv)"
+          if [[ "${pointer_exists}" == "true" ]]; then
+            current_pointer="$(mktemp)"
+            az storage blob download \
+              --account-name "${STORAGE_ACCOUNT}" \
+              --container-name "${CONTAINER}" \
+              --name current.json \
+              --file "${current_pointer}" \
+              --auth-mode login \
+              --no-progress \
+              --only-show-errors \
+              --output none
+            current_run_id="$(jq -er --arg release_url_prefix "https://github.com/${GITHUB_REPOSITORY}/actions/runs/" '
+              .releaseUrl? as $release_url
+              | if ($release_url | type) == "string" and ($release_url | startswith($release_url_prefix))
+                then ($release_url | ltrimstr($release_url_prefix))
+                else empty
+                end
+            ' "${current_pointer}" 2>/dev/null)" || {
+              echo "Invalid existing API docs pointer: expected canonical GitHub workflow run ID" >&2
+              exit 1
+            }
+            if ! is_canonical_run_id "${current_run_id}"; then
+              echo "Invalid existing API docs pointer: expected canonical GitHub workflow run ID" >&2
+              exit 1
+            fi
+            export LC_ALL=C
+            if [[ ${#current_run_id} -gt ${#GITHUB_RUN_ID} ]] || { [[ ${#current_run_id} -eq ${#GITHUB_RUN_ID} ]] && [[ "${current_run_id}" > "${GITHUB_RUN_ID}" || "${current_run_id}" == "${GITHUB_RUN_ID}" ]]; }; then
+              echo "API docs pointer already belongs to workflow run ${current_run_id}; skipping stale or rerun publication"
+              exit 0
+            fi
+          fi
+
+          az storage blob upload \
+            --account-name "${STORAGE_ACCOUNT}" \
+            --container-name "${CONTAINER}" \
+            --name current.json \
+            --file current.json \
+            --auth-mode login \
+            --overwrite true \
+            --only-show-errors \
+            --output none
