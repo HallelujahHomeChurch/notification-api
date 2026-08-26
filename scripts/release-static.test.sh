@@ -47,7 +47,7 @@ assert_contains "${workflow}" '(?s)  plan:\n.*?    needs: verify\n.*?    permiss
 assert_contains "${workflow}" '(?s)  deploy:\n.*?    needs: plan\n.*?    environment: production\n.*?    permissions:\n      contents: read\n      id-token: write' "deploy must depend on plan, require production approval, and receive fresh OIDC"
 grep -Fq 'if: ${{ vars.PRODUCTION_DEPLOY_ENABLED == '\''true'\'' }}' "${workflow}" ||
   fail "deploy must remain disabled until the protected production gate is configured"
-[[ "$(grep -Ec 'id-token:[[:space:]]*write' "${workflow}")" == "2" ]] || fail "plan and deploy must each receive OIDC"
+[[ "$(grep -Ec 'id-token:[[:space:]]*write' "${workflow}")" == "3" ]] || fail "plan, deploy, and docs publication must each receive OIDC"
 assert_contains "${workflow}" 'group:[[:space:]]*notification-production' "production concurrency group is missing"
 assert_contains "${workflow}" 'cancel-in-progress:[[:space:]]*false' "production releases must not cancel in progress"
 assert_contains "${workflow}" 'POSTGRES_DB:[[:space:]]*notification_test' "Postgres test database is missing"
@@ -196,5 +196,154 @@ do
     "resource ${resource} '[^']+' = if \\(provisionPermissions\\)" \
     "${resource} must be conditional"
 done
+
+assert_contains "${workflow}" '(?s)  deploy:\n.*?outputs:\n      commit: \$\{\{ steps\.release_outputs\.outputs\.commit \}\}\n      image: \$\{\{ steps\.release_outputs\.outputs\.image \}\}' "deploy must expose the production commit and image"
+assert_contains "${workflow}" '(?s)  publish_openapi:\n.*?needs: deploy\n.*?environment: production\n.*?contents: read\n      id-token: write' "docs publication must depend on the production deploy and use production OIDC"
+assert_contains "${workflow}" 'CONTAINER:[[:space:]]*api-docs-notification-api' "docs publication must use the notification container"
+assert_contains "${workflow}" 'RELEASE_COMMIT:[[:space:]]*\$\{\{ needs\.deploy\.outputs\.commit \}\}' "docs publication must consume the deployed commit"
+assert_contains "${workflow}" 'RELEASE_IMAGE:[[:space:]]*\$\{\{ needs\.deploy\.outputs\.image \}\}' "docs publication must consume the deployed image"
+assert_contains "${workflow}" 'inputs\.fail_openapi_before_pointer && github\.run_attempt == 1' "failure injection must apply only to the first workflow attempt"
+
+publish_job="$(sed -n '/^  publish_openapi:/,$p' "${workflow}")"
+printf '%s\n' "${publish_job}" | grep -q 'specs/${GITHUB_SHA}/openapi.yaml' || fail "immutable spec path is missing"
+printf '%s\n' "${publish_job}" | grep -q -- '--overwrite false' || fail "immutable spec upload must reject overwrite"
+printf '%s\n' "${publish_job}" | grep -q -- '--name current.json' || fail "current pointer upload is missing"
+printf '%s\n' "${publish_job}" | grep -q -- '--overwrite true' || fail "current pointer must be replaceable"
+
+workflow_body="$(sed -n '/^          spec_blob="specs\//,$p' "${workflow}" | sed 's/^          //')"
+run_openapi_publication_case() {
+  local pointer_json="$1"
+  local candidate_run_id="$2"
+  local expected="$3"
+  local failure_injection="${4:-false}"
+  local spec_fixture="${5:-missing}"
+  local case_dir
+  case_dir="$(mktemp -d)"
+  mkdir -p "${case_dir}/pointer"
+  ln -s "${repo_root}/docs/openapi.yaml" "${case_dir}/docs-openapi.yaml"
+  if [[ "${pointer_json}" != missing ]]; then
+    printf '%s\n' "${pointer_json}" > "${case_dir}/pointer/current.json"
+    cp "${case_dir}/pointer/current.json" "${case_dir}/expected-current.json"
+  fi
+  case "${spec_fixture}" in
+    identical)
+      mkdir -p "${case_dir}/blobs/specs/0123456789abcdef0123456789abcdef01234567"
+      cp "${repo_root}/docs/openapi.yaml" "${case_dir}/blobs/specs/0123456789abcdef0123456789abcdef01234567/openapi.yaml"
+      ;;
+    different)
+      mkdir -p "${case_dir}/blobs/specs/0123456789abcdef0123456789abcdef01234567"
+      printf 'different spec\n' > "${case_dir}/blobs/specs/0123456789abcdef0123456789abcdef01234567/openapi.yaml"
+      ;;
+  esac
+
+  local output status
+  if output="$(POINTER_CASE_DIR="${case_dir}" WORKFLOW_BODY="${workflow_body}" GITHUB_RUN_ID="${candidate_run_id}" GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 GITHUB_REPOSITORY=HallelujahHomeChurch/notification-api RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 RELEASE_IMAGE=alive.azurecr.io/alive/notification-api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef FAIL_OPENAPI_BEFORE_POINTER="${failure_injection}" bash -e -c '
+    az() {
+      command="$1 $2 $3"
+      name=""
+      file=""
+      overwrite=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --name) name="$2"; shift 2 ;;
+          --file) file="$2"; shift 2 ;;
+          --overwrite) overwrite="$2"; shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      blob="$POINTER_CASE_DIR/pointer/current.json"
+      if [ "$name" != current.json ]; then blob="$POINTER_CASE_DIR/blobs/$name"; fi
+      case "$command" in
+        "storage blob exists") if [ -f "$blob" ]; then printf true; else printf false; fi ;;
+        "storage blob download") cp "$blob" "$file" ;;
+        "storage blob upload")
+          if [ -e "$blob" ] && [ "$overwrite" = false ]; then return 1; fi
+          mkdir -p "$(dirname "$blob")"
+          cp "$file" "$blob"
+          if [ "$name" = current.json ]; then printf pointer-upload\n >> "$POINTER_CASE_DIR/uploads"; else printf spec-upload\n >> "$POINTER_CASE_DIR/uploads"; fi
+          ;;
+      esac
+    }
+    cd "$POINTER_CASE_DIR"
+    mkdir -p docs
+    ln -s ../docs-openapi.yaml docs/openapi.yaml
+    eval "$WORKFLOW_BODY"
+  ' 2>&1)"; then
+    status=0
+  else
+    status=$?
+  fi
+  local pointer_uploaded=false
+  if [[ -e "${case_dir}/uploads" ]] && grep -Fxq pointer-upload "${case_dir}/uploads"; then pointer_uploaded=true; fi
+
+  case "${expected}" in
+    upload)
+      [[ "${status}" -eq 0 && "${pointer_uploaded}" == true ]]
+      grep -Fq "/runs/${candidate_run_id}\"" "${case_dir}/pointer/current.json"
+      ;;
+    noop)
+      [[ "${status}" -eq 0 && "${pointer_uploaded}" == false ]]
+      cmp "${case_dir}/expected-current.json" "${case_dir}/pointer/current.json"
+      ;;
+    invalid-pointer)
+      [[ "${status}" -ne 0 && "${pointer_uploaded}" == false ]]
+      cmp "${case_dir}/expected-current.json" "${case_dir}/pointer/current.json"
+      grep -Fq 'Invalid existing API docs pointer: expected canonical GitHub workflow run ID' <<< "${output}"
+      ;;
+    invalid-candidate)
+      [[ "${status}" -ne 0 && "${pointer_uploaded}" == false ]]
+      grep -Fq 'Invalid GITHUB_RUN_ID: expected canonical positive decimal' <<< "${output}"
+      ;;
+    pre-pointer-failure)
+      [[ "${status}" -ne 0 && "${pointer_uploaded}" == false ]]
+      [[ ! -e "${case_dir}/pointer/current.json" ]]
+      grep -Fq 'Requested failure before API docs pointer upload' <<< "${output}"
+      ;;
+    spec-idempotent)
+      [[ "${status}" -eq 0 && "${pointer_uploaded}" == true ]]
+      [[ ! -e "${case_dir}/uploads" ]] || ! grep -Fxq spec-upload "${case_dir}/uploads"
+      ;;
+    spec-mismatch)
+      [[ "${status}" -ne 0 && "${pointer_uploaded}" == false ]]
+      cmp "${case_dir}/expected-current.json" "${case_dir}/pointer/current.json"
+      grep -Fq 'Existing OpenAPI spec hash does not match' <<< "${output}"
+      ;;
+    pre-pointer-preserve)
+      [[ "${status}" -ne 0 && "${pointer_uploaded}" == false ]]
+      cmp "${case_dir}/expected-current.json" "${case_dir}/pointer/current.json"
+      grep -Fq 'Requested failure before API docs pointer upload' <<< "${output}"
+      ;;
+  esac
+  rm -rf "${case_dir}"
+}
+
+valid_pointer='{"releaseUrl":"https://github.com/HallelujahHomeChurch/notification-api/actions/runs/20"}'
+run_openapi_publication_case missing 20 upload
+run_openapi_publication_case missing 20 pre-pointer-failure true
+run_openapi_publication_case "${valid_pointer}" 21 spec-idempotent false identical
+run_openapi_publication_case "${valid_pointer}" 21 spec-mismatch false different
+run_openapi_publication_case "${valid_pointer}" 21 pre-pointer-preserve true
+run_openapi_publication_case "${valid_pointer}" 19 noop
+run_openapi_publication_case "${valid_pointer}" 20 noop
+run_openapi_publication_case "${valid_pointer}" 21 upload
+run_openapi_publication_case '{' 22 invalid-pointer
+run_openapi_publication_case '{}' 22 invalid-pointer
+run_openapi_publication_case '{"releaseUrl":null}' 22 invalid-pointer
+run_openapi_publication_case '{"releaseUrl":"https://github.com/HallelujahHomeChurch/notification-api/actions/runs/09"}' 22 invalid-pointer
+run_openapi_publication_case '{"releaseUrl":"https://github.com/HallelujahHomeChurch/notification-api/actions/runs/0"}' 22 invalid-pointer
+run_openapi_publication_case '{"releaseUrl":"https://github.com/HallelujahHomeChurch/notification-api/actions/runs/99999999999999999999"}' 100000000000000000000 upload
+run_openapi_publication_case missing 0 invalid-candidate
+run_openapi_publication_case missing 01 invalid-candidate
+
+deploy_line="$(grep -n '^  deploy:' "${workflow}" | cut -d: -f1)"
+publish_line="$(grep -n '^  publish_openapi:' "${workflow}" | cut -d: -f1)"
+smoke_line="$(grep -n 'name: Verify Dapr readiness through API gateway' "${workflow}" | cut -d: -f1)"
+outputs_line="$(grep -n 'id: release_outputs' "${workflow}" | cut -d: -f1)"
+rollback_line="$(grep -n 'name: Roll back runtime after failed deployment verification' "${workflow}" | cut -d: -f1)"
+guard_line="$(grep -nF 'pointer_exists="$(az storage blob exists' "${workflow}" | cut -d: -f1)"
+guard_exit_line="$(awk '/skipping stale or rerun publication/ { getline; if ($0 ~ /^[[:space:]]*exit 0$/) print NR }' "${workflow}")"
+pointer_upload_line="$(awk '/az storage blob upload/ { upload = 1 } upload && /--file current.json/ { print NR; exit }' "${workflow}")"
+[[ "${smoke_line}" -lt "${outputs_line}" && "${outputs_line}" -lt "${rollback_line}" ]]
+[[ "${deploy_line}" -lt "${publish_line}" && "${guard_line}" -lt "${guard_exit_line}" && "${guard_exit_line}" -lt "${pointer_upload_line}" ]]
 
 echo "release static test ok"
