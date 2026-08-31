@@ -216,6 +216,7 @@ do
 done
 
 assert_contains "${workflow}" '(?s)  deploy:\n.*?outputs:\n      commit: \$\{\{ steps\.release_outputs\.outputs\.commit \}\}\n      image: \$\{\{ steps\.release_outputs\.outputs\.image \}\}' "deploy must expose the production commit and image"
+assert_contains "${workflow}" '(?s)  plan:\n.*?Validate release configuration.*?\[\[ "\$GITHUB_REF" == "refs/heads/main" \]\]' "release planning must reject non-main refs before Azure login"
 assert_contains "${workflow}" '(?s)  publish_openapi:\n.*?needs: deploy\n.*?environment: production\n.*?contents: read\n      id-token: write' "docs publication must depend on the production deploy and use production OIDC"
 assert_contains "${workflow}" 'CONTAINER:[[:space:]]*api-docs-notification-api' "docs publication must use the notification container"
 assert_contains "${workflow}" 'RELEASE_COMMIT:[[:space:]]*\$\{\{ needs\.deploy\.outputs\.commit \}\}' "docs publication must consume the deployed commit"
