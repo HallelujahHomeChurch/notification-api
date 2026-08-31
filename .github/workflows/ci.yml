@@ -38,6 +38,17 @@ jobs:
       - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
           node-version: 24
+      - name: Scan dependencies
+        run: |
+          trivy_cache="$RUNNER_TEMP/trivy-cache"
+          mkdir -p "$trivy_cache"
+          echo "TRIVY_CACHE=$trivy_cache" >> "$GITHUB_ENV"
+          docker run --rm \
+            -v "$PWD:/workspace:ro" \
+            -v "$trivy_cache:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            --skip-dirs /workspace/.git --skip-dirs /workspace/node_modules /workspace
       - name: Lint OpenAPI
         run: npx --yes @redocly/cli@2.47.0 lint docs/openapi.yaml
       - name: Verify
@@ -46,3 +57,12 @@ jobs:
           go test -tags=integration ./... -count=1
           go vet ./...
           bash scripts/release-static.test.sh
+      - name: Build image
+        run: docker build -t notification-api:verify .
+      - name: Scan image
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$TRIVY_CACHE:/root/.cache/trivy" \
+            ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 notification-api:verify
