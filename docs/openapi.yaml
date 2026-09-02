@@ -55,6 +55,88 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NotReadyErrorResponse'
+  /priv/dsr/exports:
+    post:
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api]
+      operationId: exportDSRNotificationRecords
+      summary: Export redacted Notification records for a verified Account email
+      description: Canonical email is accepted only to derive internal retained hash-key lookups. Responses contain notification metadata only.
+      security:
+        - daprCaller: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DSRExportRequest' }
+      responses:
+        '200':
+          description: Keyset-paged notification metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DSRExportResponse' }
+        '400':
+          description: Invalid DSR request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidRequestErrorResponse' }
+        '401':
+          description: Dapr caller identity is missing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnauthorizedErrorResponse' }
+        '403':
+          description: Caller is not account-api.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ForbiddenErrorResponse' }
+        '500':
+          description: Notification metadata could not be read.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InternalErrorResponse' }
+  /priv/dsr/actions:
+    post:
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api]
+      operationId: applyDSRNotificationAction
+      summary: Apply a Notification DSR action for a verified Account email
+      description: Erasure tombstones attributed target and payload data while retaining ordinary delivery receipt metadata. Restrict processing is not applicable because Notification does not own consent or targeting.
+      security:
+        - daprCaller: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DSRActionRequest' }
+      responses:
+        '200':
+          description: Terminal DSR action result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DSRActionResponse' }
+        '400':
+          description: Invalid DSR request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidRequestErrorResponse' }
+        '401':
+          description: Dapr caller identity is missing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnauthorizedErrorResponse' }
+        '403':
+          description: Caller is not account-api.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ForbiddenErrorResponse' }
+        '500':
+          description: Notification DSR action could not be applied.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InternalErrorResponse' }
   /priv/notifications/send:
     post:
       tags: [Private]
@@ -321,6 +403,87 @@ components:
       properties:
         requestId:
           type: string
+    DSRExportRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, userId, canonicalEmail]
+      properties:
+        requestId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        canonicalEmail: { type: string, format: email, minLength: 1, description: Verified Account canonical email; accepted only by notification-api to derive retained hash-key lookups. }
+        cursor: { type: string, maxLength: 1024 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+    DSRActionRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, userId, canonicalEmail, action, idempotencyKey]
+      properties:
+        requestId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        canonicalEmail: { type: string, format: email, minLength: 1, description: Verified Account canonical email; accepted only by notification-api to derive retained hash-key lookups. }
+        action: { type: string, enum: [restrict_processing, erase] }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    DSRExportResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta, error]
+      properties:
+        data: { $ref: '#/components/schemas/DSRExportPage' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+        error: { type: 'null' }
+    DSRActionResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta, error]
+      properties:
+        data: { $ref: '#/components/schemas/DSRActionResult' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+        error: { type: 'null' }
+    DSRExportPage:
+      type: object
+      additionalProperties: false
+      required: [records, recordCount, exceptions]
+      properties:
+        records:
+          type: array
+          items: { $ref: '#/components/schemas/DSRExportRecord' }
+        nextCursor: { type: string }
+        recordCount: { type: integer, minimum: 0 }
+        exceptions:
+          type: array
+          items: { $ref: '#/components/schemas/DSRException' }
+    DSRExportRecord:
+      type: object
+      additionalProperties: false
+      required: [recordType, recordKey, templateId, channel, status, createdAt, updatedAt]
+      properties:
+        recordType: { const: notification_message }
+        recordKey: { type: string, format: uuid }
+        templateId: { type: string }
+        channel: { type: string, enum: [email, web_push] }
+        status: { $ref: '#/components/schemas/MessageStatus' }
+        deliveryStatus: { $ref: '#/components/schemas/MessageStatus' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    DSRException:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code: { type: string }
+        count: { type: integer, format: int64, minimum: 0 }
+    DSRActionResult:
+      type: object
+      additionalProperties: false
+      required: [owner, action, status, recordCount, reasonCodes]
+      properties:
+        owner: { const: notification-api }
+        action: { type: string, enum: [restrict_processing, erase] }
+        status: { type: string, enum: [completed, not_applicable] }
+        recordCount: { type: integer, format: int64, minimum: 0 }
+        reasonCodes:
+          type: array
+          items: { type: string }
     ErrorResponse:
       type: object
       additionalProperties: false

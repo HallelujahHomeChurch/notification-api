@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
 )
 
@@ -41,6 +42,52 @@ func (f *fakeService) Get(ctx context.Context, caller, messageID string) (servic
 type fakePinger struct {
 	calls int
 	err   error
+}
+
+type fakeDSR struct{}
+
+func (fakeDSR) Export(context.Context, dsr.ExportRequest) (dsr.ExportPage, error) {
+	return dsr.ExportPage{Records: []dsr.ExportRecord{}, Exceptions: []dsr.Exception{}}, nil
+}
+
+func (fakeDSR) Apply(_ context.Context, request dsr.ActionRequest) (dsr.ActionResult, error) {
+	return dsr.ActionResult{Owner: "notification-api", Action: request.Action, Status: "not_applicable", ReasonCodes: []string{"ordinary_receipt_retention"}}, nil
+}
+
+func TestDSRRoutesRequireExactAccountCallerAndStrictActionEnvelope(t *testing.T) {
+	handler := New(&fakeService{}, &fakePinger{}, []string{"account-api", "engagement-api"}, false, fakeDSR{})
+	export := `{"requestId":"019fd684-994e-798a-b5bc-62c535337fee","userId":"6d387ca2-dfa0-4713-8fa5-490c1c9f8304","canonicalEmail":"member@example.test"}`
+	for _, test := range []struct {
+		name, caller, path, body string
+		status                   int
+	}{
+		{name: "other allowed caller", caller: "engagement-api", path: "/priv/dsr/exports", body: export, status: http.StatusForbidden},
+		{name: "missing caller", path: "/priv/dsr/exports", body: export, status: http.StatusUnauthorized},
+		{name: "missing idempotency key", caller: "account-api", path: "/priv/dsr/actions", body: `{"requestId":"019fd684-994e-798a-b5bc-62c535337fee","userId":"6d387ca2-dfa0-4713-8fa5-490c1c9f8304","canonicalEmail":"member@example.test","action":"erase"}`, status: http.StatusBadRequest},
+		{name: "unknown field", caller: "account-api", path: "/priv/dsr/exports", body: export[:len(export)-1] + `,"unknown":true}`, status: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			request.Header.Set("Dapr-Caller-App-Id", test.caller)
+			response := serve(handler, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, test.status, response.Body)
+			}
+		})
+	}
+}
+
+func TestDSRRestrictProcessingReturnsTerminalNotApplicable(t *testing.T) {
+	handler := New(&fakeService{}, &fakePinger{}, []string{"account-api"}, false, fakeDSR{})
+	request := httptest.NewRequest(http.MethodPost, "/priv/dsr/actions", strings.NewReader(`{"requestId":"019fd684-994e-798a-b5bc-62c535337fee","userId":"6d387ca2-dfa0-4713-8fa5-490c1c9f8304","canonicalEmail":"member@example.test","action":"restrict_processing","idempotencyKey":"action-1"}`))
+	request.Header.Set("Dapr-Caller-App-Id", "account-api")
+	response := serve(handler, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body)
+	}
+	if data := decodeEnvelope(t, response).Data; data["owner"] != "notification-api" || data["status"] != "not_applicable" {
+		t.Fatalf("data=%#v", data)
+	}
 }
 
 func (p *fakePinger) PingContext(context.Context) error {

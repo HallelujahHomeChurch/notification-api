@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -20,6 +21,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
+	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
 	"github.com/HallelujahHomeChurch/notification-api/internal/store"
@@ -54,6 +56,83 @@ func TestPostgresLedger(t *testing.T) {
 	}
 
 	testSkipLocked(t, ctx, scoped)
+}
+
+func TestPostgresDSRExportAndEraseAcrossHashRotation(t *testing.T) {
+	ctx := context.Background()
+	admin, db := testDatabases(t)
+	defer admin.Close()
+	defer db.Close()
+	if err := migrations.Run(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	email := "member@example.test"
+	encryptionKeys := map[string][]byte{"v1": bytes.Repeat([]byte{1}, 32), "v2": bytes.Repeat([]byte{2}, 32)}
+	hashKeys := map[string][]byte{"v1": bytes.Repeat([]byte{3}, 32), "v2": bytes.Repeat([]byte{4}, 32)}
+	request := integrationRequest(email, "dsr-user")
+	first := service.New(store.NewWithHashKeys(db, map[string][]byte{"v1": hashKeys["v1"]}), service.Config{
+		ActiveEncryptionKeyID: "v1", EncryptionKeys: encryptionKeys, ActiveHashKeyID: "v1", HashKeys: map[string][]byte{"v1": hashKeys["v1"]},
+	})
+	messageV1, err := first.Send(ctx, "account-api", "dsr-v1", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Resource.ID = "dsr-user-v2"
+	second := service.New(store.NewWithHashKeys(db, hashKeys), service.Config{
+		ActiveEncryptionKeyID: "v2", EncryptionKeys: encryptionKeys, ActiveHashKeyID: "v2", HashKeys: hashKeys,
+	})
+	messageV2, err := second.Send(ctx, "account-api", "dsr-v2", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE notification_deliveries SET provider_message_id='receipt-id', status='sent' WHERE message_id IN ($1,$2)`, messageV1.MessageID, messageV2.MessageID); err != nil {
+		t.Fatal(err)
+	}
+
+	owner := dsr.New(db, hashKeys)
+	requestID, userID := uuid.NewString(), uuid.NewString()
+	page, err := owner.Export(ctx, dsr.ExportRequest{RequestID: requestID, UserID: userID, Email: " MEMBER@EXAMPLE.TEST ", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.RecordCount != 2 || len(page.Records) != 2 {
+		t.Fatalf("export=%#v", page)
+	}
+	encoded, err := json.Marshal(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"ciphertext", "provider", "endpoint", "receipt-id", "verifyUrl"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("export leaked %q: %s", forbidden, encoded)
+		}
+	}
+
+	result, err := owner.Apply(ctx, dsr.ActionRequest{RequestID: requestID, UserID: userID, Email: email, Action: "erase", IdempotencyKey: "dsr-erase"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "completed" || result.RecordCount != 2 {
+		t.Fatalf("erase=%#v", result)
+	}
+	page, err = owner.Export(ctx, dsr.ExportRequest{RequestID: requestID, UserID: userID, Email: email})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.RecordCount != 0 {
+		t.Fatalf("erased records=%#v", page.Records)
+	}
+	var tombstones, receipts int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM notification_messages WHERE target_hash=repeat('0',64) AND octet_length(target_ciphertext)=0 AND octet_length(payload_ciphertext)=0`).Scan(&tombstones); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM notification_deliveries WHERE provider_message_id='receipt-id' AND status='sent'`).Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if tombstones != 2 || receipts != 2 {
+		t.Fatalf("tombstones=%d receipts=%d", tombstones, receipts)
+	}
 }
 
 func testKeyRotationCompatibility(t *testing.T, ctx context.Context, db *sql.DB) {
