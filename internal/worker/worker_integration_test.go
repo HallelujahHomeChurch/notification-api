@@ -142,7 +142,7 @@ func TestPostgresEraseWaitsForClaimedProviderCall(t *testing.T) {
 		})
 		eraseDone <- err
 	}()
-	waitForAdvisoryWaiters(t, db, 1)
+	waitForAdvisoryWaiters(t, db, "notification-dsr-delivery:"+deliveryID, 1)
 	select {
 	case err := <-eraseDone:
 		t.Fatalf("erase returned before provider call completed: %v", err)
@@ -211,7 +211,7 @@ func TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable(t *testing.T) {
 		})
 		eraseDone <- err
 	}()
-	waitForAdvisoryWaiters(t, db, 1)
+	waitForAdvisoryWaiters(t, db, "notification-dsr-delivery:"+deliveryID, 1)
 
 	message := &fakeMessage{id: deliveryID}
 	err = New(db, &integrationProvider{}, key).Process(context.Background(), message)
@@ -237,6 +237,43 @@ func TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable(t *testing.T) {
 	}
 	if status != statusQueued {
 		t.Fatalf("delivery status = %q, want %q", status, statusQueued)
+	}
+}
+
+func TestAdvisoryWaiterCountIgnoresUnrelatedLock(t *testing.T) {
+	db := workerTestDatabase(t)
+	lockKey := "unrelated-advisory-lock"
+	holder, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	waiter, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer waiter.Close()
+	if _, err := holder.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtextextended($1,0))`, lockKey); err != nil {
+		t.Fatal(err)
+	}
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := waiter.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtextextended($1,0))`, lockKey)
+		waiterDone <- err
+	}()
+	defer func() {
+		_, _ = holder.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey)
+		if err := <-waiterDone; err != nil {
+			t.Error(err)
+		}
+	}()
+
+	count, err := advisoryWaiterCount(context.Background(), db, "notification-dsr-delivery:target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("target advisory waiters = %d, want 0", count)
 	}
 }
 
@@ -464,20 +501,15 @@ func resetWorkerTables(t *testing.T, db *sql.DB) {
 	}
 }
 
-func waitForAdvisoryWaiters(t *testing.T, db *sql.DB, want int) {
+func waitForAdvisoryWaiters(t *testing.T, db *sql.DB, lockKey string, want int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var waiters int
-		if err := db.QueryRowContext(ctx, `
-			SELECT count(*)
-			FROM pg_locks
-			WHERE locktype='advisory'
-			  AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
-			  AND NOT granted`).Scan(&waiters); err != nil {
+		waiters, err := advisoryWaiterCount(ctx, db, lockKey)
+		if err != nil {
 			t.Fatalf("count advisory waiters: %v", err)
 		}
 		if waiters >= want {
@@ -489,6 +521,19 @@ func waitForAdvisoryWaiters(t *testing.T, db *sql.DB, want int) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func advisoryWaiterCount(ctx context.Context, db *sql.DB, lockKey string) (int, error) {
+	var waiters int
+	err := db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM pg_locks
+		WHERE locktype='advisory'
+		  AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+		  AND classid=(((hashtextextended($1,0) >> 32) & 4294967295)::oid)
+		  AND objid=((hashtextextended($1,0) & 4294967295)::oid)
+		  AND NOT granted`, lockKey).Scan(&waiters)
+	return waiters, err
 }
 
 func insertWorkerDelivery(
