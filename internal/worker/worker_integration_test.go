@@ -240,9 +240,14 @@ func TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable(t *testing.T) {
 	}
 }
 
-func TestAdvisoryWaiterCountIgnoresUnrelatedLock(t *testing.T) {
+func TestAdvisoryWaiterCountIgnoresTwoIntLockWithMatchingHalves(t *testing.T) {
 	db := workerTestDatabase(t)
-	lockKey := "unrelated-advisory-lock"
+	lockKey := "notification-dsr-delivery:target"
+	var lockID int64
+	if err := db.QueryRow(`SELECT hashtextextended($1,0)`, lockKey).Scan(&lockID); err != nil {
+		t.Fatal(err)
+	}
+	classID, objectID := int32(lockID>>32), int32(lockID)
 	holder, err := db.Conn(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -253,22 +258,27 @@ func TestAdvisoryWaiterCountIgnoresUnrelatedLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer waiter.Close()
-	if _, err := holder.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtextextended($1,0))`, lockKey); err != nil {
+	var waiterPID int
+	if err := waiter.QueryRowContext(context.Background(), `SELECT pg_backend_pid()`).Scan(&waiterPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.ExecContext(context.Background(), `SELECT pg_advisory_lock($1,$2)`, classID, objectID); err != nil {
 		t.Fatal(err)
 	}
 	waiterDone := make(chan error, 1)
 	go func() {
-		_, err := waiter.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtextextended($1,0))`, lockKey)
+		_, err := waiter.ExecContext(context.Background(), `SELECT pg_advisory_lock($1,$2)`, classID, objectID)
 		waiterDone <- err
 	}()
 	defer func() {
-		_, _ = holder.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey)
+		_, _ = holder.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1,$2)`, classID, objectID)
 		if err := <-waiterDone; err != nil {
 			t.Error(err)
 		}
 	}()
 
-	count, err := advisoryWaiterCount(context.Background(), db, "notification-dsr-delivery:target")
+	waitForAdvisoryWaiter(t, db, waiterPID)
+	count, err := advisoryWaiterCount(context.Background(), db, lockKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,6 +533,36 @@ func waitForAdvisoryWaiters(t *testing.T, db *sql.DB, lockKey string, want int) 
 	}
 }
 
+func waitForAdvisoryWaiter(t *testing.T, db *sql.DB, waiterPID int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_locks
+				WHERE locktype='advisory'
+				  AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+				  AND pid=$1
+				  AND NOT granted
+			)`, waiterPID).Scan(&waiting); err != nil {
+			t.Fatalf("find advisory waiter: %v", err)
+		}
+		if waiting {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for advisory lock waiter: %v", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func advisoryWaiterCount(ctx context.Context, db *sql.DB, lockKey string) (int, error) {
 	var waiters int
 	err := db.QueryRowContext(ctx, `
@@ -532,6 +572,7 @@ func advisoryWaiterCount(ctx context.Context, db *sql.DB, lockKey string) (int, 
 		  AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
 		  AND classid=(((hashtextextended($1,0) >> 32) & 4294967295)::oid)
 		  AND objid=((hashtextextended($1,0) & 4294967295)::oid)
+		  AND objsubid=1
 		  AND NOT granted`, lockKey).Scan(&waiters)
 	return waiters, err
 }
