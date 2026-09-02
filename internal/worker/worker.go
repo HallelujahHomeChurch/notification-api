@@ -366,16 +366,8 @@ func (s postgresStore) claimFenced(
 		return claimResult{}, nil, err
 	}
 	if !locked {
-		var status string
-		err := conn.QueryRowContext(ctx, `SELECT status FROM notification_deliveries WHERE id=$1`, deliveryID).Scan(&status)
 		_ = conn.Close()
-		if errors.Is(err, sql.ErrNoRows) {
-			return claimResult{}, nil, nil
-		}
-		if err != nil {
-			return claimResult{}, nil, err
-		}
-		return claimResult{Status: status}, nil, nil
+		return claimResult{}, nil, errors.New("delivery DSR fence held")
 	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {

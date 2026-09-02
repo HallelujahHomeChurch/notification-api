@@ -79,8 +79,11 @@ func TestPostgresLeaseExcludesConcurrentWorkersAndRecoversAfterExpiry(t *testing
 	); err != nil {
 		t.Fatalf("expire in-flight message: %v", err)
 	}
-	if err := New(db, secondProvider, key).Process(context.Background(), secondMessage); err != nil {
-		t.Fatalf("second Process() error = %v", err)
+	if err := New(db, secondProvider, key).Process(context.Background(), secondMessage); err == nil {
+		t.Fatal("second Process() error = nil while delivery fence is held")
+	}
+	if secondMessage.completed != 0 || secondMessage.deadLettered != 0 {
+		t.Fatalf("second settlement complete=%d dead-letter=%d", secondMessage.completed, secondMessage.deadLettered)
 	}
 	close(release)
 	if err := <-firstDone; err != nil {
@@ -139,10 +142,11 @@ func TestPostgresEraseWaitsForClaimedProviderCall(t *testing.T) {
 		})
 		eraseDone <- err
 	}()
+	waitForAdvisoryWaiters(t, db, 1)
 	select {
 	case err := <-eraseDone:
 		t.Fatalf("erase returned before provider call completed: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 
 	close(allowProviderReturn)
@@ -163,6 +167,76 @@ func TestPostgresEraseWaitsForClaimedProviderCall(t *testing.T) {
 	}
 	if targetLength != 0 || payloadLength != 0 {
 		t.Fatalf("erased target=%d payload=%d", targetLength, payloadLength)
+	}
+}
+
+func TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable(t *testing.T) {
+	db := workerTestDatabase(t)
+	resetWorkerTables(t, db)
+	key := bytes.Repeat([]byte{1}, 32)
+	email := "user@example.com"
+	deliveryID := insertWorkerDelivery(t, db, key, statusQueued, 0, nil)
+	if _, err := db.Exec(`
+		UPDATE notification_messages AS message
+		SET hash_key_id='v1', target_hash=$2
+		FROM notification_deliveries AS delivery
+		WHERE delivery.id=$1 AND message.id=delivery.message_id`,
+		deliveryID, notificationcrypto.Hash(key, []byte(email)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	blocker, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	lockKey := "notification-dsr-delivery:" + deliveryID
+	if _, err := blocker.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtextextended($1,0))`, lockKey); err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_, _ = blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey)
+		}
+	}()
+
+	eraseCtx, cancelErase := context.WithCancel(context.Background())
+	defer cancelErase()
+	eraseDone := make(chan error, 1)
+	go func() {
+		_, err := dsr.New(db, map[string][]byte{"v1": key}).Apply(eraseCtx, dsr.ActionRequest{
+			RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "erase-rollback",
+		})
+		eraseDone <- err
+	}()
+	waitForAdvisoryWaiters(t, db, 1)
+
+	message := &fakeMessage{id: deliveryID}
+	err = New(db, &integrationProvider{}, key).Process(context.Background(), message)
+	if err == nil {
+		t.Fatal("Process() error = nil while erase holds the delivery fence")
+	}
+	if message.completed != 0 || message.deadLettered != 0 {
+		t.Fatalf("settlement complete=%d dead-letter=%d", message.completed, message.deadLettered)
+	}
+
+	cancelErase()
+	if err := <-eraseDone; err == nil {
+		t.Fatal("erase error = nil after cancellation")
+	}
+	if _, err := blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey); err != nil {
+		t.Fatal(err)
+	}
+	locked = false
+
+	var status string
+	if err := db.QueryRow(`SELECT status FROM notification_deliveries WHERE id=$1`, deliveryID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != statusQueued {
+		t.Fatalf("delivery status = %q, want %q", status, statusQueued)
 	}
 }
 
@@ -387,6 +461,33 @@ func resetWorkerTables(t *testing.T, db *sql.DB) {
 		         notification_messages, notification_rate_limits CASCADE`,
 	); err != nil {
 		t.Fatalf("reset worker tables: %v", err)
+	}
+}
+
+func waitForAdvisoryWaiters(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiters int
+		if err := db.QueryRowContext(ctx, `
+			SELECT count(*)
+			FROM pg_locks
+			WHERE locktype='advisory'
+			  AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+			  AND NOT granted`).Scan(&waiters); err != nil {
+			t.Fatalf("count advisory waiters: %v", err)
+		}
+		if waiters >= want {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for %d advisory waiters: %v", want, ctx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 
