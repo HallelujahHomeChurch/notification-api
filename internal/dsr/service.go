@@ -130,6 +130,9 @@ func (s *Service) Apply(ctx context.Context, request ActionRequest) (ActionResul
 			return ActionResult{}, err
 		}
 		defer tx.Rollback()
+		if err := lockDeliveries(ctx, tx, keyIDs, hashes); err != nil {
+			return ActionResult{}, err
+		}
 		result, err := tx.ExecContext(ctx, eraseQuery, keyIDs, hashes)
 		if err != nil {
 			return ActionResult{}, err
@@ -145,6 +148,44 @@ func (s *Service) Apply(ctx context.Context, request ActionRequest) (ActionResul
 	default:
 		return ActionResult{}, ErrInvalidRequest
 	}
+}
+
+func lockDeliveries(ctx context.Context, tx *sql.Tx, keyIDs, hashes []string) error {
+	rows, err := tx.QueryContext(ctx, `
+		WITH candidates AS (
+			SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, target_hash)
+		)
+		SELECT delivery.id
+		FROM notification_deliveries AS delivery
+		JOIN notification_messages AS message ON message.id=delivery.message_id
+		JOIN candidates ON candidates.hash_key_id=message.hash_key_id AND candidates.target_hash=message.target_hash
+		WHERE message.target_hash<>repeat('0',64)
+		ORDER BY delivery.id
+		FOR UPDATE OF delivery, message`, keyIDs, hashes)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "notification-dsr-delivery:"+id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validRequest(requestID, userID, email string) bool {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
+	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/google/uuid"
@@ -99,6 +100,69 @@ func TestPostgresLeaseExcludesConcurrentWorkersAndRecoversAfterExpiry(t *testing
 	}
 	if recovered.calls != 1 {
 		t.Fatalf("recovered provider calls = %d, want 1", recovered.calls)
+	}
+}
+
+func TestPostgresEraseWaitsForClaimedProviderCall(t *testing.T) {
+	db := workerTestDatabase(t)
+	resetWorkerTables(t, db)
+	key := bytes.Repeat([]byte{1}, 32)
+	email := "user@example.com"
+	deliveryID := insertWorkerDelivery(t, db, key, statusQueued, 0, nil)
+	if _, err := db.Exec(`
+		UPDATE notification_messages AS message
+		SET hash_key_id='v1', target_hash=$2
+		FROM notification_deliveries AS delivery
+		WHERE delivery.id=$1 AND message.id=delivery.message_id`,
+		deliveryID, notificationcrypto.Hash(key, []byte(email)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	providerStarted := make(chan struct{})
+	allowProviderReturn := make(chan struct{})
+	workerDone := make(chan error, 1)
+	provider := &integrationProvider{send: func(context.Context) (providers.ProviderReceipt, error) {
+		close(providerStarted)
+		<-allowProviderReturn
+		return providers.ProviderReceipt{Provider: "smtp"}, nil
+	}}
+	go func() {
+		workerDone <- New(db, provider, key).Process(context.Background(), &fakeMessage{id: deliveryID})
+	}()
+	<-providerStarted
+
+	eraseDone := make(chan error, 1)
+	go func() {
+		_, err := dsr.New(db, map[string][]byte{"v1": key}).Apply(context.Background(), dsr.ActionRequest{
+			RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "erase-race",
+		})
+		eraseDone <- err
+	}()
+	select {
+	case err := <-eraseDone:
+		t.Fatalf("erase returned before provider call completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowProviderReturn)
+	if err := <-workerDone; err != nil {
+		t.Fatalf("worker Process() error = %v", err)
+	}
+	if err := <-eraseDone; err != nil {
+		t.Fatalf("erase error = %v", err)
+	}
+	var targetLength, payloadLength int
+	if err := db.QueryRow(`
+		SELECT octet_length(message.target_ciphertext), octet_length(message.payload_ciphertext)
+		FROM notification_messages AS message
+		JOIN notification_deliveries AS delivery ON delivery.message_id=message.id
+		WHERE delivery.id=$1`, deliveryID,
+	).Scan(&targetLength, &payloadLength); err != nil {
+		t.Fatal(err)
+	}
+	if targetLength != 0 || payloadLength != 0 {
+		t.Fatalf("erased target=%d payload=%d", targetLength, payloadLength)
 	}
 }
 
