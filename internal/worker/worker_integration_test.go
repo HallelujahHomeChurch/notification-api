@@ -15,6 +15,7 @@ import (
 	"time"
 
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
+	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/google/uuid"
@@ -78,8 +79,11 @@ func TestPostgresLeaseExcludesConcurrentWorkersAndRecoversAfterExpiry(t *testing
 	); err != nil {
 		t.Fatalf("expire in-flight message: %v", err)
 	}
-	if err := New(db, secondProvider, key).Process(context.Background(), secondMessage); err != nil {
-		t.Fatalf("second Process() error = %v", err)
+	if err := New(db, secondProvider, key).Process(context.Background(), secondMessage); err == nil {
+		t.Fatal("second Process() error = nil while delivery fence is held")
+	}
+	if secondMessage.completed != 0 || secondMessage.deadLettered != 0 {
+		t.Fatalf("second settlement complete=%d dead-letter=%d", secondMessage.completed, secondMessage.deadLettered)
 	}
 	close(release)
 	if err := <-firstDone; err != nil {
@@ -99,6 +103,187 @@ func TestPostgresLeaseExcludesConcurrentWorkersAndRecoversAfterExpiry(t *testing
 	}
 	if recovered.calls != 1 {
 		t.Fatalf("recovered provider calls = %d, want 1", recovered.calls)
+	}
+}
+
+func TestPostgresEraseWaitsForClaimedProviderCall(t *testing.T) {
+	db := workerTestDatabase(t)
+	resetWorkerTables(t, db)
+	key := bytes.Repeat([]byte{1}, 32)
+	email := "user@example.com"
+	deliveryID := insertWorkerDelivery(t, db, key, statusQueued, 0, nil)
+	if _, err := db.Exec(`
+		UPDATE notification_messages AS message
+		SET hash_key_id='v1', target_hash=$2
+		FROM notification_deliveries AS delivery
+		WHERE delivery.id=$1 AND message.id=delivery.message_id`,
+		deliveryID, notificationcrypto.Hash(key, []byte(email)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	providerStarted := make(chan struct{})
+	allowProviderReturn := make(chan struct{})
+	workerDone := make(chan error, 1)
+	provider := &integrationProvider{send: func(context.Context) (providers.ProviderReceipt, error) {
+		close(providerStarted)
+		<-allowProviderReturn
+		return providers.ProviderReceipt{Provider: "smtp"}, nil
+	}}
+	go func() {
+		workerDone <- New(db, provider, key).Process(context.Background(), &fakeMessage{id: deliveryID})
+	}()
+	<-providerStarted
+
+	eraseDone := make(chan error, 1)
+	go func() {
+		_, err := dsr.New(db, map[string][]byte{"v1": key}).Apply(context.Background(), dsr.ActionRequest{
+			RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "erase-race",
+		})
+		eraseDone <- err
+	}()
+	waitForAdvisoryWaiters(t, db, "notification-dsr-delivery:"+deliveryID, 1)
+	select {
+	case err := <-eraseDone:
+		t.Fatalf("erase returned before provider call completed: %v", err)
+	default:
+	}
+
+	close(allowProviderReturn)
+	if err := <-workerDone; err != nil {
+		t.Fatalf("worker Process() error = %v", err)
+	}
+	if err := <-eraseDone; err != nil {
+		t.Fatalf("erase error = %v", err)
+	}
+	var targetLength, payloadLength int
+	if err := db.QueryRow(`
+		SELECT octet_length(message.target_ciphertext), octet_length(message.payload_ciphertext)
+		FROM notification_messages AS message
+		JOIN notification_deliveries AS delivery ON delivery.message_id=message.id
+		WHERE delivery.id=$1`, deliveryID,
+	).Scan(&targetLength, &payloadLength); err != nil {
+		t.Fatal(err)
+	}
+	if targetLength != 0 || payloadLength != 0 {
+		t.Fatalf("erased target=%d payload=%d", targetLength, payloadLength)
+	}
+}
+
+func TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable(t *testing.T) {
+	db := workerTestDatabase(t)
+	resetWorkerTables(t, db)
+	key := bytes.Repeat([]byte{1}, 32)
+	email := "user@example.com"
+	deliveryID := insertWorkerDelivery(t, db, key, statusQueued, 0, nil)
+	if _, err := db.Exec(`
+		UPDATE notification_messages AS message
+		SET hash_key_id='v1', target_hash=$2
+		FROM notification_deliveries AS delivery
+		WHERE delivery.id=$1 AND message.id=delivery.message_id`,
+		deliveryID, notificationcrypto.Hash(key, []byte(email)),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	blocker, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	lockKey := "notification-dsr-delivery:" + deliveryID
+	if _, err := blocker.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtextextended($1,0))`, lockKey); err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_, _ = blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey)
+		}
+	}()
+
+	eraseCtx, cancelErase := context.WithCancel(context.Background())
+	defer cancelErase()
+	eraseDone := make(chan error, 1)
+	go func() {
+		_, err := dsr.New(db, map[string][]byte{"v1": key}).Apply(eraseCtx, dsr.ActionRequest{
+			RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "erase-rollback",
+		})
+		eraseDone <- err
+	}()
+	waitForAdvisoryWaiters(t, db, "notification-dsr-delivery:"+deliveryID, 1)
+
+	message := &fakeMessage{id: deliveryID}
+	err = New(db, &integrationProvider{}, key).Process(context.Background(), message)
+	if err == nil {
+		t.Fatal("Process() error = nil while erase holds the delivery fence")
+	}
+	if message.completed != 0 || message.deadLettered != 0 {
+		t.Fatalf("settlement complete=%d dead-letter=%d", message.completed, message.deadLettered)
+	}
+
+	cancelErase()
+	if err := <-eraseDone; err == nil {
+		t.Fatal("erase error = nil after cancellation")
+	}
+	if _, err := blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey); err != nil {
+		t.Fatal(err)
+	}
+	locked = false
+
+	var status string
+	if err := db.QueryRow(`SELECT status FROM notification_deliveries WHERE id=$1`, deliveryID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != statusQueued {
+		t.Fatalf("delivery status = %q, want %q", status, statusQueued)
+	}
+}
+
+func TestAdvisoryWaiterCountIgnoresTwoIntLockWithMatchingHalves(t *testing.T) {
+	db := workerTestDatabase(t)
+	lockKey := "notification-dsr-delivery:target"
+	var lockID int64
+	if err := db.QueryRow(`SELECT hashtextextended($1,0)`, lockKey).Scan(&lockID); err != nil {
+		t.Fatal(err)
+	}
+	classID, objectID := int32(lockID>>32), int32(lockID)
+	holder, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	waiter, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer waiter.Close()
+	var waiterPID int
+	if err := waiter.QueryRowContext(context.Background(), `SELECT pg_backend_pid()`).Scan(&waiterPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.ExecContext(context.Background(), `SELECT pg_advisory_lock($1,$2)`, classID, objectID); err != nil {
+		t.Fatal(err)
+	}
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := waiter.ExecContext(context.Background(), `SELECT pg_advisory_lock($1,$2)`, classID, objectID)
+		waiterDone <- err
+	}()
+	defer func() {
+		_, _ = holder.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1,$2)`, classID, objectID)
+		if err := <-waiterDone; err != nil {
+			t.Error(err)
+		}
+	}()
+
+	waitForAdvisoryWaiter(t, db, waiterPID)
+	count, err := advisoryWaiterCount(context.Background(), db, lockKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("target advisory waiters = %d, want 0", count)
 	}
 }
 
@@ -324,6 +509,72 @@ func resetWorkerTables(t *testing.T, db *sql.DB) {
 	); err != nil {
 		t.Fatalf("reset worker tables: %v", err)
 	}
+}
+
+func waitForAdvisoryWaiters(t *testing.T, db *sql.DB, lockKey string, want int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		waiters, err := advisoryWaiterCount(ctx, db, lockKey)
+		if err != nil {
+			t.Fatalf("count advisory waiters: %v", err)
+		}
+		if waiters >= want {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for %d advisory waiters: %v", want, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForAdvisoryWaiter(t *testing.T, db *sql.DB, waiterPID int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_locks
+				WHERE locktype='advisory'
+				  AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+				  AND pid=$1
+				  AND NOT granted
+			)`, waiterPID).Scan(&waiting); err != nil {
+			t.Fatalf("find advisory waiter: %v", err)
+		}
+		if waiting {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for advisory lock waiter: %v", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func advisoryWaiterCount(ctx context.Context, db *sql.DB, lockKey string) (int, error) {
+	var waiters int
+	err := db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM pg_locks
+		WHERE locktype='advisory'
+		  AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+		  AND classid=(((hashtextextended($1,0) >> 32) & 4294967295)::oid)
+		  AND objid=((hashtextextended($1,0) & 4294967295)::oid)
+		  AND objsubid=1
+		  AND NOT granted`, lockKey).Scan(&waiters)
+	return waiters, err
 }
 
 func insertWorkerDelivery(

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
 	"github.com/google/uuid"
 )
@@ -22,12 +23,18 @@ type notificationService interface {
 	Get(context.Context, string, string) (service.Result, error)
 }
 
+type dsrService interface {
+	Export(context.Context, dsr.ExportRequest) (dsr.ExportPage, error)
+	Apply(context.Context, dsr.ActionRequest) (dsr.ActionResult, error)
+}
+
 type pinger interface {
 	PingContext(context.Context) error
 }
 
 type handler struct {
 	service              notificationService
+	dsr                  dsrService
 	db                   pinger
 	allowedCallers       map[string]struct{}
 	allowDevCallerHeader bool
@@ -46,12 +53,15 @@ type responseEnvelope struct {
 	Error *contracts.ResponseError `json:"error"`
 }
 
-func New(service notificationService, db pinger, allowedCallers []string, allowDevCallerHeader bool) http.Handler {
+func New(service notificationService, db pinger, allowedCallers []string, allowDevCallerHeader bool, dsrServices ...dsrService) http.Handler {
 	h := &handler{
 		service:              service,
 		db:                   db,
 		allowedCallers:       make(map[string]struct{}, len(allowedCallers)),
 		allowDevCallerHeader: allowDevCallerHeader,
+	}
+	if len(dsrServices) != 0 {
+		h.dsr = dsrServices[0]
 	}
 	for _, caller := range allowedCallers {
 		if caller = strings.TrimSpace(caller); caller != "" {
@@ -64,6 +74,8 @@ func New(service notificationService, db pinger, allowedCallers []string, allowD
 	mux.Handle("/ready", h.requireMethod(http.MethodGet, http.HandlerFunc(h.ready)))
 	mux.Handle("/priv/notifications/send", h.requireMethod(http.MethodPost, h.authorize(http.HandlerFunc(h.send))))
 	mux.Handle("/priv/notifications/{messageId}", h.requireMethod(http.MethodGet, h.authorize(http.HandlerFunc(h.get))))
+	mux.Handle("/priv/dsr/exports", h.requireMethod(http.MethodPost, h.authorizeCaller("account-api", http.HandlerFunc(h.exportDSR))))
+	mux.Handle("/priv/dsr/actions", h.requireMethod(http.MethodPost, h.authorizeCaller("account-api", http.HandlerFunc(h.applyDSR))))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "NTF_NOT_FOUND")
 	})
@@ -82,6 +94,10 @@ func (h *handler) withRequestID(next http.Handler) http.Handler {
 }
 
 func (h *handler) authorize(next http.Handler) http.Handler {
+	return h.authorizeCaller("", next)
+}
+
+func (h *handler) authorizeCaller(expected string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		caller := strings.TrimSpace(r.Header.Get("Dapr-Caller-App-Id"))
 		if caller == "" && h.allowDevCallerHeader {
@@ -91,12 +107,72 @@ func (h *handler) authorize(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, "NTF_UNAUTHORIZED")
 			return
 		}
+		if expected != "" && caller != expected {
+			writeError(w, r, http.StatusForbidden, "NTF_FORBIDDEN")
+			return
+		}
 		if _, ok := h.allowedCallers[caller]; !ok {
 			writeError(w, r, http.StatusForbidden, "NTF_FORBIDDEN")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey, caller)))
 	})
+}
+
+func (h *handler) exportDSR(w http.ResponseWriter, r *http.Request) {
+	if h.dsr == nil {
+		writeError(w, r, http.StatusInternalServerError, "NTF_INTERNAL")
+		return
+	}
+	var request dsr.ExportRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !validDSRRequest(request.RequestID, request.UserID, request.Email) || request.Limit < 0 {
+		writeError(w, r, http.StatusBadRequest, "NTF_INVALID_REQUEST")
+		return
+	}
+	page, err := h.dsr.Export(r.Context(), request)
+	if err != nil {
+		handleDSRError(w, r, err)
+		return
+	}
+	writeEnvelope(w, http.StatusOK, r, page, nil)
+}
+
+func (h *handler) applyDSR(w http.ResponseWriter, r *http.Request) {
+	if h.dsr == nil {
+		writeError(w, r, http.StatusInternalServerError, "NTF_INTERNAL")
+		return
+	}
+	var request dsr.ActionRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !validDSRRequest(request.RequestID, request.UserID, request.Email) || (request.Action != "restrict_processing" && request.Action != "erase") || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 200 {
+		writeError(w, r, http.StatusBadRequest, "NTF_INVALID_REQUEST")
+		return
+	}
+	result, err := h.dsr.Apply(r.Context(), request)
+	if err != nil {
+		handleDSRError(w, r, err)
+		return
+	}
+	writeEnvelope(w, http.StatusOK, r, result, nil)
+}
+
+func validDSRRequest(requestID, userID, email string) bool {
+	_, requestErr := uuid.Parse(requestID)
+	_, userErr := uuid.Parse(userID)
+	return requestErr == nil && userErr == nil && strings.TrimSpace(email) != ""
+}
+
+func handleDSRError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, dsr.ErrInvalidRequest) {
+		writeError(w, r, http.StatusBadRequest, "NTF_INVALID_REQUEST")
+		return
+	}
+	writeError(w, r, http.StatusInternalServerError, "NTF_INTERNAL")
 }
 
 func (h *handler) requireMethod(method string, next http.Handler) http.Handler {

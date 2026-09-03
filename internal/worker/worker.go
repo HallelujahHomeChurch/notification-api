@@ -58,6 +58,10 @@ type repository interface {
 	release(context.Context, claim) error
 }
 
+type fencedClaimer interface {
+	claimFenced(context.Context, string, time.Duration) (claimResult, func() error, error)
+}
+
 type postgresStore struct {
 	db *sql.DB
 }
@@ -115,7 +119,16 @@ func newWorkerWithProviders(
 }
 
 func (w *Worker) Process(ctx context.Context, message queue.BrokerMessage) error {
-	result, err := w.repository.claim(ctx, message.DeliveryID(), leaseDuration)
+	var (
+		result       claimResult
+		err          error
+		releaseFence func() error
+	)
+	if fenced, ok := w.repository.(fencedClaimer); ok {
+		result, releaseFence, err = fenced.claimFenced(ctx, message.DeliveryID(), leaseDuration)
+	} else {
+		result, err = w.repository.claim(ctx, message.DeliveryID(), leaseDuration)
+	}
 	if err != nil {
 		return fmt.Errorf("claim delivery: %w", err)
 	}
@@ -127,9 +140,26 @@ func (w *Worker) Process(ctx context.Context, message queue.BrokerMessage) error
 	}
 
 	claimed := result.Claim
+	if releaseFence != nil {
+		fenceHeld := true
+		release := func() error {
+			if !fenceHeld {
+				return nil
+			}
+			fenceHeld = false
+			return releaseFence()
+		}
+		defer func() { _ = release() }()
+		return w.processClaim(ctx, message, claimed, release)
+	}
+	return w.processClaim(ctx, message, claimed, func() error { return nil })
+}
+
+func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, claimed claim, releaseFence func() error) error {
 	leaseHeld := true
 	defer func() {
 		if leaseHeld {
+			_ = releaseFence()
 			releaseCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 			defer cancel()
 			_ = w.repository.release(releaseCtx, claimed)
@@ -138,6 +168,9 @@ func (w *Worker) Process(ctx context.Context, message queue.BrokerMessage) error
 
 	payload, err := w.render(claimed)
 	if err != nil {
+		if releaseErr := releaseFence(); releaseErr != nil {
+			return errors.Join(fmt.Errorf("render delivery: %w", err), releaseErr)
+		}
 		if errors.Is(err, notificationcrypto.ErrKeyNotConfigured) {
 			return fmt.Errorf("render delivery: %w", err)
 		}
@@ -156,6 +189,9 @@ func (w *Worker) Process(ctx context.Context, message queue.BrokerMessage) error
 	}
 	receipt, providerErr := provider.Send(providerCtx, payload)
 	cancel()
+	if err := releaseFence(); err != nil {
+		return fmt.Errorf("release delivery fence: %w", err)
+	}
 	if providerErr == nil {
 		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 		defer finish()
@@ -296,21 +332,62 @@ func (s postgresStore) claim(
 	deliveryID string,
 	lease time.Duration,
 ) (claimResult, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	result, release, err := s.claimFenced(ctx, deliveryID, lease)
 	if err != nil {
 		return claimResult{}, err
 	}
-	defer tx.Rollback()
+	if release != nil {
+		if err := release(); err != nil {
+			return claimResult{}, err
+		}
+	}
+	return result, nil
+}
+
+func (s postgresStore) claimFenced(
+	ctx context.Context,
+	deliveryID string,
+	lease time.Duration,
+) (claimResult, func() error, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return claimResult{}, nil, err
+	}
+	lockKey := "notification-dsr-delivery:" + deliveryID
+	release := func() error {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+		defer cancel()
+		_, unlockErr := conn.ExecContext(releaseCtx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey)
+		return errors.Join(unlockErr, conn.Close())
+	}
+	var locked bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, lockKey).Scan(&locked); err != nil {
+		_ = conn.Close()
+		return claimResult{}, nil, err
+	}
+	if !locked {
+		_ = conn.Close()
+		return claimResult{}, nil, errors.New("delivery DSR fence held")
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		_ = release()
+		return claimResult{}, nil, err
+	}
 
 	expired, err := expireDelivery(ctx, tx, deliveryID)
 	if err != nil {
-		return claimResult{}, err
+		_ = tx.Rollback()
+		_ = release()
+		return claimResult{}, nil, err
 	}
 	if expired {
 		if err := tx.Commit(); err != nil {
-			return claimResult{}, err
+			_ = release()
+			return claimResult{}, nil, err
 		}
-		return claimResult{Status: statusDeadLettered}, nil
+		_ = release()
+		return claimResult{Status: statusDeadLettered}, nil, nil
 	}
 
 	var claimed claim
@@ -358,18 +435,24 @@ func (s postgresStore) claim(
 			WHERE id=$1`,
 			claimed.MessageID,
 		); err != nil {
-			return claimResult{}, err
+			_ = tx.Rollback()
+			_ = release()
+			return claimResult{}, nil, err
 		}
 		if err := tx.Commit(); err != nil {
-			return claimResult{}, err
+			_ = release()
+			return claimResult{}, nil, err
 		}
-		return claimResult{Status: statusSending, Claimed: true, Claim: claimed}, nil
+		return claimResult{Status: statusSending, Claimed: true, Claim: claimed}, release, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return claimResult{}, err
+		_ = tx.Rollback()
+		_ = release()
+		return claimResult{}, nil, err
 	}
 	if err := tx.Rollback(); err != nil {
-		return claimResult{}, err
+		_ = release()
+		return claimResult{}, nil, err
 	}
 
 	var status string
@@ -380,12 +463,15 @@ func (s postgresStore) claim(
 		deliveryID,
 	).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
-		return claimResult{}, nil
+		_ = release()
+		return claimResult{}, nil, nil
 	}
 	if err != nil {
-		return claimResult{}, err
+		_ = release()
+		return claimResult{}, nil, err
 	}
-	return claimResult{Status: status}, nil
+	_ = release()
+	return claimResult{Status: status}, nil, nil
 }
 
 func expireDelivery(ctx context.Context, tx *sql.Tx, deliveryID string) (bool, error) {
