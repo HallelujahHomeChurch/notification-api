@@ -476,6 +476,13 @@ components:
       type: object
       additionalProperties: false
       required: [owner, action, status, recordCount, reasonCodes]
+      oneOf:
+        - properties:
+            action: { const: restrict_processing }
+            status: { const: not_applicable }
+        - properties:
+            action: { const: erase }
+            status: { const: completed }
       properties:
         owner: { const: notification-api }
         action: { type: string, enum: [restrict_processing, erase] }

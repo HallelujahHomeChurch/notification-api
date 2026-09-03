@@ -64,6 +64,8 @@ func TestDSRRoutesRequireExactAccountCallerAndStrictActionEnvelope(t *testing.T)
 		{name: "other allowed caller", caller: "engagement-api", path: "/priv/dsr/exports", body: export, status: http.StatusForbidden},
 		{name: "missing caller", path: "/priv/dsr/exports", body: export, status: http.StatusUnauthorized},
 		{name: "missing idempotency key", caller: "account-api", path: "/priv/dsr/actions", body: `{"requestId":"019fd684-994e-798a-b5bc-62c535337fee","userId":"6d387ca2-dfa0-4713-8fa5-490c1c9f8304","canonicalEmail":"member@example.test","action":"erase"}`, status: http.StatusBadRequest},
+		{name: "malformed export email", caller: "account-api", path: "/priv/dsr/exports", body: strings.Replace(export, "member@example.test", "not-an-email", 1), status: http.StatusBadRequest},
+		{name: "malformed action email", caller: "account-api", path: "/priv/dsr/actions", body: `{"requestId":"019fd684-994e-798a-b5bc-62c535337fee","userId":"6d387ca2-dfa0-4713-8fa5-490c1c9f8304","canonicalEmail":"not-an-email","action":"erase","idempotencyKey":"action-1"}`, status: http.StatusBadRequest},
 		{name: "unknown field", caller: "account-api", path: "/priv/dsr/exports", body: export[:len(export)-1] + `,"unknown":true}`, status: http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {

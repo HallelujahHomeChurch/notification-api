@@ -237,6 +237,11 @@ func TestOpenAPIDSRContractsExposeOnlyRedactedNotificationMetadata(t *testing.T)
 	requireContains(t, exportRequest, "required: [requestId, userId, canonicalEmail]")
 	actionRequest := yamlBlock(document, "    DSRActionRequest:")
 	requireContains(t, actionRequest, "required: [requestId, userId, canonicalEmail, action, idempotencyKey]")
+	actionResult := yamlBlock(document, "    DSRActionResult:")
+	requireContains(t, actionResult, "action: { const: restrict_processing }")
+	requireContains(t, actionResult, "status: { const: not_applicable }")
+	requireContains(t, actionResult, "action: { const: erase }")
+	requireContains(t, actionResult, "status: { const: completed }")
 	record := yamlBlock(document, "    DSRExportRecord:")
 	for _, forbidden := range []string{"ciphertext", "provider", "endpoint", "payload"} {
 		if strings.Contains(strings.ToLower(record), forbidden) {

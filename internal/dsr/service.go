@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/mail"
 	"sort"
 	"strings"
 	"time"
@@ -191,7 +192,13 @@ func lockDeliveries(ctx context.Context, tx *sql.Tx, keyIDs, hashes []string) er
 func validRequest(requestID, userID, email string) bool {
 	_, requestErr := uuid.Parse(requestID)
 	_, userErr := uuid.Parse(userID)
-	return requestErr == nil && userErr == nil && strings.TrimSpace(email) != ""
+	return requestErr == nil && userErr == nil && ValidEmail(email)
+}
+
+func ValidEmail(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	parsed, err := mail.ParseAddress(normalized)
+	return err == nil && parsed.Address == normalized
 }
 
 func candidateHashes(hashKeys map[string][]byte, email string) ([]string, []string) {
