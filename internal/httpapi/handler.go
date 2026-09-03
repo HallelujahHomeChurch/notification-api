@@ -164,7 +164,7 @@ func (h *handler) applyDSR(w http.ResponseWriter, r *http.Request) {
 func validDSRRequest(requestID, userID, email string) bool {
 	_, requestErr := uuid.Parse(requestID)
 	_, userErr := uuid.Parse(userID)
-	return requestErr == nil && userErr == nil && strings.TrimSpace(email) != ""
+	return requestErr == nil && userErr == nil && dsr.ValidEmail(email)
 }
 
 func handleDSRError(w http.ResponseWriter, r *http.Request, err error) {
