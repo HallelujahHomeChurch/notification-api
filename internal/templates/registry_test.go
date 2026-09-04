@@ -2,11 +2,56 @@ package templates
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/stretchr/testify/require"
 )
+
+func TestGovernanceKnownTemplatePayloadFieldsMatchRegistry(t *testing.T) {
+	governanceFields := map[string][]string{
+		"account.verify-email/1/email":            {"verifyUrl"},
+		"account.verify-email/2/email":            {"verifyUrl"},
+		"account.verify-email/3/email":            {"verifyUrl"},
+		"account.reset-password/1/email":          {"resetUrl"},
+		"account.reset-password/2/email":          {"resetUrl"},
+		"account.reset-password/3/email":          {"resetUrl"},
+		"account.oauth-link-confirmation/1/email": {"confirmUrl", "provider"},
+		"account.oauth-link-confirmation/2/email": {"confirmUrl", "provider"},
+		"account.oauth-link-confirmation/3/email": {"confirmUrl", "provider"},
+		"account.oauth-onboarding-code/1/email":   {"code", "provider"},
+		"account.oauth-onboarding-code/2/email":   {"code", "provider"},
+		"account.oauth-onboarding-code/3/email":   {"code", "provider"},
+		"engagement.newsletter/1/email":           {"subject", "body", "actionUrl", "unsubscribeUrl"},
+		"engagement.newsletter/2/email":           {"subject", "body", "actionUrl", "unsubscribeUrl", "oneClickUnsubscribeUrl"},
+		"engagement.newsletter/3/email":           {"subject", "body", "actionUrl", "unsubscribeUrl", "oneClickUnsubscribeUrl"},
+		"engagement.web-push/1/web_push":          {"title", "body", "actionUrl"},
+		"engagement.web-push/2/web_push":          {"title", "body", "clickBehavior", "actionUrl"},
+		"engagement.web-push/3/web_push":          {"title", "body", "clickBehavior", "actionUrl"},
+	}
+
+	matched := 0
+	for templateID, versions := range definitions {
+		for version, definition := range versions {
+			key := fmt.Sprintf("%s/%d/%s", templateID, version, definition.Channel)
+			want, ok := governanceFields[key]
+			require.True(t, ok, "registry entry %s is missing from governance allowlist", key)
+			require.ElementsMatch(t, want, mapKeys(definition.AllowedFields), key)
+			matched++
+		}
+	}
+	require.Equal(t, len(governanceFields), matched, "governance allowlist contains unknown registry entries")
+}
+
+func mapKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	return keys
+}
 
 func TestResolveAccountTemplates(t *testing.T) {
 	ttls := map[string]time.Duration{
