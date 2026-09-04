@@ -51,9 +51,10 @@ grep -Fq 'if: ${{ vars.PRODUCTION_DEPLOY_ENABLED == '\''true'\'' }}' "${workflow
 [[ "$(grep -Ec 'id-token:[[:space:]]*write' "${workflow}")" == "3" ]] || fail "plan, deploy, and docs publication must each receive OIDC"
 assert_contains "${workflow}" 'group:[[:space:]]*notification-production' "production concurrency group is missing"
 assert_contains "${workflow}" 'cancel-in-progress:[[:space:]]*false' "production releases must not cancel in progress"
+assert_contains "${workflow}" '(?s)paths:\n.*?- docs/data-governance\.yaml' "data-governance changes must trigger production release"
 assert_contains "${workflow}" 'POSTGRES_DB:[[:space:]]*notification_test' "Postgres test database is missing"
-assert_contains "${workflow}" 'go test \./\.\.\.' "unit tests are missing"
-assert_contains "${workflow}" 'go test -tags=integration \./\.\.\. -count=1' "integration tests are missing"
+assert_contains "${workflow}" 'go test -json \./\.\.\. -count=1' "unit tests are missing"
+assert_contains "${workflow}" 'go test -tags=integration -json \./\.\.\. -count=1' "integration tests are missing"
 assert_contains "${workflow}" 'go vet \./\.\.\.' "go vet is missing"
 assert_contains "${workflow}" 'bash scripts/release-static\.test\.sh' "release static test is not run by CI"
 scanner='ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
@@ -229,7 +230,66 @@ printf '%s\n' "${publish_job}" | grep -q -- '--overwrite false' || fail "immutab
 printf '%s\n' "${publish_job}" | grep -q -- '--name current.json' || fail "current pointer upload is missing"
 printf '%s\n' "${publish_job}" | grep -q -- '--overwrite true' || fail "current pointer must be replaceable"
 
-workflow_body="$(sed -n '/^          spec_blob="specs\//,$p' "${workflow}" | sed 's/^          //')"
+for verify_workflow in "${ci_workflow}" "${workflow}"; do
+  grep -Fq 'go test -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" ||
+    fail "untagged governance evidence stream is missing"
+  grep -Fq 'go test -tags=integration -json ./... -count=1 | tee -a .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" ||
+    fail "tagged governance evidence append is missing"
+  grep -Fq 'set -o pipefail' "${verify_workflow}" || fail "governance evidence pipeline must fail closed"
+  grep -Fq 'GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl"' "${verify_workflow}" ||
+    fail "governance exporter must consume the combined evidence stream"
+  grep -Fq 'GOVERNANCE_OUTPUT_DIR="$PWD/.artifacts/data-governance/export"' "${verify_workflow}" ||
+    fail "governance exporter output is missing"
+  grep -Fq "go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1" "${verify_workflow}" ||
+    fail "governance exporter is missing"
+  grep -Fq 'bash scripts/test-publish-data-governance.sh' "${verify_workflow}" ||
+    fail "governance publisher tests are missing"
+
+  upload_step="$(awk '/^      - name: Store verified governance manifest$/ { capture=1; next } capture && /^      - / { exit } capture { print }' "${verify_workflow}")"
+  printf '%s\n' "${upload_step}" | grep -Fq 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' ||
+    fail "governance artifact upload must use the approved immutable action"
+  printf '%s\n' "${upload_step}" | grep -Fq 'name: data-governance-${{ github.sha }}' ||
+    fail "governance artifact must be named from the verified commit"
+  printf '%s\n' "${upload_step}" | grep -Fq 'if-no-files-found: error' || fail "missing governance files must fail upload"
+  printf '%s\n' "${upload_step}" | grep -Fq 'include-hidden-files: true' || fail "hidden governance export must be included"
+  printf '%s\n' "${upload_step}" | grep -Fq 'overwrite: true' || fail "same-run governance artifact retries must replace the artifact"
+  actual_payloads="$(printf '%s\n' "${upload_step}" | awk '/^            / { sub(/^            /, ""); print }')"
+  [[ "${actual_payloads}" == $'.artifacts/data-governance/export/data-governance.yaml\n.artifacts/data-governance/export/data-governance.json' ]] ||
+    fail "governance artifact must contain exactly the exported YAML and JSON"
+
+  unit_line="$(grep -nF 'go test -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" | cut -d: -f1)"
+  integration_line="$(grep -nF 'go test -tags=integration -json ./... -count=1 | tee -a .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" | cut -d: -f1)"
+  export_line="$(grep -nF "go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1" "${verify_workflow}" | cut -d: -f1)"
+  upload_line="$(grep -nF 'name: Store verified governance manifest' "${verify_workflow}" | cut -d: -f1)"
+  [[ "${unit_line}" -lt "${integration_line}" && "${integration_line}" -lt "${export_line}" && "${export_line}" -lt "${upload_line}" ]] ||
+    fail "governance evidence must run untagged, append tagged, export, then upload"
+done
+
+download_step="$(printf '%s\n' "${publish_job}" | awk '/^      - name: Download verified governance manifest$/ { capture=1; next } capture && /^      - / { exit } capture { print }')"
+printf '%s\n' "${download_step}" | grep -Fq 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c' ||
+  fail "governance artifact download must use the approved immutable action"
+printf '%s\n' "${download_step}" | grep -Fq 'name: data-governance-${{ needs.deploy.outputs.commit }}' ||
+  fail "publication must download the deployed commit artifact"
+printf '%s\n' "${download_step}" | grep -Fq 'path: .artifacts/data-governance/export' || fail "governance download path is wrong"
+printf '%s\n' "${download_step}" | grep -Fq 'digest-mismatch: error' || fail "governance digest mismatch must fail publication"
+if printf '%s\n' "${download_step}" | grep -Eq 'github-token:|repository:|run-id:|pattern:|artifact-ids:'; then
+  fail "governance publication must consume the named artifact from this workflow run"
+fi
+printf '%s\n' "${publish_job}" | grep -Fq 'name: Publish verified governance manifest' || fail "governance publication step is missing"
+printf '%s\n' "${publish_job}" | grep -Fq 'run: bash scripts/publish-data-governance.sh' || fail "governance publisher is not invoked"
+printf '%s\n' "${publish_job}" | grep -Fq 'SERVICE: notification-api' || fail "governance publisher owner is wrong"
+printf '%s\n' "${publish_job}" | grep -Fq 'RELEASE_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}' ||
+  fail "governance provenance must use the current release run"
+printf '%s\n' "${publish_job}" | grep -Fq 'GOVERNANCE_DIR: ${{ github.workspace }}/.artifacts/data-governance/export' ||
+  fail "governance publisher must consume the downloaded export"
+
+download_line="$(grep -nF 'name: Download verified governance manifest' "${workflow}" | cut -d: -f1)"
+openapi_publish_line="$(grep -nF 'name: Publish production OpenAPI contract' "${workflow}" | cut -d: -f1)"
+governance_publish_line="$(grep -nF 'name: Publish verified governance manifest' "${workflow}" | cut -d: -f1)"
+[[ "${download_line}" -lt "${openapi_publish_line}" && "${openapi_publish_line}" -lt "${governance_publish_line}" ]] ||
+  fail "governance must download before and publish after OpenAPI"
+
+workflow_body="$(awk '/^          spec_blob="specs\// { capture=1 } capture && /^      - / { exit } capture { sub(/^          /, ""); print }' "${workflow}")"
 run_openapi_publication_case() {
   local pointer_json="$1"
   local candidate_run_id="$2"
