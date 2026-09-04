@@ -13,8 +13,13 @@ This inventory describes existing metadata and behavior only. It exports no data
 - `notification_deliveries.endpoint_ref` has no located writer at this pinned source revision and remains optional/manual.
 - Rate-bucket HMACs are not enumerable Account-subject joins and must not be used to infer identity.
 - Provider-held email and Web Push data, plus broker-side Service Bus retention, are external/manual boundaries. This manifest inventories only Notification-owned PostgreSQL rows.
-- `schema_migrations.version`, `schema_migrations.checksum`, and `schema_migrations.applied_at` are operational deployment metadata, not Account-subject data.
 - Backups, logs and provider/broker deletion operations remain governed by their own operational procedures; no unimplemented cleanup is claimed here.
+
+## Operational schema exclusions
+
+- `schema_migrations.version` — Migration filename, not an Account subject.
+- `schema_migrations.checksum` — Migration content checksum, not an Account subject.
+- `schema_migrations.applied_at` — Schema deployment time, not an Account event.
 
 ## Existing age-based retention
 
@@ -28,7 +33,7 @@ These boundaries are characterized by `TestRunOnceUsesRequiredRetentionWindowsAn
 
 ## Existing request-triggered DSR behavior
 
-DSR is separate from age-based retention and is not encoded as an unsupported duration or expiry rule. The private Account caller supplies request/user identifiers and a verified canonical email. Notification normalizes the email, searches HMACs across retained hash keys, and exports only bounded message/delivery metadata. Erasure waits for claimed provider calls, clears target and payload ciphertext, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent email lookup return no rows. Restrict-processing reports `not_applicable` without mutation.
+DSR is separate from age-based retention and is not encoded as an unsupported duration or expiry rule. The private Account caller supplies request/user identifiers and a verified canonical email. DSR userId is validation/correlation only and is not queried; current DSR lookup uses retained key IDs and email-derived hashes. Notification normalizes the email, searches HMACs across retained hash keys, and exports only bounded message/delivery metadata. Erasure waits for claimed provider calls, clears target and payload ciphertext, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent email lookup return no rows. Restrict-processing reports `not_applicable` without mutation.
 
 Behavioral references:
 

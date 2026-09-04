@@ -25,6 +25,8 @@ var excludedColumns = map[string]map[string]string{
 	},
 }
 
+const dsrUserIDBoundary = "DSR userId is validation/correlation only and is not queried; current DSR lookup uses retained key IDs and email-derived hashes."
+
 func notificationManifest(t *testing.T) map[string]any {
 	t.Helper()
 	root, err := filepath.Abs("../..")
@@ -51,8 +53,34 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"notification.rate-limit-buckets",
 	}, mapKeys(datasets))
 
-	sensitiveFields := datasetFieldNames(datasets["notification.message-sensitive"])
-	for _, field := range []string{
+	exactPhysicalFields := map[string][]string{
+		"notification.message-sensitive": {"target_ciphertext", "payload_ciphertext"},
+		"notification.message-metadata": {
+			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",
+			"channel", "target_type", "target_hash", "resource_type", "resource_id", "status", "created_at",
+			"updated_at", "terminal_at", "payload_purged_at", "encryption_key_id", "hash_key_id", "expires_at",
+		},
+		"notification.delivery-receipts": {
+			"id", "message_id", "channel", "endpoint_ref", "provider", "status", "attempt_count",
+			"next_attempt_at", "lease_expires_at", "sent_at", "provider_message_id", "last_error_code",
+			"created_at", "updated_at",
+		},
+		"notification.outbox": {
+			"id", "delivery_id", "status", "attempt_count", "next_attempt_at", "lease_expires_at",
+			"published_at", "created_at", "updated_at",
+		},
+		"notification.rate-limit-buckets": {"bucket_key", "count", "expires_at"},
+	}
+	for id, want := range exactPhysicalFields {
+		physical, nested := partitionFields(datasets[id])
+		require.ElementsMatch(t, want, physical, id)
+		if id != "notification.message-sensitive" {
+			require.Empty(t, nested, "%s must not contain nested encrypted fields", id)
+		}
+	}
+
+	_, sensitiveNested := partitionFields(datasets["notification.message-sensitive"])
+	require.ElementsMatch(t, []string{
 		"target_ciphertext.email.address",
 		"target_ciphertext.web_push.endpoint",
 		"target_ciphertext.web_push.keys.p256dh",
@@ -70,9 +98,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"payload_ciphertext.fields.oneClickUnsubscribeUrl",
 		"payload_ciphertext.fields.title",
 		"payload_ciphertext.fields.clickBehavior",
-	} {
-		require.Contains(t, sensitiveFields, field)
-	}
+	}, sensitiveNested)
 
 	refs := sourceReferences(document)
 	for _, ref := range []string{
@@ -91,11 +117,22 @@ func TestDataGovernanceManifest(t *testing.T) {
 
 	scope, err := os.ReadFile("../../docs/data-governance-scope.md")
 	require.NoError(t, err)
+	var wantExclusions []string
 	for table, columns := range excludedColumns {
-		for column := range columns {
-			require.Contains(t, string(scope), table+"."+column)
+		for column, reason := range columns {
+			wantExclusions = append(wantExclusions, fmt.Sprintf("- `%s.%s` — %s", table, column, reason))
 		}
 	}
+	require.ElementsMatch(t, wantExclusions, scopeSectionLines(t, string(scope), "Operational schema exclusions"))
+	require.Contains(t, string(scope), dsrUserIDBoundary)
+	require.Contains(t, datasets["notification.message-metadata"]["attribution"].(map[string]any)["explanation"], dsrUserIDBoundary)
+
+	metadataFields := datasets["notification.message-metadata"]["fields"].([]any)
+	datasets["notification.message-metadata"]["fields"] = append(metadataFields, map[string]any{
+		"name": "target_ciphertext", "purpose": "Invalid duplicate.", "necessity": "required", "data_classes": []any{"security"},
+	})
+	_, err = manifestFields(document)
+	require.ErrorContains(t, err, "duplicate classified column notification_messages.target_ciphertext")
 }
 
 func TestDataGovernanceMigratedColumnCoverage(t *testing.T) {
@@ -139,7 +176,8 @@ func TestDataGovernanceMigratedColumnCoverage(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 
-	fields := manifestFields(document)
+	fields, err := manifestFields(document)
+	require.NoError(t, err)
 	var tables []string
 	for table := range actual {
 		tables = append(tables, table)
@@ -160,8 +198,9 @@ func TestDataGovernanceMigratedColumnCoverage(t *testing.T) {
 	require.ErrorContains(t, classifiedColumns(append(actual["notification_messages"], "unclassified_fixture"), fields["notification_messages"], nil), "unclassified column unclassified_fixture")
 }
 
-func manifestFields(document map[string]any) map[string]map[string]bool {
+func manifestFields(document map[string]any) (map[string]map[string]bool, error) {
 	resources := map[string]map[string]bool{}
+	owners := map[string]map[string]string{}
 	for _, value := range document["datasets"].([]any) {
 		dataset := value.(map[string]any)
 		storage := dataset["storage"].(map[string]any)
@@ -171,14 +210,19 @@ func manifestFields(document map[string]any) map[string]map[string]bool {
 		resource := storage["resource"].(string)
 		if resources[resource] == nil {
 			resources[resource] = map[string]bool{}
+			owners[resource] = map[string]string{}
 		}
-		for field := range datasetFieldNames(dataset) {
+		for _, field := range datasetFieldNames(dataset) {
 			if !strings.Contains(field, ".") {
+				if owner := owners[resource][field]; owner != "" {
+					return nil, fmt.Errorf("duplicate classified column %s.%s in %s and %s", resource, field, owner, dataset["id"])
+				}
 				resources[resource][field] = true
+				owners[resource][field] = dataset["id"].(string)
 			}
 		}
 	}
-	return resources
+	return resources, nil
 }
 
 func classifiedColumns(actual []string, fields map[string]bool, excluded map[string]string) error {
@@ -205,12 +249,37 @@ func classifiedColumns(actual []string, fields map[string]bool, excluded map[str
 	return nil
 }
 
-func datasetFieldNames(dataset map[string]any) map[string]bool {
-	fields := map[string]bool{}
+func datasetFieldNames(dataset map[string]any) []string {
+	fields := make([]string, 0, len(dataset["fields"].([]any)))
 	for _, value := range dataset["fields"].([]any) {
-		fields[value.(map[string]any)["name"].(string)] = true
+		fields = append(fields, value.(map[string]any)["name"].(string))
 	}
 	return fields
+}
+
+func partitionFields(dataset map[string]any) (physical, nested []string) {
+	for _, field := range datasetFieldNames(dataset) {
+		if strings.Contains(field, ".") {
+			nested = append(nested, field)
+		} else {
+			physical = append(physical, field)
+		}
+	}
+	return physical, nested
+}
+
+func scopeSectionLines(t *testing.T, document, heading string) []string {
+	t.Helper()
+	_, section, found := strings.Cut(document, "## "+heading+"\n")
+	require.True(t, found, "missing scope section %q", heading)
+	section, _, _ = strings.Cut(section, "\n## ")
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(section), "\n") {
+		if strings.HasPrefix(line, "- ") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func sourceReferences(document any) map[string]bool {
