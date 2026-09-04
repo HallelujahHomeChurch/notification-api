@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func verifyEvidence(document map[string]any, events io.Reader, module string) error {
@@ -115,18 +116,22 @@ func TestDataGovernanceEvidence(t *testing.T) {
 	document, err := validateManifest("../..", raw, "notification-api")
 	require.NoError(t, err)
 	const module = "github.com/HallelujahHomeChurch/notification-api"
-	const passed = `{"Action":"pass","Package":"github.com/HallelujahHomeChurch/notification-api/internal/retention","Test":"TestRunOnceUsesRequiredRetentionWindowsAndBoundedBatch"}` + "\n"
+	const unitPassed = `{"Action":"pass","Package":"github.com/HallelujahHomeChurch/notification-api/internal/retention","Test":"TestRunOnceUsesRequiredRetentionWindowsAndBoundedBatch"}` + "\n"
+	const integrationPassed = `{"Action":"pass","Package":"github.com/HallelujahHomeChurch/notification-api/internal/retention","Test":"TestRetentionPreservesRecentAndNonterminalPayloadsOnRepeat"}` + "\n"
 	const pkgPassed = `{"Action":"pass","Package":"github.com/HallelujahHomeChurch/notification-api/internal/retention"}` + "\n"
+	testsPassed := unitPassed + integrationPassed
+	passed := testsPassed + pkgPassed
 	for _, test := range []struct {
 		name, events string
 		valid        bool
 	}{
-		{"passed test and package", passed + pkgPassed, true},
+		{"passed test and package", passed, true},
+		{"integration event absent", unitPassed + pkgPassed, false},
 		{"missing", pkgPassed, false},
 		{"empty", "", false},
 		{"skipped", strings.ReplaceAll(passed, `"pass"`, `"skip"`) + pkgPassed, false},
 		{"failed", strings.ReplaceAll(passed, `"pass"`, `"fail"`) + pkgPassed, false},
-		{"missing package result", passed, false},
+		{"missing package result", testsPassed, false},
 		{"failed package", passed + strings.ReplaceAll(pkgPassed, `"pass"`, `"fail"`), false},
 		{"skipped package", passed + strings.ReplaceAll(pkgPassed, `"pass"`, `"skip"`), false},
 		{"other package", strings.ReplaceAll(passed, "/internal/retention", "/internal/store") + pkgPassed, false},
@@ -154,6 +159,7 @@ func TestDataGovernanceExportPayload(t *testing.T) {
 	raw, err := os.ReadFile("testdata/enforced-notification.json")
 	require.NoError(t, err)
 	const events = `{"Action":"pass","Package":"github.com/HallelujahHomeChurch/notification-api/internal/retention","Test":"TestRunOnceUsesRequiredRetentionWindowsAndBoundedBatch"}
+{"Action":"pass","Package":"github.com/HallelujahHomeChurch/notification-api/internal/retention","Test":"TestRetentionPreservesRecentAndNonterminalPayloadsOnRepeat"}
 {"Action":"pass","Package":"github.com/HallelujahHomeChurch/notification-api/internal/retention"}`
 	out := filepath.Join(t.TempDir(), "export")
 	require.Error(t, exportManifest("../..", raw, strings.NewReader(""), out))
@@ -173,9 +179,14 @@ func TestDataGovernanceExportPayload(t *testing.T) {
 	require.Equal(t, raw, yamlBytes)
 	jsonBytes, err := os.ReadFile(filepath.Join(out, "data-governance.json"))
 	require.NoError(t, err)
-	normalized, err := normalizeManifest("../..", raw, "notification-api")
+	var sourceYAML any
+	require.NoError(t, yaml.Unmarshal(raw, &sourceYAML))
+	sourceJSON, err := json.Marshal(sourceYAML)
 	require.NoError(t, err)
-	require.Equal(t, normalized, jsonBytes)
+	var sourceDocument, exportedDocument any
+	require.NoError(t, json.Unmarshal(sourceJSON, &sourceDocument))
+	require.NoError(t, json.Unmarshal(jsonBytes, &exportedDocument))
+	require.Equal(t, sourceDocument, exportedDocument)
 	entries, err := os.ReadDir(out)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
