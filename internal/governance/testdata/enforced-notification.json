@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "service": "notification-api",
+  "datasets": [{
+    "id": "notification.fixture",
+    "owner": "notification-api",
+    "purpose": "Exercise executed Notification evidence.",
+    "necessity": "required",
+    "storage": {"kind": "postgres", "resource": "notification_messages", "sources": [{"path": "go.mod", "symbol": "module"}]},
+    "subject_keys": [{"kind": "user_id", "field": "id", "evidence": [{"path": "go.mod", "symbol": "module"}]}],
+    "data_classes": ["identity", "security"],
+    "fields": [{"name": "id", "purpose": "Identify the notification fixture.", "necessity": "required", "data_classes": ["identity"]}],
+    "attribution": {"mode": "direct", "explanation": "The fixture ID is the subject ID."},
+    "legal_basis": {"status": "pending_legal", "reference": null},
+    "retention": {
+      "status": "enforced",
+      "rule": {
+        "trigger": "expires_at",
+        "field": "expires_at",
+        "source": {"path": "internal/retention/worker.go", "symbol": "postgresRepository.retain"},
+        "duration_source": null,
+        "predicate": "expires_at <= now",
+        "description": "Fixture references the existing rate-limit expiry cleanup."
+      },
+      "action": "expire"
+    },
+    "cleanup": {
+      "mode": "existing_worker",
+      "implementation": [{"path": "internal/retention/worker.go", "symbol": "postgresRepository.retain"}],
+      "evidence": [{"kind": "go_test", "path": "internal/retention/worker_test.go", "test_name": "TestRunOnceUsesRequiredRetentionWindowsAndBoundedBatch"}]
+    }
+  }]
+}
