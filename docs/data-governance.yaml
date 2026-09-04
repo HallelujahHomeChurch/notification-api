@@ -1,0 +1,132 @@
+# Notification-owned source inventory. Metadata only; no record values or policy activation.
+schema_version: 1
+service: notification-api
+datasets:
+  - id: notification.message-sensitive
+    owner: notification-api
+    purpose: "Store encrypted recipient and template payload data until the existing terminal-message tombstone window elapses."
+    necessity: required
+    storage: {"kind":"postgres","resource":"notification_messages","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_messages"},{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/dsr/service.go","symbol":"Service.Apply"}]}
+    subject_keys: [{"kind":"verified_canonical_email","field":"hash_key_id + target_hash","evidence":[{"path":"internal/httpapi/handler.go","symbol":"handler.authorizeCaller"},{"path":"internal/dsr/service.go","symbol":"candidateHashes"}]}]
+    data_classes: ["identity","contact","security","content","activity"]
+    fields:
+      - {"name":"target_ciphertext","purpose":"Encrypt canonical email or Web Push subscription target material at rest; ciphertext remains pseudonymous personal data.","necessity":"required","data_classes":["identity","contact","security"]}
+      - {"name":"target_ciphertext.email.address","purpose":"Encrypt the normalized canonical email address written for email delivery.","necessity":"optional","data_classes":["identity","contact","security"]}
+      - {"name":"target_ciphertext.web_push.endpoint","purpose":"Encrypt the normalized Web Push provider endpoint.","necessity":"optional","data_classes":["identity","contact","security"]}
+      - {"name":"target_ciphertext.web_push.keys.p256dh","purpose":"Encrypt the Web Push P-256 key material.","necessity":"optional","data_classes":["security"]}
+      - {"name":"target_ciphertext.web_push.keys.auth","purpose":"Encrypt the Web Push authentication key material.","necessity":"optional","data_classes":["security"]}
+      - {"name":"payload_ciphertext","purpose":"Encrypt locale and validated template fields at rest; ciphertext remains pseudonymous personal data.","necessity":"required","data_classes":["security","content","activity"]}
+      - {"name":"payload_ciphertext.locale","purpose":"Select localized rendering within the encrypted payload envelope.","necessity":"required","data_classes":["activity"]}
+      - {"name":"payload_ciphertext.fields.verifyUrl","purpose":"Carry the Account email-verification URL.","necessity":"optional","data_classes":["security","content"]}
+      - {"name":"payload_ciphertext.fields.resetUrl","purpose":"Carry the Account password-reset URL.","necessity":"optional","data_classes":["security","content"]}
+      - {"name":"payload_ciphertext.fields.confirmUrl","purpose":"Carry the OAuth link-confirmation URL.","necessity":"optional","data_classes":["security","content"]}
+      - {"name":"payload_ciphertext.fields.provider","purpose":"Identify the OAuth provider used by link confirmation or onboarding.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"payload_ciphertext.fields.code","purpose":"Carry the OAuth onboarding one-time code.","necessity":"optional","data_classes":["security"]}
+      - {"name":"payload_ciphertext.fields.subject","purpose":"Carry caller-supplied newsletter subject content.","necessity":"optional","data_classes":["content"]}
+      - {"name":"payload_ciphertext.fields.body","purpose":"Carry caller-supplied newsletter or Web Push body content.","necessity":"optional","data_classes":["content"]}
+      - {"name":"payload_ciphertext.fields.actionUrl","purpose":"Carry an optional newsletter or Web Push action URL.","necessity":"optional","data_classes":["content"]}
+      - {"name":"payload_ciphertext.fields.unsubscribeUrl","purpose":"Carry the newsletter unsubscribe URL.","necessity":"optional","data_classes":["security","content"]}
+      - {"name":"payload_ciphertext.fields.oneClickUnsubscribeUrl","purpose":"Carry the one-click newsletter unsubscribe URL.","necessity":"optional","data_classes":["security","content"]}
+      - {"name":"payload_ciphertext.fields.title","purpose":"Carry the Web Push title.","necessity":"optional","data_classes":["content"]}
+      - {"name":"payload_ciphertext.fields.clickBehavior","purpose":"Select the Web Push click action.","necessity":"optional","data_classes":["activity"]}
+    attribution: {"mode":"verified_lookup","explanation":"For email rows only, the private Account caller supplies a verified canonical email and retained hash_key_id plus target_hash support exact HMAC lookup across configured retained keys. Syntax validation alone is not Account verification; Web Push rows remain manual."}
+    legal_basis: {"status":"pending_legal","reference":null}
+    retention: {"status":"enforced","rule":{"trigger":"age_since","field":"terminal_at","source":{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"},"duration_source":{"path":"internal/retention/worker.go","symbol":"payloadRetention"},"predicate":"terminal_at <= now-7d AND payload_purged_at IS NULL","description":"The existing retention worker clears only target_ciphertext and payload_ciphertext seven days after a message becomes terminal."},"action":"purge"}
+    cleanup: {"mode":"existing_worker","implementation":[{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}],"evidence":[{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata"},{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestRetentionPreservesRecentAndNonterminalPayloadsOnRepeat"}]}
+
+  - id: notification.message-metadata
+    owner: notification-api
+    purpose: "Retain notification identity, routing, pseudonymous lookup, lifecycle and correlation metadata after ciphertext tombstoning."
+    necessity: required
+    storage: {"kind":"postgres","resource":"notification_messages","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_messages"},{"path":"internal/migrations/sql/002_crypto_keys_and_retention_indexes.sql","symbol":"notification_messages_crypto_retention"},{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/dsr/service.go","symbol":"Service.Export"}]}
+    subject_keys: [{"kind":"verified_canonical_email","field":"hash_key_id + target_hash","evidence":[{"path":"internal/httpapi/handler.go","symbol":"handler.authorizeCaller"},{"path":"internal/dsr/service.go","symbol":"candidateHashes"}]}]
+    data_classes: ["identity","security","activity"]
+    fields:
+      - {"name":"id","purpose":"Identify the notification message and parent delivery chain.","necessity":"required","data_classes":["activity"]}
+      - {"name":"caller_app_id","purpose":"Record the trusted service caller that created the notification.","necessity":"required","data_classes":["security","activity"]}
+      - {"name":"idempotency_key","purpose":"Deduplicate a caller-scoped notification intent.","necessity":"required","data_classes":["security","activity"]}
+      - {"name":"request_hash","purpose":"HMAC the canonical request for replay conflict detection; it is pseudonymous, not anonymous.","necessity":"required","data_classes":["identity","security"]}
+      - {"name":"template_id","purpose":"Identify the registered notification template.","necessity":"required","data_classes":["activity"]}
+      - {"name":"template_version","purpose":"Pin rendering behavior for queued delivery.","necessity":"required","data_classes":["activity"]}
+      - {"name":"channel","purpose":"Select email or Web Push delivery.","necessity":"required","data_classes":["activity"]}
+      - {"name":"target_type","purpose":"Describe the encrypted target shape.","necessity":"required","data_classes":["activity"]}
+      - {"name":"target_hash","purpose":"HMAC the canonical target for exact retained-key lookup; it is pseudonymous, not anonymous.","necessity":"required","data_classes":["identity","security"]}
+      - {"name":"resource_type","purpose":"Record a caller-supplied generic resource category; it is not an Account join predicate.","necessity":"required","data_classes":["activity"]}
+      - {"name":"resource_id","purpose":"Record a caller-supplied generic resource identifier; it is not an Account join predicate.","necessity":"required","data_classes":["identity","activity"]}
+      - {"name":"status","purpose":"Record notification lifecycle state.","necessity":"required","data_classes":["activity"]}
+      - {"name":"created_at","purpose":"Record notification creation time.","necessity":"required","data_classes":["activity"]}
+      - {"name":"updated_at","purpose":"Record the latest notification state change.","necessity":"required","data_classes":["activity"]}
+      - {"name":"terminal_at","purpose":"Record when delivery reached a terminal state and start retention windows.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"payload_purged_at","purpose":"Record ciphertext tombstoning without deleting retained metadata.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"encryption_key_id","purpose":"Select the configured key required to decrypt retained ciphertext.","necessity":"required","data_classes":["security"]}
+      - {"name":"hash_key_id","purpose":"Select the configured HMAC key used by request and target hashes.","necessity":"required","data_classes":["security"]}
+      - {"name":"expires_at","purpose":"Bound delivery eligibility; this deadline is separate from row retention.","necessity":"required","data_classes":["security","activity"]}
+    attribution: {"mode":"verified_lookup","explanation":"Only email rows with exact hash_key_id and target_hash matches derived from the verified canonical email supplied by the private Account caller are deterministic. Web Push rows and generic resource fields are manual scope."}
+    legal_basis: {"status":"pending_legal","reference":null}
+    retention: {"status":"enforced","rule":{"trigger":"age_since","field":"terminal_at","source":{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"},"duration_source":{"path":"internal/retention/worker.go","symbol":"metadataRetention"},"predicate":"terminal_at <= now-730d","description":"The existing retention worker deletes the terminal parent message and cascades to delivery and outbox rows after 730 days."},"action":"delete"}
+    cleanup: {"mode":"existing_worker","implementation":[{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}],"evidence":[{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata"},{"kind":"go_test","path":"internal/retention/worker_test.go","test_name":"TestRunOnceUsesRequiredRetentionWindowsAndBoundedBatch"}]}
+
+  - id: notification.delivery-receipts
+    owner: notification-api
+    purpose: "Record provider delivery attempts, leases, outcomes and optional provider receipt metadata."
+    necessity: required
+    storage: {"kind":"postgres","resource":"notification_deliveries","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_deliveries"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/worker/worker.go","symbol":"postgresStore.markSent"},{"path":"internal/providers/provider.go","symbol":"ProviderReceipt"}]}
+    subject_keys: [{"kind":"verified_canonical_email","field":"message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/dsr/service.go","symbol":"Service.Export"},{"path":"internal/dsr/service.go","symbol":"candidateHashes"}]}]
+    data_classes: ["identity","security","activity"]
+    fields:
+      - {"name":"id","purpose":"Identify the delivery attempt chain.","necessity":"required","data_classes":["activity"]}
+      - {"name":"message_id","purpose":"Join receipt state to the parent notification message.","necessity":"required","data_classes":["identity","activity"]}
+      - {"name":"channel","purpose":"Record email or Web Push delivery.","necessity":"required","data_classes":["activity"]}
+      - {"name":"endpoint_ref","purpose":"Reserve an optional endpoint reference; no writer is located at this pinned source revision.","necessity":"optional","data_classes":["identity"]}
+      - {"name":"provider","purpose":"Record the selected delivery provider family.","necessity":"required","data_classes":["activity"]}
+      - {"name":"status","purpose":"Record delivery lifecycle state.","necessity":"required","data_classes":["activity"]}
+      - {"name":"attempt_count","purpose":"Count fenced provider attempts.","necessity":"required","data_classes":["activity"]}
+      - {"name":"next_attempt_at","purpose":"Schedule the next delivery attempt.","necessity":"required","data_classes":["activity"]}
+      - {"name":"lease_expires_at","purpose":"Fence concurrent delivery workers.","necessity":"optional","data_classes":["security","activity"]}
+      - {"name":"sent_at","purpose":"Record successful provider acceptance time.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"provider_message_id","purpose":"Record the optional provider receipt identifier.","necessity":"optional","data_classes":["identity","activity"]}
+      - {"name":"last_error_code","purpose":"Record the latest bounded provider failure category.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"created_at","purpose":"Record delivery creation time.","necessity":"required","data_classes":["activity"]}
+      - {"name":"updated_at","purpose":"Record the latest delivery state change.","necessity":"required","data_classes":["activity"]}
+    attribution: {"mode":"verified_lookup","explanation":"For email rows only, message_id joins to a parent found through exact retained-key email HMAC lookup. Web Push rows, provider identifiers and endpoint_ref are not Account join predicates."}
+    legal_basis: {"status":"pending_legal","reference":null}
+    retention: {"status":"enforced","rule":{"trigger":"age_since","field":"notification_messages.terminal_at","source":{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"},"duration_source":{"path":"internal/retention/worker.go","symbol":"metadataRetention"},"predicate":"parent terminal_at <= now-730d","description":"Delivery rows are deleted only by the existing 730-day parent-message ON DELETE CASCADE."},"action":"delete"}
+    cleanup: {"mode":"existing_worker","implementation":[{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}],"evidence":[{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata"}]}
+
+  - id: notification.outbox
+    owner: notification-api
+    purpose: "Record durable queue publication attempts and fencing for each delivery."
+    necessity: required
+    storage: {"kind":"postgres","resource":"notification_outbox","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_outbox"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/outbox/dispatcher.go","symbol":"Dispatcher.DispatchOne"},{"path":"internal/queue/servicebus.go","symbol":"ServiceBus.Publish"}]}
+    subject_keys: [{"kind":"verified_canonical_email","field":"delivery_id -> notification_deliveries.message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/dsr/service.go","symbol":"Service.Export"},{"path":"internal/dsr/service.go","symbol":"candidateHashes"}]}]
+    data_classes: ["identity","security","activity"]
+    fields:
+      - {"name":"id","purpose":"Identify the durable publication operation.","necessity":"required","data_classes":["activity"]}
+      - {"name":"delivery_id","purpose":"Join publication state to its delivery and parent message.","necessity":"required","data_classes":["identity","activity"]}
+      - {"name":"status","purpose":"Record pending, publishing or published state.","necessity":"required","data_classes":["activity"]}
+      - {"name":"attempt_count","purpose":"Count fenced broker publication attempts.","necessity":"required","data_classes":["activity"]}
+      - {"name":"next_attempt_at","purpose":"Schedule the next publication attempt.","necessity":"required","data_classes":["activity"]}
+      - {"name":"lease_expires_at","purpose":"Fence concurrent outbox dispatchers.","necessity":"optional","data_classes":["security","activity"]}
+      - {"name":"published_at","purpose":"Record successful broker publication time.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"created_at","purpose":"Record outbox row creation time.","necessity":"required","data_classes":["activity"]}
+      - {"name":"updated_at","purpose":"Record the latest publication state change.","necessity":"required","data_classes":["activity"]}
+    attribution: {"mode":"verified_lookup","explanation":"For email rows only, delivery_id reaches a parent message found through exact retained-key email HMAC lookup. Web Push rows and outbox or broker identifiers do not independently identify an Account subject."}
+    legal_basis: {"status":"pending_legal","reference":null}
+    retention: {"status":"enforced","rule":{"trigger":"age_since","field":"notification_messages.terminal_at","source":{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"},"duration_source":{"path":"internal/retention/worker.go","symbol":"metadataRetention"},"predicate":"parent terminal_at <= now-730d","description":"Outbox rows are deleted only by the existing delivery/message ON DELETE CASCADE after 730 days."},"action":"delete"}
+    cleanup: {"mode":"existing_worker","implementation":[{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}],"evidence":[{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata"}]}
+
+  - id: notification.rate-limit-buckets
+    owner: notification-api
+    purpose: "Bound notification creation rates with expiring pseudonymous HMAC buckets."
+    necessity: required
+    storage: {"kind":"postgres","resource":"notification_rate_limits","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_rate_limits"},{"path":"internal/store/store.go","symbol":"Store.applyRateLimits"},{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}]}
+    subject_keys: []
+    data_classes: ["identity","security","activity"]
+    fields:
+      - {"name":"bucket_key","purpose":"HMAC the configured rate-limit scope; it is pseudonymous and not an enumerable Account join.","necessity":"required","data_classes":["identity","security"]}
+      - {"name":"count","purpose":"Count operations in the current rate window.","necessity":"required","data_classes":["activity"]}
+      - {"name":"expires_at","purpose":"Expire the rate-limit bucket at the end of its window.","necessity":"required","data_classes":["security","activity"]}
+    attribution: {"mode":"manual","explanation":"The HMAC bucket key may include target data but is not enumerable and has no deterministic Account lookup path."}
+    legal_basis: {"status":"pending_legal","reference":null}
+    retention: {"status":"enforced","rule":{"trigger":"expires_at","field":"expires_at","source":{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"},"duration_source":null,"predicate":"expires_at <= now","description":"The existing retention worker deletes only expired rate-limit buckets and preserves active buckets."},"action":"delete"}
+    cleanup: {"mode":"existing_worker","implementation":[{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}],"evidence":[{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata"}]}

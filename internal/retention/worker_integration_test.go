@@ -22,6 +22,16 @@ func TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata(t *t
 	resetRetentionTables(t, db)
 	recentID := insertTerminalMessage(t, db, 8*24*time.Hour, "provider-receipt")
 	expiredID := insertTerminalMessage(t, db, 731*24*time.Hour, "old-receipt")
+	var expiredDeliveryID string
+	if err := db.QueryRow(`SELECT id FROM notification_deliveries WHERE message_id=$1`, expiredID).Scan(&expiredDeliveryID); err != nil {
+		t.Fatalf("read expired delivery: %v", err)
+	}
+	expiredOutboxID := uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO notification_outbox (id,delivery_id,status) VALUES ($1,$2,'published')`,
+		expiredOutboxID, expiredDeliveryID,
+	); err != nil {
+		t.Fatalf("insert expired outbox: %v", err)
+	}
 	if _, err := db.Exec(`
 		INSERT INTO notification_rate_limits (bucket_key,count,expires_at)
 		VALUES ('expired',1,clock_timestamp()-interval '1 second'),
@@ -66,15 +76,57 @@ func TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata(t *t
 		)
 	}
 
-	var oldCount, activeBuckets int
-	if err := db.QueryRow(`SELECT count(*) FROM notification_messages WHERE id=$1`, expiredID).Scan(&oldCount); err != nil {
-		t.Fatalf("count old message: %v", err)
+	var oldMessages, oldDeliveries, oldOutbox, activeBuckets, expiredBuckets int
+	if err := db.QueryRow(`
+		SELECT
+			(SELECT count(*) FROM notification_messages WHERE id=$1),
+			(SELECT count(*) FROM notification_deliveries WHERE id=$2),
+			(SELECT count(*) FROM notification_outbox WHERE id=$3),
+			(SELECT count(*) FROM notification_rate_limits WHERE bucket_key='active'),
+			(SELECT count(*) FROM notification_rate_limits WHERE bucket_key='expired')`,
+		expiredID, expiredDeliveryID, expiredOutboxID,
+	).Scan(&oldMessages, &oldDeliveries, &oldOutbox, &activeBuckets, &expiredBuckets); err != nil {
+		t.Fatalf("read cascade and rate buckets: %v", err)
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM notification_rate_limits WHERE bucket_key='active'`).Scan(&activeBuckets); err != nil {
-		t.Fatalf("count active rate bucket: %v", err)
+	if oldMessages != 0 || oldDeliveries != 0 || oldOutbox != 0 || activeBuckets != 1 || expiredBuckets != 0 {
+		t.Fatalf("old message/delivery/outbox=%d/%d/%d active/expired buckets=%d/%d", oldMessages, oldDeliveries, oldOutbox, activeBuckets, expiredBuckets)
 	}
-	if oldCount != 0 || activeBuckets != 1 {
-		t.Fatalf("old messages=%d active buckets=%d", oldCount, activeBuckets)
+
+	repeated, err := New(db).RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("repeated RunOnce() error = %v", err)
+	}
+	if repeated != (Result{}) {
+		t.Fatalf("repeated RunOnce() = %#v, want zero work", repeated)
+	}
+}
+
+func TestRetentionPreservesRecentAndNonterminalPayloadsOnRepeat(t *testing.T) {
+	db := retentionTestDatabase(t)
+	resetRetentionTables(t, db)
+	recentID := insertTerminalMessage(t, db, time.Hour, "recent-receipt")
+	nonterminalID := insertTerminalMessage(t, db, 731*24*time.Hour, "nonterminal-receipt")
+	if _, err := db.Exec(`UPDATE notification_messages SET status='queued',terminal_at=NULL WHERE id=$1`, nonterminalID); err != nil {
+		t.Fatalf("make message nonterminal: %v", err)
+	}
+
+	for run := 1; run <= 2; run++ {
+		result, err := New(db).RunOnce(context.Background())
+		if err != nil {
+			t.Fatalf("RunOnce(%d) error = %v", run, err)
+		}
+		if result != (Result{}) {
+			t.Fatalf("RunOnce(%d) = %#v, want zero work", run, result)
+		}
+		for _, id := range []string{recentID, nonterminalID} {
+			var targetLength, payloadLength int
+			if err := db.QueryRow(`SELECT octet_length(target_ciphertext),octet_length(payload_ciphertext) FROM notification_messages WHERE id=$1`, id).Scan(&targetLength, &payloadLength); err != nil {
+				t.Fatalf("read retained payload %s after run %d: %v", id, run, err)
+			}
+			if targetLength == 0 || payloadLength == 0 {
+				t.Fatalf("payload %s after run %d target=%d payload=%d", id, run, targetLength, payloadLength)
+			}
+		}
 	}
 }
 
