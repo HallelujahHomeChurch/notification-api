@@ -138,9 +138,11 @@ assert_contains "${bicep}" 'NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID' "active encry
 assert_contains "${bicep}" 'NOTIFICATION_ENCRYPTION_KEYS_JSON' "encryption keyring is missing"
 assert_contains "${bicep}" 'NOTIFICATION_ACTIVE_HASH_KEY_ID' "active hash key ID is missing"
 assert_contains "${bicep}" 'NOTIFICATION_HASH_KEYS_JSON' "hash keyring is missing"
-[[ "$(grep -Fc "cpu: json('0.25')" "${bicep}")" == "3" &&
-   "$(grep -Fc "memory: '0.5Gi'" "${bicep}")" == "3" ]] ||
-  fail "API, worker, and migration must remain at 0.25 CPU / 0.5Gi"
+[[ "$(grep -Fc "cpu: json('0.5')" "${bicep}")" == "2" &&
+   "$(grep -Fc "memory: '1Gi'" "${bicep}")" == "2" &&
+   "$(grep -Fc "cpu: json('0.25')" "${bicep}")" == "1" &&
+   "$(grep -Fc "memory: '0.5Gi'" "${bicep}")" == "1" ]] ||
+  fail "API and worker must remain at 0.5 CPU / 1Gi; migration at 0.25 CPU / 0.5Gi"
 [[ "$(grep -Fc '@minLength(71)' "${bicep}")" == "1" &&
    "$(grep -Fc '@maxLength(71)' "${bicep}")" == "1" &&
    "$(grep -Fc 'param imageDigest string' "${bicep}")" == "1" ]] ||
