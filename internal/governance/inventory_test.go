@@ -100,6 +100,16 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"payload_ciphertext.fields.clickBehavior",
 	}, sensitiveNested)
 
+	sensitiveRetention := datasets["notification.message-sensitive"]["retention"].(map[string]any)
+	require.Equal(t, "delete", sensitiveRetention["action"])
+	description := sensitiveRetention["rule"].(map[string]any)["description"].(string)
+	for _, qualification := range []string{
+		"target_ciphertext", "payload_ciphertext", "not complete de-identification",
+		"HMAC", "resource", "receipt", "external/provider copies",
+	} {
+		require.Contains(t, description, qualification)
+	}
+
 	refs := sourceReferences(document)
 	for _, ref := range []string{
 		"internal/service/service.go#Service.Send",
