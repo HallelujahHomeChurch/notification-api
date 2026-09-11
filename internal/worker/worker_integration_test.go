@@ -649,3 +649,25 @@ func (p *integrationProvider) Send(
 	p.mu.Unlock()
 	return p.send(ctx)
 }
+
+func TestPostgresLegacyCampaignMessageGetsEligibilityReference(t *testing.T) {
+	db := workerTestDatabase(t)
+	campaignID, recipientID := uuid.NewString(), uuid.NewString()
+	for _, caller := range []string{"engagement-api", "account-api"} {
+		deliveryID := insertWorkerDelivery(t, db, bytes.Repeat([]byte{1}, 32), statusQueued, 0, nil)
+		_, err := db.Exec(`UPDATE notification_messages SET caller_app_id=$2,idempotency_key=$3 WHERE id=(SELECT message_id FROM notification_deliveries WHERE id=$1)`, deliveryID, caller, "campaign:"+campaignID+":user:"+recipientID+":retry:2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := (postgresStore{db: db}).claim(context.Background(), deliveryID, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if caller == "engagement-api" && (result.Claim.EligibilityRef == nil || result.Claim.EligibilityRef.CampaignID != campaignID || result.Claim.EligibilityRef.RecipientID != recipientID) {
+			t.Fatalf("legacy reference missing: %+v", result.Claim)
+		}
+		if caller != "engagement-api" && result.Claim.EligibilityRef != nil {
+			t.Fatal("untrusted caller gained eligibility callback")
+		}
+	}
+}

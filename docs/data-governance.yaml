@@ -52,6 +52,8 @@ datasets:
       - {"name":"target_type","purpose":"Describe the encrypted target shape.","necessity":"required","data_classes":["activity"]}
       - {"name":"target_hash","purpose":"HMAC the canonical target for exact retained-key lookup; it is pseudonymous, not anonymous.","necessity":"required","data_classes":["identity","security"]}
       - {"name":"resource_type","purpose":"Record a caller-supplied generic resource category; it is not an Account join predicate.","necessity":"required","data_classes":["activity"]}
+      - {"name":"eligibility_campaign_id","purpose":"Identify the Engagement campaign for final provider eligibility checks.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"eligibility_recipient_id","purpose":"Identify the campaign recipient for current consent and qualification checks; email recipient identifiers can be Account user identifiers.","necessity":"optional","data_classes":["identity","activity"]}
       - {"name":"resource_id","purpose":"Record a caller-supplied generic resource identifier; it is not an Account join predicate.","necessity":"required","data_classes":["identity","activity"]}
       - {"name":"status","purpose":"Record notification lifecycle state.","necessity":"required","data_classes":["activity"]}
       - {"name":"created_at","purpose":"Record notification creation time.","necessity":"required","data_classes":["activity"]}

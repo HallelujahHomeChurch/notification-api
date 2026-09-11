@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
@@ -431,6 +432,7 @@ func (s postgresStore) claimFenced(
 	}
 
 	var claimed claim
+	var callerID, idempotencyKey string
 	err = tx.QueryRowContext(ctx, `
 		WITH candidate AS (
 			SELECT delivery.id
@@ -454,7 +456,7 @@ func (s postgresStore) claimFenced(
 			RETURNING delivery.id, message.id, message.template_id, message.template_version,
 			          delivery.channel, delivery.attempt_count,
 			          message.encryption_key_id, message.target_ciphertext, message.payload_ciphertext,
-			          COALESCE(message.eligibility_campaign_id::text,''), COALESCE(message.eligibility_recipient_id::text,'')`,
+			          COALESCE(message.eligibility_campaign_id::text,''), COALESCE(message.eligibility_recipient_id::text,''), message.caller_app_id, message.idempotency_key`,
 		deliveryID,
 		lease.Seconds(),
 	).Scan(
@@ -469,8 +471,10 @@ func (s postgresStore) claimFenced(
 		&claimed.PayloadCiphertext,
 		&claimed.EligibilityCampaignID,
 		&claimed.EligibilityRecipientID,
+		&callerID, &idempotencyKey,
 	)
 	if err == nil {
+		claimed.EligibilityRef = legacyCampaignEligibility(callerID, idempotencyKey)
 		if claimed.EligibilityCampaignID != "" {
 			claimed.EligibilityRef = &contracts.EligibilityRef{CampaignID: claimed.EligibilityCampaignID, RecipientID: claimed.EligibilityRecipientID}
 		}
@@ -787,4 +791,19 @@ func transitionResult(result sql.Result, err error) error {
 		return ErrLeaseLost
 	}
 	return nil
+}
+
+var legacyCampaignKey = regexp.MustCompile(`^campaign:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(?:user|recipient):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?::retry:[0-9]+)?$`)
+
+// Older queued campaign messages predate explicit eligibility references.
+// Only Engagement's fixed machine key can opt into the same private endpoint.
+func legacyCampaignEligibility(caller, key string) *contracts.EligibilityRef {
+	if caller != "engagement-api" {
+		return nil
+	}
+	parts := legacyCampaignKey.FindStringSubmatch(key)
+	if len(parts) != 3 {
+		return nil
+	}
+	return &contracts.EligibilityRef{CampaignID: parts[1], RecipientID: parts[2]}
 }
