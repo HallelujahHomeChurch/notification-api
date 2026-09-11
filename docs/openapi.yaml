@@ -395,7 +395,7 @@ components:
           type: 'null'
     MessageStatus:
       type: string
-      enum: [queued, sending, sent, failed, dead_lettered]
+      enum: [queued, sending, sent, failed, dead_lettered, suppressed]
     ResponseMeta:
       type: object
       additionalProperties: false
