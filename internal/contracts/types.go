@@ -8,6 +8,7 @@ const (
 	MessageStatusSent         MessageStatus = "sent"
 	MessageStatusFailed       MessageStatus = "failed"
 	MessageStatusDeadLettered MessageStatus = "dead_lettered"
+	MessageStatusSuppressed   MessageStatus = "suppressed"
 )
 
 type DeliveryStatus string
@@ -18,15 +19,22 @@ const (
 	DeliveryStatusSent         DeliveryStatus = "sent"
 	DeliveryStatusFailed       DeliveryStatus = "failed"
 	DeliveryStatusDeadLettered DeliveryStatus = "dead_lettered"
+	DeliveryStatusSuppressed   DeliveryStatus = "suppressed"
 )
 
 type SendRequest struct {
-	TemplateID string            `json:"templateId"`
-	Channel    string            `json:"channel"`
-	Target     Target            `json:"target"`
-	Locale     string            `json:"locale"`
-	Payload    map[string]string `json:"payload"`
-	Resource   Resource          `json:"resource"`
+	TemplateID     string            `json:"templateId"`
+	Channel        string            `json:"channel"`
+	Target         Target            `json:"target"`
+	Locale         string            `json:"locale"`
+	Payload        map[string]string `json:"payload"`
+	Resource       Resource          `json:"resource"`
+	EligibilityRef *EligibilityRef   `json:"eligibilityRef,omitempty"`
+}
+
+type EligibilityRef struct {
+	CampaignID  string `json:"campaignId"`
+	RecipientID string `json:"recipientId"`
 }
 
 type Target struct {

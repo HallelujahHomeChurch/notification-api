@@ -105,6 +105,17 @@ func (s *Service) Send(
 	if strings.TrimSpace(request.Resource.Type) == "" || strings.TrimSpace(request.Resource.ID) == "" {
 		return Result{}, ErrInvalidRequest
 	}
+	if request.EligibilityRef != nil {
+		if caller != "engagement-api" {
+			return Result{}, ErrInvalidRequest
+		}
+		if _, err := uuid.Parse(request.EligibilityRef.CampaignID); err != nil {
+			return Result{}, ErrInvalidRequest
+		}
+		if _, err := uuid.Parse(request.EligibilityRef.RecipientID); err != nil {
+			return Result{}, ErrInvalidRequest
+		}
+	}
 	if !definition.SupportedLocale[request.Locale] {
 		request.Locale = "en"
 	}
@@ -181,6 +192,7 @@ func (s *Service) Send(
 		PayloadCiphertext: payloadCiphertext,
 		ResourceType:      request.Resource.Type,
 		ResourceID:        request.Resource.ID,
+		EligibilityRef:    request.EligibilityRef,
 		Provider:          provider,
 		RateLimits:        s.config.RateLimits,
 		ExpiresAfter:      definition.TTL,
@@ -222,13 +234,14 @@ func (s *Service) Get(ctx context.Context, caller, messageID string) (Result, er
 
 func canonicalRequest(request contracts.SendRequest, templateVersion int) ([]byte, error) {
 	return json.Marshal(struct {
-		TemplateID      string             `json:"templateId"`
-		TemplateVersion int                `json:"templateVersion"`
-		Channel         string             `json:"channel"`
-		Target          contracts.Target   `json:"target"`
-		Locale          string             `json:"locale"`
-		Payload         map[string]string  `json:"payload"`
-		Resource        contracts.Resource `json:"resource"`
+		TemplateID      string                    `json:"templateId"`
+		TemplateVersion int                       `json:"templateVersion"`
+		Channel         string                    `json:"channel"`
+		Target          contracts.Target          `json:"target"`
+		Locale          string                    `json:"locale"`
+		Payload         map[string]string         `json:"payload"`
+		Resource        contracts.Resource        `json:"resource"`
+		EligibilityRef  *contracts.EligibilityRef `json:"eligibilityRef,omitempty"`
 	}{
 		TemplateID:      request.TemplateID,
 		TemplateVersion: templateVersion,
@@ -237,6 +250,7 @@ func canonicalRequest(request contracts.SendRequest, templateVersion int) ([]byt
 		Locale:          request.Locale,
 		Payload:         request.Payload,
 		Resource:        request.Resource,
+		EligibilityRef:  request.EligibilityRef,
 	})
 }
 

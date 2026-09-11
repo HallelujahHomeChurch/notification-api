@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
@@ -27,20 +28,24 @@ const (
 	statusSent         = string(contracts.DeliveryStatusSent)
 	statusFailed       = string(contracts.DeliveryStatusFailed)
 	statusDeadLettered = string(contracts.DeliveryStatusDeadLettered)
+	statusSuppressed   = string(contracts.DeliveryStatusSuppressed)
 )
 
 var ErrLeaseLost = errors.New("delivery lease lost")
 
 type claim struct {
-	DeliveryID        string
-	MessageID         string
-	TemplateID        string
-	TemplateVersion   int
-	Channel           string
-	Attempt           int
-	EncryptionKeyID   string
-	TargetCiphertext  []byte
-	PayloadCiphertext []byte
+	DeliveryID             string
+	MessageID              string
+	TemplateID             string
+	TemplateVersion        int
+	Channel                string
+	Attempt                int
+	EncryptionKeyID        string
+	TargetCiphertext       []byte
+	PayloadCiphertext      []byte
+	EligibilityRef         *contracts.EligibilityRef
+	EligibilityCampaignID  string
+	EligibilityRecipientID string
 }
 
 type claimResult struct {
@@ -55,6 +60,7 @@ type repository interface {
 	markRetry(context.Context, claim, string, time.Duration, string) error
 	markFailed(context.Context, claim, string) error
 	markDeadLettered(context.Context, claim, string) error
+	markSuppressed(context.Context, claim, string) error
 	release(context.Context, claim) error
 }
 
@@ -73,6 +79,16 @@ type Worker struct {
 	retryDelay      func(int) time.Duration
 	newID           func() string
 	resolveTemplate func(string, int, string) (templates.Definition, error)
+	eligibility     interface {
+		Check(context.Context, contracts.EligibilityRef) (bool, error)
+	}
+}
+
+func (w *Worker) WithEligibilityChecker(checker interface {
+	Check(context.Context, contracts.EligibilityRef) (bool, error)
+}) *Worker {
+	w.eligibility = checker
+	return w
 }
 
 func New(db *sql.DB, provider providers.Provider, encryptionKey []byte) *Worker {
@@ -179,6 +195,31 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		}
 		leaseHeld = false
 		return message.DeadLetter(ctx, "invalid_payload")
+	}
+
+	if claimed.EligibilityRef != nil {
+		if w.eligibility == nil {
+			return errors.New("delivery eligibility checker is not configured")
+		}
+		eligibilityCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		allowed, eligibilityErr := w.eligibility.Check(eligibilityCtx, *claimed.EligibilityRef)
+		cancel()
+		if eligibilityErr != nil || !allowed {
+			if releaseErr := releaseFence(); releaseErr != nil {
+				return errors.Join(eligibilityErr, releaseErr)
+			}
+			finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+			defer finish()
+			if eligibilityErr != nil {
+				if err := w.repository.markRetry(finishCtx, claimed, "eligibility_unavailable", w.retryDelay(claimed.Attempt), w.newID()); err != nil {
+					return errors.Join(eligibilityErr, err)
+				}
+			} else if err := w.repository.markSuppressed(finishCtx, claimed, "eligibility_revoked"); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.Complete(finishCtx)
+		}
 	}
 
 	providerCtx, cancel := context.WithTimeout(ctx, sendTimeout)
@@ -391,6 +432,7 @@ func (s postgresStore) claimFenced(
 	}
 
 	var claimed claim
+	var callerID, idempotencyKey string
 	err = tx.QueryRowContext(ctx, `
 		WITH candidate AS (
 			SELECT delivery.id
@@ -413,7 +455,8 @@ func (s postgresStore) claimFenced(
 		WHERE delivery.id=candidate.id AND message.id=delivery.message_id
 			RETURNING delivery.id, message.id, message.template_id, message.template_version,
 			          delivery.channel, delivery.attempt_count,
-			          message.encryption_key_id, message.target_ciphertext, message.payload_ciphertext`,
+			          message.encryption_key_id, message.target_ciphertext, message.payload_ciphertext,
+			          COALESCE(message.eligibility_campaign_id::text,''), COALESCE(message.eligibility_recipient_id::text,''), message.caller_app_id, message.idempotency_key`,
 		deliveryID,
 		lease.Seconds(),
 	).Scan(
@@ -426,8 +469,15 @@ func (s postgresStore) claimFenced(
 		&claimed.EncryptionKeyID,
 		&claimed.TargetCiphertext,
 		&claimed.PayloadCiphertext,
+		&claimed.EligibilityCampaignID,
+		&claimed.EligibilityRecipientID,
+		&callerID, &idempotencyKey,
 	)
 	if err == nil {
+		claimed.EligibilityRef = legacyCampaignEligibility(callerID, idempotencyKey)
+		if claimed.EligibilityCampaignID != "" {
+			claimed.EligibilityRef = &contracts.EligibilityRef{CampaignID: claimed.EligibilityCampaignID, RecipientID: claimed.EligibilityRecipientID}
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE notification_messages
 			SET status='sending',
@@ -649,6 +699,10 @@ func (s postgresStore) markDeadLettered(ctx context.Context, claimed claim, code
 	return s.markTerminal(ctx, claimed, statusDeadLettered, code)
 }
 
+func (s postgresStore) markSuppressed(ctx context.Context, claimed claim, code string) error {
+	return s.markTerminal(ctx, claimed, statusSuppressed, code)
+}
+
 func (s postgresStore) markTerminal(
 	ctx context.Context,
 	claimed claim,
@@ -737,4 +791,19 @@ func transitionResult(result sql.Result, err error) error {
 		return ErrLeaseLost
 	}
 	return nil
+}
+
+var legacyCampaignKey = regexp.MustCompile(`^campaign:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}):(?:user|recipient):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?::retry:[0-9]+)?$`)
+
+// Older queued campaign messages predate explicit eligibility references.
+// Only Engagement's fixed machine key can opt into the same private endpoint.
+func legacyCampaignEligibility(caller, key string) *contracts.EligibilityRef {
+	if caller != "engagement-api" {
+		return nil
+	}
+	parts := legacyCampaignKey.FindStringSubmatch(key)
+	if len(parts) != 3 {
+		return nil
+	}
+	return &contracts.EligibilityRef{CampaignID: parts[1], RecipientID: parts[2]}
 }

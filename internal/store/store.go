@@ -52,6 +52,7 @@ type CreateParams struct {
 	PayloadCiphertext []byte
 	ResourceType      string
 	ResourceID        string
+	EligibilityRef    *contracts.EligibilityRef
 	Provider          string
 	RateLimits        []RateLimit
 	ExpiresAfter      time.Duration
@@ -62,6 +63,20 @@ type CreateResult struct {
 	Replayed   bool
 	Conflict   bool
 	RetryAfter time.Duration
+}
+
+func eligibilityCampaignID(ref *contracts.EligibilityRef) any {
+	if ref == nil {
+		return nil
+	}
+	return ref.CampaignID
+}
+
+func eligibilityRecipientID(ref *contracts.EligibilityRef) any {
+	if ref == nil {
+		return nil
+	}
+	return ref.RecipientID
 }
 
 type row interface {
@@ -234,15 +249,15 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 			INSERT INTO notification_messages (
 				id, caller_app_id, idempotency_key, request_hash, template_id, template_version,
 				channel, target_type, target_hash, target_ciphertext, payload_ciphertext,
-				resource_type, resource_id, encryption_key_id, hash_key_id, expires_at, status
+				resource_type, resource_id, eligibility_campaign_id, eligibility_recipient_id, encryption_key_id, hash_key_id, expires_at, status
 			) VALUES (
-				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-				clock_timestamp()+($16::bigint*interval '1 microsecond'),'queued'
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+				clock_timestamp()+($18::bigint*interval '1 microsecond'),'queued'
 			)`,
 		params.MessageID, params.Caller, params.IdempotencyKey, params.RequestHash,
 		params.TemplateID, params.TemplateVersion, params.Channel, params.TargetType,
 		params.TargetHash, params.TargetCiphertext, params.PayloadCiphertext,
-		params.ResourceType, params.ResourceID, params.EncryptionKeyID, params.HashKeyID,
+		params.ResourceType, params.ResourceID, eligibilityCampaignID(params.EligibilityRef), eligibilityRecipientID(params.EligibilityRef), params.EncryptionKeyID, params.HashKeyID,
 		params.ExpiresAfter.Microseconds(),
 	); err != nil {
 		if isUniqueViolation(err) {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/HallelujahHomeChurch/notification-api/internal/templates"
@@ -73,6 +74,41 @@ func TestAlreadySentCompletesWithoutProviderCall(t *testing.T) {
 	}
 	if message.completed != 1 || message.deadLettered != 0 {
 		t.Fatalf("settlement complete=%d dead-letter=%d", message.completed, message.deadLettered)
+	}
+}
+
+func TestEligibilityIsCheckedBeforeEveryProviderAttempt(t *testing.T) {
+	ref := &contracts.EligibilityRef{CampaignID: "10000000-0000-4000-8000-000000000001", RecipientID: "10000000-0000-4000-8000-000000000002"}
+	for _, test := range []struct {
+		name          string
+		allowed       bool
+		err           error
+		providerCalls int
+		terminalCode  string
+		retryCode     string
+	}{
+		{name: "allow", allowed: true, providerCalls: 1},
+		{name: "suppress", providerCalls: 0, terminalCode: "eligibility_revoked"},
+		{name: "retry", err: errors.New("unavailable"), providerCalls: 0, retryCode: "eligibility_unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := deliveryRepository(t, nil, 1)
+			repository.claimResult.Claim.EligibilityRef = ref
+			provider := &fakeProvider{}
+			message := &fakeMessage{id: "delivery-1"}
+			checker := &fakeEligibilityChecker{allowed: test.allowed, err: test.err}
+
+			err := newWorker(repository, provider, testKey).WithEligibilityChecker(checker).Process(context.Background(), message)
+			if err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			if provider.calls != test.providerCalls || repository.failedCode != test.terminalCode || repository.retryCode != test.retryCode {
+				t.Fatalf("provider=%d terminal=%q retry=%q", provider.calls, repository.failedCode, repository.retryCode)
+			}
+			if checker.calls != 1 {
+				t.Fatalf("eligibility calls=%d", checker.calls)
+			}
+		})
 	}
 }
 
@@ -477,6 +513,10 @@ func (r *fakeRepository) markDeadLettered(_ context.Context, _ claim, code strin
 	r.deadLetterCode = code
 	return r.transitionErr
 }
+func (r *fakeRepository) markSuppressed(_ context.Context, _ claim, code string) error {
+	r.failedCode = code
+	return nil
+}
 
 func (r *fakeRepository) release(_ context.Context, _ claim) error {
 	r.releases++
@@ -490,6 +530,17 @@ type fakeProvider struct {
 	receipt  providers.ProviderReceipt
 	err      error
 	send     func(context.Context) (providers.ProviderReceipt, error)
+}
+
+type fakeEligibilityChecker struct {
+	allowed bool
+	err     error
+	calls   int
+}
+
+func (c *fakeEligibilityChecker) Check(_ context.Context, _ contracts.EligibilityRef) (bool, error) {
+	c.calls++
+	return c.allowed, c.err
 }
 
 func (p *fakeProvider) Send(ctx context.Context, payload providers.DeliveryPayload) (providers.ProviderReceipt, error) {

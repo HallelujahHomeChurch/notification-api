@@ -342,6 +342,26 @@ func TestSendCreatesWebPushIntent(t *testing.T) {
 	}
 }
 
+func TestSendRestrictsAndPersistsEligibilityReference(t *testing.T) {
+	repository := &memoryRepository{}
+	svc := New(repository, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey})
+	request := validWebPushRequest()
+	request.EligibilityRef = &contracts.EligibilityRef{
+		CampaignID:  "019fd684-994e-798a-b5bc-62c535337fee",
+		RecipientID: "6d387ca2-dfa0-4713-8fa5-490c1c9f8304",
+	}
+
+	if _, err := svc.Send(context.Background(), "engagement-api", "eligible-push", request); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if got := repository.creates[0].EligibilityRef; got == nil || *got != *request.EligibilityRef {
+		t.Fatalf("eligibility ref = %#v", got)
+	}
+	if _, err := svc.Send(context.Background(), "account-api", "forged-eligibility", request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("non-engagement caller error = %v, want ErrInvalidRequest", err)
+	}
+}
+
 func TestSendRejectsInvalidIdempotencyKey(t *testing.T) {
 	svc := New(&memoryRepository{}, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey})
 	for _, key := range []string{"", "contains space", "line\nbreak"} {
@@ -367,5 +387,22 @@ func validRequest() contracts.SendRequest {
 			Type: "account",
 			ID:   "user-1",
 		},
+	}
+}
+
+func validWebPushRequest() contracts.SendRequest {
+	return contracts.SendRequest{
+		TemplateID: "engagement.web-push",
+		Channel:    "web_push",
+		Target: contracts.Target{
+			Type:    "web_push",
+			Address: `{"endpoint":"https://push.example.test/subscription","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`,
+		},
+		Locale: "zh-Hant",
+		Payload: map[string]string{
+			"title": "週報", "body": "本週週報", "clickBehavior": "url",
+			"actionUrl": "https://www.alive.org.tw/zh-Hant/literature-ministry",
+		},
+		Resource: contracts.Resource{Type: "campaign", ID: "campaign-1"},
 	}
 }

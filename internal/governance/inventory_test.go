@@ -57,7 +57,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"notification.message-sensitive": {"target_ciphertext", "payload_ciphertext"},
 		"notification.message-metadata": {
 			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",
-			"channel", "target_type", "target_hash", "resource_type", "resource_id", "status", "created_at",
+			"channel", "target_type", "target_hash", "resource_type", "resource_id", "eligibility_campaign_id", "eligibility_recipient_id", "status", "created_at",
 			"updated_at", "terminal_at", "payload_purged_at", "encryption_key_id", "hash_key_id", "expires_at",
 		},
 		"notification.delivery-receipts": {
