@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,48 @@ func TestSendPersistsActiveKeyIDsAndAllHashIdentities(t *testing.T) {
 		params.PayloadCiphertext,
 	); err != nil {
 		t.Fatalf("active-key decrypt error = %v", err)
+	}
+}
+
+func TestSendPersistsOnlyHashedAccountSubjectForTrustedCaller(t *testing.T) {
+	repository := &memoryRepository{}
+	keys := map[string][]byte{
+		"v1": bytes.Repeat([]byte{2}, 32),
+		"v2": bytes.Repeat([]byte{4}, 32),
+	}
+	svc := New(repository, Config{
+		ActiveEncryptionKeyID: "v1",
+		EncryptionKeys:        map[string][]byte{"v1": testEncryptionKey},
+		ActiveHashKeyID:       "v2",
+		HashKeys:              keys,
+	})
+	request := validRequest()
+	request.SubjectAccountID = "b038ad3f-d2cb-433e-85a9-cb277117b0a4"
+
+	if _, err := svc.Send(context.Background(), "account-api", "subject-1", request); err != nil {
+		t.Fatal(err)
+	}
+	params := repository.creates[0]
+	want := notificationcrypto.Hash(keys["v2"], []byte("notification-account-subject:"+request.SubjectAccountID))
+	if params.SubjectHash != want || params.SubjectHashKeyID != "v2" {
+		t.Fatalf("subject attribution=%q/%q", params.SubjectHashKeyID, params.SubjectHash)
+	}
+	if strings.Contains(params.SubjectHash, request.SubjectAccountID) {
+		t.Fatal("subject hash contains plaintext Account ID")
+	}
+}
+
+func TestSendRejectsAccountSubjectFromUntrustedCaller(t *testing.T) {
+	repository := &memoryRepository{}
+	svc := New(repository, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey})
+	request := validRequest()
+	request.SubjectAccountID = "b038ad3f-d2cb-433e-85a9-cb277117b0a4"
+
+	if _, err := svc.Send(context.Background(), "other-api", "subject-1", request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Send() error=%v", err)
+	}
+	if len(repository.creates) != 0 {
+		t.Fatal("untrusted subject attribution reached persistence")
 	}
 }
 

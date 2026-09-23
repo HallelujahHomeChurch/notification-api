@@ -48,6 +48,8 @@ type CreateParams struct {
 	TargetType        string
 	TargetHash        string
 	TargetHashes      map[string]string
+	SubjectHash       string
+	SubjectHashKeyID  string
 	TargetCiphertext  []byte
 	PayloadCiphertext []byte
 	ResourceType      string
@@ -162,7 +164,12 @@ func ValidateKeyReferences(
 		UNION ALL
 		SELECT 'hash', hash_key_id
 		FROM notification_messages
-		GROUP BY hash_key_id`)
+		GROUP BY hash_key_id
+		UNION ALL
+		SELECT 'hash', subject_hash_key_id
+		FROM notification_messages
+		WHERE subject_hash_key_id IS NOT NULL
+		GROUP BY subject_hash_key_id`)
 	if err != nil {
 		return fmt.Errorf("read notification key references: %w", err)
 	}
@@ -249,15 +256,17 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 			INSERT INTO notification_messages (
 				id, caller_app_id, idempotency_key, request_hash, template_id, template_version,
 				channel, target_type, target_hash, target_ciphertext, payload_ciphertext,
-				resource_type, resource_id, eligibility_campaign_id, eligibility_recipient_id, encryption_key_id, hash_key_id, expires_at, status
+				resource_type, resource_id, eligibility_campaign_id, eligibility_recipient_id, encryption_key_id, hash_key_id,
+				subject_hash, subject_hash_key_id, expires_at, status
 			) VALUES (
-				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-				clock_timestamp()+($18::bigint*interval '1 microsecond'),'queued'
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+				clock_timestamp()+($20::bigint*interval '1 microsecond'),'queued'
 			)`,
 		params.MessageID, params.Caller, params.IdempotencyKey, params.RequestHash,
 		params.TemplateID, params.TemplateVersion, params.Channel, params.TargetType,
 		params.TargetHash, params.TargetCiphertext, params.PayloadCiphertext,
 		params.ResourceType, params.ResourceID, eligibilityCampaignID(params.EligibilityRef), eligibilityRecipientID(params.EligibilityRef), params.EncryptionKeyID, params.HashKeyID,
+		nullString(params.SubjectHash), nullString(params.SubjectHashKeyID),
 		params.ExpiresAfter.Microseconds(),
 	); err != nil {
 		if isUniqueViolation(err) {
@@ -294,6 +303,13 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 			Status:          contracts.MessageStatusQueued,
 		},
 	}, nil
+}
+
+func nullString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (s *Store) Get(ctx context.Context, caller, messageID string) (Message, error) {

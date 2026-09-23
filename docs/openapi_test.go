@@ -163,6 +163,8 @@ func TestOpenAPIMatchesImplementedRuntimeSemantics(t *testing.T) {
 		"target: { $ref: '#/components/schemas/EmailTarget' }",
 		"channel: { const: web_push }",
 		"target: { $ref: '#/components/schemas/WebPushTarget' }",
+		"subjectAccountId:",
+		"Only account-api and engagement-api",
 	} {
 		requireContains(t, sendRequest, want)
 	}
@@ -242,7 +244,7 @@ func TestOpenAPIDSRContractsExposeOnlyRedactedNotificationMetadata(t *testing.T)
 	requireContains(t, actionResult, "action: { const: restrict_processing }")
 	requireContains(t, actionResult, "status: { const: not_applicable }")
 	requireContains(t, actionResult, "action: { const: erase }")
-	requireContains(t, actionResult, "status: { const: completed }")
+	requireContains(t, actionResult, "status: { type: string, enum: [pending, completed] }")
 	record := yamlBlock(document, "    DSRExportRecord:")
 	for _, forbidden := range []string{"ciphertext", "provider", "endpoint", "payload"} {
 		if strings.Contains(strings.ToLower(record), forbidden) {
@@ -262,6 +264,10 @@ func TestOpenAPIAccountCleanupIsSeparateFromDSR(t *testing.T) {
 	requireContains(t, route, "AccountCleanupRequest")
 	request := yamlBlock(document, "    AccountCleanupRequest:")
 	requireContains(t, request, "required: [userId, canonicalEmail, idempotencyKey]")
+	result := yamlBlock(document, "    AccountCleanupResult:")
+	for _, want := range []string{"enum: [pending, completed]", "remainingCount", "reasonCodes", "legacy_unattributed_notifications"} {
+		requireContains(t, result, want)
+	}
 	if strings.Contains(request, "requestId") || strings.Contains(request, "action") {
 		t.Fatalf("manual cleanup depends on DSR fields: %s", request)
 	}

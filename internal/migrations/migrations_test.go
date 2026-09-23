@@ -74,3 +74,24 @@ func TestCryptoKeyMigrationIsExpandCompatible(t *testing.T) {
 		t.Fatal("crypto key migration removes expand-phase defaults")
 	}
 }
+
+func TestAccountSubjectAttributionMigrationIsAdditive(t *testing.T) {
+	contents, err := files.ReadFile("sql/004_account_subject_attribution.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	schema := strings.ToLower(string(contents))
+	for _, want := range []string{
+		"add column subject_hash text",
+		"add column subject_hash_key_id text",
+		"notification_messages_subject_hash_idx",
+		"where subject_hash is not null",
+	} {
+		if !strings.Contains(schema, want) {
+			t.Errorf("subject attribution migration missing %q", want)
+		}
+	}
+	if strings.Contains(schema, "subject_account_id") || strings.Contains(schema, " user_id ") {
+		t.Fatal("subject attribution migration stores a plaintext Account identifier")
+	}
+}

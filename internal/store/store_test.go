@@ -127,6 +127,9 @@ func TestCreatePersistsMessageDeliveryAndOutboxInOneTransaction(t *testing.T) {
 		!strings.Contains(tx.execs[1].query, "hash_key_id") {
 		t.Fatalf("message insert does not persist key IDs: %q", tx.execs[1].query)
 	}
+	if !strings.Contains(tx.execs[1].query, "subject_hash") || !strings.Contains(tx.execs[1].query, "subject_hash_key_id") {
+		t.Fatalf("message insert does not persist Account subject attribution: %q", tx.execs[1].query)
+	}
 }
 
 func TestCreateRateLimitUsesDatabaseClockAndWritesNoIntent(t *testing.T) {
@@ -297,6 +300,8 @@ func createParams() CreateParams {
 		TargetType:       "email",
 		TargetHash:       "target-hash",
 		TargetHashes:     map[string]string{"legacy-v1": "target-hash"},
+		SubjectHash:      "subject-hash",
+		SubjectHashKeyID: "legacy-v1",
 		TargetCiphertext: []byte("encrypted-target"),
 		PayloadCiphertext: []byte(
 			"encrypted-payload",

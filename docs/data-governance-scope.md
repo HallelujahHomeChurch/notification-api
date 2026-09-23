@@ -5,7 +5,7 @@ This inventory describes existing metadata and behavior only. It exports no data
 ## Deterministic Account attribution
 
 - The private DSR routes accept only the exact `account-api` caller. That trust boundary supplies the verified canonical email used for lookup; `notification-api` lowercases, trims and validates email syntax, but syntax validation alone does not verify an Account identity.
-- DSR lookup normalizes that email and calculates candidate HMAC values across every configured retained hash key. Only matching email rows with the persisted `hash_key_id + target_hash` pair are deterministic. Delivery and outbox rows inherit that attribution only through their enforced foreign-key joins to the matched message. Web Push targets hash subscription JSON rather than email and remain manual scope.
+- Trusted Account and Engagement senders may supply `subjectAccountId`. Notification canonicalizes the UUID and stores only `subject_hash_key_id + subject_hash`, computed across its own HMAC key ring; this makes new Email and Web Push rows deterministic without storing the Account ID. DSR cleanup also normalizes current Email and calculates legacy target hashes across retained keys. Delivery and outbox rows inherit attribution through enforced foreign-key joins.
 - `request_hash`, `target_hash`, `bucket_key`, ciphertext and provider identifiers are pseudonymous or personal data, not anonymous data. Generic `resource_type` and `resource_id` values remain manual scope until a tested Account predicate exists; they are not deterministic joins today.
 
 ## Explicit manual and excluded boundaries
@@ -33,7 +33,7 @@ These boundaries are characterized by `TestRunOnceUsesRequiredRetentionWindowsAn
 
 ## Existing request-triggered DSR behavior
 
-DSR is separate from age-based retention and is not encoded as an unsupported duration or expiry rule. The private Account caller supplies request/user identifiers and a verified canonical email. DSR userId is validation/correlation only and is not queried; current DSR lookup uses retained key IDs and email-derived hashes. Notification normalizes the email, searches HMACs across retained hash keys, and exports only bounded message/delivery metadata. Erasure waits for claimed provider calls, clears target and payload ciphertext, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent email lookup return no rows. Restrict-processing reports `not_applicable` without mutation.
+DSR is separate from age-based retention and is not encoded as an unsupported duration or expiry rule. The private Account caller supplies request/user identifiers and a verified canonical email. DSR userId is canonicalized and queried only through retained-key subject HMACs; current email remains a legacy fallback lookup. Unattributed historical rows are not inferred from payload or generic resource text and are surfaced as `legacy_unattributed_notifications`. Erasure waits for claimed provider calls, clears target and payload ciphertext plus direct subject hashes, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent deterministic lookup return no rows. Restrict-processing reports `not_applicable` without mutation.
 
 Behavioral references:
 

@@ -126,6 +126,71 @@ func TestAccountCleanupTombstonesWithoutDSRRequest(t *testing.T) {
 	}
 }
 
+func TestAccountCleanupUsesSubjectAttributionAcrossKeysAndChannels(t *testing.T) {
+	db := testDatabase(t)
+	keys := map[string][]byte{
+		"v1": []byte("11111111111111111111111111111111"),
+		"v2": []byte("22222222222222222222222222222222"),
+	}
+	userID := uuid.NewString()
+	currentEmail := "current@example.test"
+	legacyCurrent := insertMessage(t, db, "v1", crypto.Hash(keys["v1"], []byte(currentEmail)), "email", "sent", "")
+	priorEmail := insertMessage(t, db, "v1", crypto.Hash(keys["v1"], []byte("prior@example.test")), "email", "sent", "")
+	webPush := insertMessage(t, db, "v2", crypto.Hash(keys["v2"], []byte("push-target")), "web_push", "sent", "")
+	unrelated := insertMessage(t, db, "v2", crypto.Hash(keys["v2"], []byte("other@example.test")), "email", "sent", "")
+	setSubjectAttribution(t, db, priorEmail, "v1", crypto.Hash(keys["v1"], []byte("notification-account-subject:"+userID)))
+	setSubjectAttribution(t, db, webPush, "v2", crypto.Hash(keys["v2"], []byte("notification-account-subject:"+userID)))
+	setSubjectAttribution(t, db, unrelated, "v2", crypto.Hash(keys["v2"], []byte("notification-account-subject:"+uuid.NewString())))
+
+	service := New(db, keys)
+	request := AccountCleanupRequest{UserID: userID, Email: currentEmail, IdempotencyKey: "delete-subject-1"}
+	result, err := service.CleanupAccount(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "completed" || result.RecordCount != 3 || result.RemainingCount != 0 {
+		t.Fatalf("cleanup=%#v", result)
+	}
+	for _, id := range []string{legacyCurrent, priorEmail, webPush} {
+		var target, payload []byte
+		var subjectHash, subjectKey sql.NullString
+		if err := db.QueryRow(`SELECT target_ciphertext,payload_ciphertext,subject_hash,subject_hash_key_id FROM notification_messages WHERE id=$1`, id).Scan(&target, &payload, &subjectHash, &subjectKey); err != nil {
+			t.Fatal(err)
+		}
+		if len(target) != 0 || len(payload) != 0 || subjectHash.Valid || subjectKey.Valid {
+			t.Fatalf("message %s was not fully tombstoned", id)
+		}
+	}
+	var resourceID, idempotencyKey, requestHash, messageStatus, deliveryStatus string
+	if err := db.QueryRow(`SELECT resource_id,idempotency_key,request_hash,status FROM notification_messages WHERE id=$1`, priorEmail).Scan(&resourceID, &idempotencyKey, &requestHash, &messageStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM notification_deliveries WHERE message_id=$1`, priorEmail).Scan(&deliveryStatus); err != nil {
+		t.Fatal(err)
+	}
+	if resourceID != "" || !strings.HasPrefix(idempotencyKey, "erased:") || requestHash != strings.Repeat("0", 64) || messageStatus != "sent" || deliveryStatus != "sent" {
+		t.Fatalf("retained shell resource=%q key=%q hash=%q message=%q delivery=%q", resourceID, idempotencyKey, requestHash, messageStatus, deliveryStatus)
+	}
+	var unrelatedTarget []byte
+	if err := db.QueryRow(`SELECT target_ciphertext FROM notification_messages WHERE id=$1`, unrelated).Scan(&unrelatedTarget); err != nil {
+		t.Fatal(err)
+	}
+	if len(unrelatedTarget) == 0 {
+		t.Fatal("cleanup tombstoned unrelated subject")
+	}
+	replayed, err := service.CleanupAccount(context.Background(), request)
+	if err != nil || replayed.Status != "completed" || replayed.RecordCount != 0 || replayed.RemainingCount != 0 {
+		t.Fatalf("replay=%#v err=%v", replayed, err)
+	}
+}
+
+func setSubjectAttribution(t *testing.T, db *sql.DB, messageID, keyID, hash string) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE notification_messages SET subject_hash_key_id=$2,subject_hash=$3 WHERE id=$1`, messageID, keyID, hash); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRestrictProcessingReturnsNotApplicableWithoutMutation(t *testing.T) {
 	db := testDatabase(t)
 	key := []byte("11111111111111111111111111111111")

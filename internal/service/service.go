@@ -116,6 +116,13 @@ func (s *Service) Send(
 			return Result{}, ErrInvalidRequest
 		}
 	}
+	if request.SubjectAccountID != "" {
+		subjectID, err := uuid.Parse(request.SubjectAccountID)
+		if (caller != "account-api" && caller != "engagement-api") || err != nil {
+			return Result{}, ErrInvalidRequest
+		}
+		request.SubjectAccountID = subjectID.String()
+	}
 	if !definition.SupportedLocale[request.Locale] {
 		request.Locale = "en"
 	}
@@ -171,6 +178,11 @@ func (s *Service) Send(
 	if !requestHashOK || !targetHashOK {
 		return Result{}, fmt.Errorf("active notification hash key is not configured")
 	}
+	var subjectHash, subjectHashKeyID string
+	if request.SubjectAccountID != "" {
+		subjectHash = notificationcrypto.Hash(s.config.HashKeys[s.config.ActiveHashKeyID], []byte("notification-account-subject:"+request.SubjectAccountID))
+		subjectHashKeyID = s.config.ActiveHashKeyID
+	}
 
 	created, err := s.repository.Create(ctx, store.CreateParams{
 		MessageID:         messageID,
@@ -188,6 +200,8 @@ func (s *Service) Send(
 		TargetType:        request.Target.Type,
 		TargetHash:        targetHash,
 		TargetHashes:      targetHashes,
+		SubjectHash:       subjectHash,
+		SubjectHashKeyID:  subjectHashKeyID,
 		TargetCiphertext:  targetCiphertext,
 		PayloadCiphertext: payloadCiphertext,
 		ResourceType:      request.Resource.Type,
@@ -234,23 +248,25 @@ func (s *Service) Get(ctx context.Context, caller, messageID string) (Result, er
 
 func canonicalRequest(request contracts.SendRequest, templateVersion int) ([]byte, error) {
 	return json.Marshal(struct {
-		TemplateID      string                    `json:"templateId"`
-		TemplateVersion int                       `json:"templateVersion"`
-		Channel         string                    `json:"channel"`
-		Target          contracts.Target          `json:"target"`
-		Locale          string                    `json:"locale"`
-		Payload         map[string]string         `json:"payload"`
-		Resource        contracts.Resource        `json:"resource"`
-		EligibilityRef  *contracts.EligibilityRef `json:"eligibilityRef,omitempty"`
+		TemplateID       string                    `json:"templateId"`
+		TemplateVersion  int                       `json:"templateVersion"`
+		Channel          string                    `json:"channel"`
+		Target           contracts.Target          `json:"target"`
+		Locale           string                    `json:"locale"`
+		Payload          map[string]string         `json:"payload"`
+		Resource         contracts.Resource        `json:"resource"`
+		EligibilityRef   *contracts.EligibilityRef `json:"eligibilityRef,omitempty"`
+		SubjectAccountID string                    `json:"subjectAccountId,omitempty"`
 	}{
-		TemplateID:      request.TemplateID,
-		TemplateVersion: templateVersion,
-		Channel:         request.Channel,
-		Target:          request.Target,
-		Locale:          request.Locale,
-		Payload:         request.Payload,
-		Resource:        request.Resource,
-		EligibilityRef:  request.EligibilityRef,
+		TemplateID:       request.TemplateID,
+		TemplateVersion:  templateVersion,
+		Channel:          request.Channel,
+		Target:           request.Target,
+		Locale:           request.Locale,
+		Payload:          request.Payload,
+		Resource:         request.Resource,
+		EligibilityRef:   request.EligibilityRef,
+		SubjectAccountID: request.SubjectAccountID,
 	})
 }
 

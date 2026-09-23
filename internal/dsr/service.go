@@ -74,17 +74,20 @@ type ExportPage struct {
 }
 
 type ActionResult struct {
-	Owner       string   `json:"owner"`
-	Action      string   `json:"action"`
-	Status      string   `json:"status"`
-	RecordCount int64    `json:"recordCount"`
-	ReasonCodes []string `json:"reasonCodes"`
+	Owner          string   `json:"owner"`
+	Action         string   `json:"action"`
+	Status         string   `json:"status"`
+	RecordCount    int64    `json:"recordCount"`
+	RemainingCount int64    `json:"remainingCount"`
+	ReasonCodes    []string `json:"reasonCodes"`
 }
 
 type AccountCleanupResult struct {
-	Owner       string `json:"owner"`
-	Status      string `json:"status"`
-	RecordCount int64  `json:"recordCount"`
+	Owner          string   `json:"owner"`
+	Status         string   `json:"status"`
+	RecordCount    int64    `json:"recordCount"`
+	RemainingCount int64    `json:"remainingCount"`
+	ReasonCodes    []string `json:"reasonCodes"`
 }
 
 func (s *Service) Export(ctx context.Context, request ExportRequest) (ExportPage, error) {
@@ -134,11 +137,11 @@ func (s *Service) Apply(ctx context.Context, request ActionRequest) (ActionResul
 	case "restrict_processing":
 		return ActionResult{Owner: owner, Action: request.Action, Status: "not_applicable", ReasonCodes: []string{"ordinary_receipt_retention"}}, nil
 	case "erase":
-		count, err := s.erase(ctx, request.Email)
+		result, err := s.erase(ctx, request.UserID, request.Email)
 		if err != nil {
 			return ActionResult{}, err
 		}
-		return ActionResult{Owner: owner, Action: request.Action, Status: "completed", RecordCount: count, ReasonCodes: []string{}}, nil
+		return ActionResult{Owner: owner, Action: request.Action, Status: result.Status, RecordCount: result.RecordCount, RemainingCount: result.RemainingCount, ReasonCodes: result.ReasonCodes}, nil
 	default:
 		return ActionResult{}, ErrInvalidRequest
 	}
@@ -148,48 +151,76 @@ func (s *Service) CleanupAccount(ctx context.Context, request AccountCleanupRequ
 	if _, err := uuid.Parse(request.UserID); err != nil || !ValidEmail(request.Email) || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 200 {
 		return AccountCleanupResult{}, ErrInvalidRequest
 	}
-	count, err := s.erase(ctx, request.Email)
+	result, err := s.erase(ctx, request.UserID, request.Email)
 	if err != nil {
 		return AccountCleanupResult{}, err
 	}
-	return AccountCleanupResult{Owner: owner, Status: "completed", RecordCount: count}, nil
+	return result, nil
 }
 
-func (s *Service) erase(ctx context.Context, email string) (int64, error) {
-	keyIDs, hashes := candidateHashes(s.hashKeys, email)
-	if len(keyIDs) == 0 {
-		return 0, ErrInvalidRequest
+func (s *Service) erase(ctx context.Context, userID, email string) (AccountCleanupResult, error) {
+	emailKeyIDs, emailHashes := candidateHashes(s.hashKeys, email)
+	subjectKeyIDs, subjectHashes := candidateSubjectHashes(s.hashKeys, userID)
+	if len(emailKeyIDs) == 0 {
+		return AccountCleanupResult{}, ErrInvalidRequest
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return AccountCleanupResult{}, err
 	}
 	defer tx.Rollback()
-	if err := lockDeliveries(ctx, tx, keyIDs, hashes); err != nil {
-		return 0, err
+	if err := lockDeliveries(ctx, tx, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes); err != nil {
+		return AccountCleanupResult{}, err
 	}
-	result, err := tx.ExecContext(ctx, eraseQuery, keyIDs, hashes)
+	if _, err := tx.ExecContext(ctx, suppressOutboxQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes); err != nil {
+		return AccountCleanupResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, suppressDeliveriesQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes); err != nil {
+		return AccountCleanupResult{}, err
+	}
+	result, err := tx.ExecContext(ctx, eraseQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes)
 	if err != nil {
-		return 0, err
+		return AccountCleanupResult{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return AccountCleanupResult{}, err
+	}
+	var remaining, unattributedLegacy int64
+	if err := tx.QueryRowContext(ctx, postconditionQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes).Scan(&remaining); err != nil {
+		return AccountCleanupResult{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM notification_messages WHERE caller_app_id IN ('account-api','engagement-api') AND subject_hash IS NULL AND target_hash<>repeat('0',64)`).Scan(&unattributedLegacy); err != nil {
+		return AccountCleanupResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return AccountCleanupResult{}, err
 	}
-	return result.RowsAffected()
+	status := "completed"
+	if remaining != 0 {
+		status = "pending"
+	}
+	reasons := []string{}
+	if unattributedLegacy != 0 {
+		reasons = append(reasons, "legacy_unattributed_notifications")
+	}
+	return AccountCleanupResult{Owner: owner, Status: status, RecordCount: affected, RemainingCount: remaining, ReasonCodes: reasons}, nil
 }
 
-func lockDeliveries(ctx context.Context, tx *sql.Tx, keyIDs, hashes []string) error {
+func lockDeliveries(ctx context.Context, tx *sql.Tx, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes []string) error {
 	rows, err := tx.QueryContext(ctx, `
-		WITH candidates AS (
-			SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, target_hash)
+		WITH subject_candidates AS (
+			SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, subject_hash)
+		), email_candidates AS (
+			SELECT * FROM unnest($3::text[], $4::text[]) AS candidate(hash_key_id, target_hash)
 		)
 		SELECT delivery.id
 		FROM notification_deliveries AS delivery
 		JOIN notification_messages AS message ON message.id=delivery.message_id
-		JOIN candidates ON candidates.hash_key_id=message.hash_key_id AND candidates.target_hash=message.target_hash
-		WHERE message.target_hash<>repeat('0',64)
+		WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
+		   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
 		ORDER BY delivery.id
-		FOR UPDATE OF delivery, message`, keyIDs, hashes)
+		FOR UPDATE OF delivery, message`, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes)
 	if err != nil {
 		return err
 	}
@@ -242,6 +273,14 @@ func candidateHashes(hashKeys map[string][]byte, email string) ([]string, []stri
 	return keyIDs, hashes
 }
 
+func candidateSubjectHashes(hashKeys map[string][]byte, userID string) ([]string, []string) {
+	parsed, err := uuid.Parse(userID)
+	if err != nil {
+		return nil, nil
+	}
+	return candidateHashes(hashKeys, "notification-account-subject:"+parsed.String())
+}
+
 type cursor struct {
 	CreatedAt time.Time `json:"createdAt"`
 	ID        string    `json:"id"`
@@ -286,16 +325,68 @@ const exportQuery = `
 	LIMIT $5`
 
 const eraseQuery = `
-	WITH candidates AS (
-		SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, target_hash)
+	WITH subject_candidates AS (
+		SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, subject_hash)
+	), email_candidates AS (
+		SELECT * FROM unnest($3::text[], $4::text[]) AS candidate(hash_key_id, target_hash)
 	)
 	UPDATE notification_messages AS message
 	SET target_ciphertext=''::bytea,
 		payload_ciphertext=''::bytea,
 		target_hash=repeat('0',64),
+		request_hash=repeat('0',64),
+		idempotency_key='erased:'||message.id::text,
+		resource_id='',
+		eligibility_campaign_id=NULL,
+		eligibility_recipient_id=NULL,
+		subject_hash=NULL,
+		subject_hash_key_id=NULL,
+		status=CASE WHEN message.status IN ('queued','sending') THEN 'suppressed' ELSE message.status END,
+		terminal_at=CASE WHEN message.status IN ('queued','sending') THEN COALESCE(message.terminal_at,clock_timestamp()) ELSE message.terminal_at END,
 		payload_purged_at=COALESCE(payload_purged_at, clock_timestamp()),
 		updated_at=clock_timestamp()
-	FROM candidates
-	WHERE message.hash_key_id=candidates.hash_key_id
-	  AND message.target_hash=candidates.target_hash
-	  AND message.target_hash<>repeat('0',64)`
+	WHERE message.target_hash<>repeat('0',64)
+	  AND (
+	    EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
+	    OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
+	  )`
+
+const suppressOutboxQuery = `
+	WITH subject_candidates AS (
+		SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, subject_hash)
+	), email_candidates AS (
+		SELECT * FROM unnest($3::text[], $4::text[]) AS candidate(hash_key_id, target_hash)
+	), messages AS (
+		SELECT message.id FROM notification_messages message
+		WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
+		   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
+	)
+	DELETE FROM notification_outbox outbox
+	USING notification_deliveries delivery, messages
+	WHERE outbox.delivery_id=delivery.id AND delivery.message_id=messages.id AND outbox.status<>'published'`
+
+const suppressDeliveriesQuery = `
+	WITH subject_candidates AS (
+		SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, subject_hash)
+	), email_candidates AS (
+		SELECT * FROM unnest($3::text[], $4::text[]) AS candidate(hash_key_id, target_hash)
+	), messages AS (
+		SELECT message.id FROM notification_messages message
+		WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
+		   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
+	)
+	UPDATE notification_deliveries delivery
+	SET status='suppressed',lease_expires_at=NULL,last_error_code='account_erased',updated_at=clock_timestamp()
+	FROM messages
+	WHERE delivery.message_id=messages.id AND delivery.status IN ('queued','sending','failed')`
+
+const postconditionQuery = `
+	WITH subject_candidates AS (
+		SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, subject_hash)
+	), email_candidates AS (
+		SELECT * FROM unnest($3::text[], $4::text[]) AS candidate(hash_key_id, target_hash)
+	)
+	SELECT count(*)
+	FROM notification_messages AS message
+	WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
+	   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)`

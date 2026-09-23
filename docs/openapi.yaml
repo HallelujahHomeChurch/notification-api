@@ -154,7 +154,7 @@ paths:
             schema: { $ref: '#/components/schemas/AccountCleanupRequest' }
       responses:
         '200':
-          description: Cleanup completed; safe to retry.
+          description: Current idempotent cleanup postcondition; safe to retry.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AccountCleanupResponse' }
@@ -353,6 +353,10 @@ components:
             type: string
         resource:
           $ref: '#/components/schemas/Resource'
+        subjectAccountId:
+          type: string
+          format: uuid
+          description: Optional Account subject attribution. Only account-api and engagement-api may set it; notification-api stores only an HMAC and key ID.
     EmailTarget:
       type: object
       additionalProperties: false
@@ -483,11 +487,15 @@ components:
     AccountCleanupResult:
       type: object
       additionalProperties: false
-      required: [owner, status, recordCount]
+      required: [owner, status, recordCount, remainingCount, reasonCodes]
       properties:
         owner: { const: notification-api }
-        status: { const: completed }
+        status: { type: string, enum: [pending, completed] }
         recordCount: { type: integer, format: int64, minimum: 0 }
+        remainingCount: { type: integer, format: int64, minimum: 0 }
+        reasonCodes:
+          type: array
+          items: { type: string, enum: [legacy_unattributed_notifications] }
     DSRExportResponse:
       type: object
       additionalProperties: false
@@ -540,19 +548,20 @@ components:
     DSRActionResult:
       type: object
       additionalProperties: false
-      required: [owner, action, status, recordCount, reasonCodes]
+      required: [owner, action, status, recordCount, remainingCount, reasonCodes]
       oneOf:
         - properties:
             action: { const: restrict_processing }
             status: { const: not_applicable }
         - properties:
             action: { const: erase }
-            status: { const: completed }
+            status: { type: string, enum: [pending, completed] }
       properties:
         owner: { const: notification-api }
         action: { type: string, enum: [restrict_processing, erase] }
-        status: { type: string, enum: [completed, not_applicable] }
+        status: { type: string, enum: [pending, completed, not_applicable] }
         recordCount: { type: integer, format: int64, minimum: 0 }
+        remainingCount: { type: integer, format: int64, minimum: 0 }
         reasonCodes:
           type: array
           items: { type: string }
