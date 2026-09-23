@@ -294,6 +294,13 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
     workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
+      dapr: {
+        enabled: true
+        appId: 'notification-worker'
+        appPort: 8081
+        appProtocol: 'http'
+        logLevel: 'warn'
+      }
       registries: [
         {
           server: registry.properties.loginServer

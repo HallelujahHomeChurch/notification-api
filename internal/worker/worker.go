@@ -205,9 +205,18 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 			finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 			defer finish()
 			if eligibilityErr != nil {
-				if err := w.repository.markRetry(finishCtx, claimed, "eligibility_unavailable", w.retryDelay(claimed.Attempt), w.newID()); err != nil {
+				if claimed.Attempt < maxAttempts {
+					if err := w.repository.markRetry(finishCtx, claimed, "eligibility_unavailable", w.retryDelay(claimed.Attempt), w.newID()); err != nil {
+						return errors.Join(eligibilityErr, err)
+					}
+					leaseHeld = false
+					return message.Complete(finishCtx)
+				}
+				if err := w.repository.markDeadLettered(finishCtx, claimed, "eligibility_unavailable"); err != nil {
 					return errors.Join(eligibilityErr, err)
 				}
+				leaseHeld = false
+				return message.DeadLetter(finishCtx, "eligibility_unavailable")
 			} else if err := w.repository.markSuppressed(finishCtx, claimed, "eligibility_revoked"); err != nil {
 				return err
 			}

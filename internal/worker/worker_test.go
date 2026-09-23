@@ -80,19 +80,23 @@ func TestAlreadySentCompletesWithoutProviderCall(t *testing.T) {
 func TestEligibilityIsCheckedBeforeEveryProviderAttempt(t *testing.T) {
 	ref := &contracts.EligibilityRef{CampaignID: "10000000-0000-4000-8000-000000000001", RecipientID: "10000000-0000-4000-8000-000000000002"}
 	for _, test := range []struct {
-		name          string
-		allowed       bool
-		err           error
-		providerCalls int
-		terminalCode  string
-		retryCode     string
+		name           string
+		allowed        bool
+		err            error
+		providerCalls  int
+		terminalCode   string
+		retryCode      string
+		deadLetterCode string
+		attempt        int
+		deadLettered   int
 	}{
-		{name: "allow", allowed: true, providerCalls: 1},
-		{name: "suppress", providerCalls: 0, terminalCode: "eligibility_revoked"},
-		{name: "retry", err: errors.New("unavailable"), providerCalls: 0, retryCode: "eligibility_unavailable"},
+		{name: "allow", allowed: true, providerCalls: 1, attempt: 1},
+		{name: "suppress", providerCalls: 0, terminalCode: "eligibility_revoked", attempt: 1},
+		{name: "retry", err: errors.New("unavailable"), providerCalls: 0, retryCode: "eligibility_unavailable", attempt: 1},
+		{name: "retry exhaustion", err: errors.New("unavailable"), providerCalls: 0, deadLetterCode: "eligibility_unavailable", attempt: maxAttempts, deadLettered: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repository := deliveryRepository(t, nil, 1)
+			repository := deliveryRepository(t, nil, test.attempt)
 			repository.claimResult.Claim.EligibilityRef = ref
 			provider := &fakeProvider{}
 			message := &fakeMessage{id: "delivery-1"}
@@ -102,8 +106,8 @@ func TestEligibilityIsCheckedBeforeEveryProviderAttempt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Process() error = %v", err)
 			}
-			if provider.calls != test.providerCalls || repository.failedCode != test.terminalCode || repository.retryCode != test.retryCode {
-				t.Fatalf("provider=%d terminal=%q retry=%q", provider.calls, repository.failedCode, repository.retryCode)
+			if provider.calls != test.providerCalls || repository.failedCode != test.terminalCode || repository.retryCode != test.retryCode || repository.deadLetterCode != test.deadLetterCode || message.deadLettered != test.deadLettered {
+				t.Fatalf("provider=%d terminal=%q retry=%q dead-letter=%q broker-dead-letter=%d", provider.calls, repository.failedCode, repository.retryCode, repository.deadLetterCode, message.deadLettered)
 			}
 			if checker.calls != 1 {
 				t.Fatalf("eligibility calls=%d", checker.calls)
