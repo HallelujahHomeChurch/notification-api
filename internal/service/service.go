@@ -202,6 +202,7 @@ func (s *Service) Send(
 		TargetHashes:      targetHashes,
 		SubjectHash:       subjectHash,
 		SubjectHashKeyID:  subjectHashKeyID,
+		SubjectAccountID:  request.SubjectAccountID,
 		TargetCiphertext:  targetCiphertext,
 		PayloadCiphertext: payloadCiphertext,
 		ResourceType:      request.Resource.Type,
@@ -211,6 +212,9 @@ func (s *Service) Send(
 		RateLimits:        s.config.RateLimits,
 		ExpiresAfter:      definition.TTL,
 	})
+	if errors.Is(err, store.ErrSubjectErased) {
+		return Result{}, ErrInvalidRequest
+	}
 	if err != nil {
 		return Result{}, err
 	}

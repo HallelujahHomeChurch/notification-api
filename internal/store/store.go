@@ -50,6 +50,7 @@ type CreateParams struct {
 	TargetHashes      map[string]string
 	SubjectHash       string
 	SubjectHashKeyID  string
+	SubjectAccountID  string
 	TargetCiphertext  []byte
 	PayloadCiphertext []byte
 	ResourceType      string
@@ -66,6 +67,8 @@ type CreateResult struct {
 	Conflict   bool
 	RetryAfter time.Duration
 }
+
+var ErrSubjectErased = errors.New("notification account subject erased")
 
 func eligibilityCampaignID(ref *contracts.EligibilityRef) any {
 	if ref == nil {
@@ -227,6 +230,19 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 		return CreateResult{}, fmt.Errorf("begin notification intent: %w", err)
 	}
 	defer tx.Rollback()
+	if params.SubjectAccountID != "" {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "notification-account-subject:"+params.SubjectAccountID); err != nil {
+			return CreateResult{}, fmt.Errorf("lock notification account subject: %w", err)
+		}
+		digest := sha256.Sum256([]byte("notification-account-cleanup:" + params.SubjectAccountID))
+		var erased bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM account_cleanup_operations WHERE subject_ref=$1)`, fmt.Sprintf("%x", digest)).Scan(&erased); err != nil {
+			return CreateResult{}, fmt.Errorf("check notification account erasure: %w", err)
+		}
+		if erased {
+			return CreateResult{}, ErrSubjectErased
+		}
+	}
 
 	if _, err := tx.ExecContext(
 		ctx,

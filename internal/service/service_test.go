@@ -173,6 +173,9 @@ func TestSendPersistsOnlyHashedAccountSubjectForTrustedCaller(t *testing.T) {
 	if params.SubjectHash != want || params.SubjectHashKeyID != "v2" {
 		t.Fatalf("subject attribution=%q/%q", params.SubjectHashKeyID, params.SubjectHash)
 	}
+	if params.SubjectAccountID != request.SubjectAccountID {
+		t.Fatalf("subject lock identity=%q", params.SubjectAccountID)
+	}
 	if strings.Contains(params.SubjectHash, request.SubjectAccountID) {
 		t.Fatal("subject hash contains plaintext Account ID")
 	}

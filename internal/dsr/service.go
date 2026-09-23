@@ -139,7 +139,7 @@ func (s *Service) Apply(ctx context.Context, request ActionRequest) (ActionResul
 	case "restrict_processing":
 		return ActionResult{Owner: owner, Action: request.Action, Status: "not_applicable", ReasonCodes: []string{"ordinary_receipt_retention"}}, nil
 	case "erase":
-		result, err := s.erase(ctx, request.UserID, request.Email)
+		result, err := s.eraseIdempotent(ctx, request.UserID, request.Email, request.IdempotencyKey)
 		if err != nil {
 			return ActionResult{}, err
 		}
@@ -160,11 +160,12 @@ func (s *Service) CleanupAccount(ctx context.Context, request AccountCleanupRequ
 	return result, nil
 }
 
-func (s *Service) erase(ctx context.Context, userID, email string) (AccountCleanupResult, error) {
-	return s.eraseIdempotent(ctx, userID, email, "")
-}
-
 func (s *Service) eraseIdempotent(ctx context.Context, userID, email, idempotencyKey string) (AccountCleanupResult, error) {
+	parsedUserID, err := uuid.Parse(userID)
+	if err != nil {
+		return AccountCleanupResult{}, ErrInvalidRequest
+	}
+	userID = parsedUserID.String()
 	emailKeyIDs, emailHashes := candidateHashes(s.hashKeys, email)
 	subjectKeyIDs, subjectHashes := candidateSubjectHashes(s.hashKeys, userID)
 	if len(emailKeyIDs) == 0 {
@@ -176,8 +177,11 @@ func (s *Service) eraseIdempotent(ctx context.Context, userID, email, idempotenc
 	}
 	defer tx.Rollback()
 	if idempotencyKey != "" {
-		subjectHash := sha256.Sum256([]byte("notification-account-cleanup:" + userID + ":" + strings.ToLower(strings.TrimSpace(email))))
+		subjectHash := sha256.Sum256([]byte("notification-account-cleanup:" + userID))
 		subjectRef := hex.EncodeToString(subjectHash[:])
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "notification-account-subject:"+userID); err != nil {
+			return AccountCleanupResult{}, err
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO account_cleanup_operations(idempotency_key,subject_ref) VALUES($1,$2) ON CONFLICT DO NOTHING`, idempotencyKey, subjectRef); err != nil {
 			return AccountCleanupResult{}, err
 		}
