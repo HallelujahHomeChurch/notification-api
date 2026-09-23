@@ -258,8 +258,7 @@ func lockDeliveries(ctx context.Context, tx *sql.Tx, subjectKeyIDs, subjectHashe
 		JOIN notification_messages AS message ON message.id=delivery.message_id
 		WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
 		   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
-		ORDER BY delivery.id
-		FOR UPDATE OF delivery, message`, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes)
+		ORDER BY delivery.id`, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes)
 	if err != nil {
 		return err
 	}
@@ -283,7 +282,24 @@ func lockDeliveries(ctx context.Context, tx *sql.Tx, subjectKeyIDs, subjectHashe
 			return err
 		}
 	}
-	return nil
+	rows, err = tx.QueryContext(ctx, `
+		SELECT delivery.id
+		FROM notification_deliveries AS delivery
+		JOIN notification_messages AS message ON message.id=delivery.message_id
+		WHERE delivery.id=ANY($1::uuid[])
+		ORDER BY delivery.id
+		FOR UPDATE OF delivery, message`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func validRequest(requestID, userID, email string) bool {
