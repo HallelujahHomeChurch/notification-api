@@ -46,6 +46,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		datasets[dataset["id"].(string)] = dataset
 	}
 	require.ElementsMatch(t, []string{
+		"notification.account-cleanup-operations",
 		"notification.message-sensitive",
 		"notification.message-metadata",
 		"notification.delivery-receipts",
@@ -54,6 +55,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 	}, mapKeys(datasets))
 
 	exactPhysicalFields := map[string][]string{
+		"notification.account-cleanup-operations": {"idempotency_key", "subject_ref", "result", "created_at", "updated_at"},
 		"notification.message-sensitive": {"target_ciphertext", "payload_ciphertext"},
 		"notification.message-metadata": {
 			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",

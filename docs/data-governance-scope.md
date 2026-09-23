@@ -35,6 +35,8 @@ These boundaries are characterized by `TestRunOnceUsesRequiredRetentionWindowsAn
 
 DSR is separate from age-based retention and is not encoded as an unsupported duration or expiry rule. The private Account caller supplies request/user identifiers and a verified canonical email. DSR userId is canonicalized and queried only through retained-key subject HMACs; current email remains a legacy fallback lookup. Unattributed historical rows are not inferred from payload or generic resource text and are surfaced as `legacy_unattributed_notifications`. Erasure waits for claimed provider calls, clears target and payload ciphertext plus direct subject hashes, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent deterministic lookup return no rows. Restrict-processing reports `not_applicable` without mutation.
 
+Completed Account cleanup also retains a bounded idempotency tombstone: the caller key, a domain-separated SHA-256 reference to the canonical Account UUID, result counts/status/reason codes, and timestamps. It retains neither the UUID nor email. This prevents a completed destructive operation from being replayed for another subject or the deleted account from being silently recreated; its retention period remains `pending_legal` and no unsupported cleanup is claimed.
+
 Behavioral references:
 
 - `internal/dsr/service_test.go`: `TestExportFindsMessagesAcrossRetainedHashKeys`, `TestExportReturnsMetadataWithoutCiphertextOrProviderIdentifiers`, `TestEraseTombstonesAttributedPayloadAndBreaksEmailLookup`, `TestRestrictProcessingReturnsNotApplicableWithoutMutation`.

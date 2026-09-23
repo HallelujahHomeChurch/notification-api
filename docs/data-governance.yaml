@@ -134,3 +134,21 @@ datasets:
     legal_basis: {"status":"pending_legal","reference":null}
     retention: {"status":"enforced","rule":{"trigger":"expires_at","field":"expires_at","source":{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"},"duration_source":null,"predicate":"expires_at <= now","description":"The existing retention worker deletes only expired rate-limit buckets and preserves active buckets."},"action":"delete"}
     cleanup: {"mode":"existing_worker","implementation":[{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}],"evidence":[{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata"}]}
+
+  - id: notification.account-cleanup-operations
+    owner: notification-api
+    purpose: "Persist bounded idempotency results and an irreversible Account subject reference so completed account cleanup cannot be replayed for a different subject or silently recreated."
+    necessity: required
+    storage: {"kind":"postgres","resource":"account_cleanup_operations","sources":[{"path":"internal/migrations/sql/005_account_cleanup_operations.sql","symbol":"account_cleanup_operations"},{"path":"internal/dsr/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/dsr/service.go","symbol":"Service.eraseIdempotent"}]}
+    subject_keys: [{"kind":"user_id","field":"subject_ref","evidence":[{"path":"internal/dsr/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/dsr/service.go","symbol":"Service.eraseIdempotent"}]}]
+    data_classes: ["identity","security","activity"]
+    fields:
+      - {"name":"idempotency_key","purpose":"Deduplicate one Account cleanup operation and reject reuse for a different subject.","necessity":"required","data_classes":["security","activity"]}
+      - {"name":"subject_ref","purpose":"Store a domain-separated SHA-256 reference to the canonical Account UUID without retaining the UUID itself.","necessity":"required","data_classes":["identity","security"]}
+      - {"name":"result","purpose":"Replay only the bounded cleanup status, affected and remaining counts, and reason codes after completion.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"created_at","purpose":"Record when the cleanup operation was accepted.","necessity":"required","data_classes":["activity"]}
+      - {"name":"updated_at","purpose":"Record when the cleanup result was completed.","necessity":"required","data_classes":["activity"]}
+    attribution: {"mode":"direct","explanation":"The private Account caller supplies a canonical UUID. Notification stores only a domain-separated SHA-256 subject reference so the cleanup tombstone remains deterministic without retaining the Account UUID."}
+    legal_basis: {"status":"pending_legal","reference":null}
+    retention: {"status":"pending_legal","rule":null,"action":"none"}
+    cleanup: {"mode":"none","implementation":[],"evidence":[]}
