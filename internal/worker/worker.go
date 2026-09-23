@@ -184,9 +184,6 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 
 	payload, err := w.render(claimed)
 	if err != nil {
-		if releaseErr := releaseFence(); releaseErr != nil {
-			return errors.Join(fmt.Errorf("render delivery: %w", err), releaseErr)
-		}
 		if errors.Is(err, notificationcrypto.ErrKeyNotConfigured) {
 			return fmt.Errorf("render delivery: %w", err)
 		}
@@ -205,9 +202,6 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		allowed, eligibilityErr := w.eligibility.Check(eligibilityCtx, *claimed.EligibilityRef)
 		cancel()
 		if eligibilityErr != nil || !allowed {
-			if releaseErr := releaseFence(); releaseErr != nil {
-				return errors.Join(eligibilityErr, releaseErr)
-			}
 			finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 			defer finish()
 			if eligibilityErr != nil {
@@ -230,9 +224,6 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	}
 	receipt, providerErr := provider.Send(providerCtx, payload)
 	cancel()
-	if err := releaseFence(); err != nil {
-		return fmt.Errorf("release delivery fence: %w", err)
-	}
 	if providerErr == nil {
 		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 		defer finish()
