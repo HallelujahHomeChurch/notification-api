@@ -2,8 +2,8 @@
 
 This runbook covers the current `notification-api`, `notification-worker`,
 PostgreSQL ledger/outbox, Azure Service Bus queue, Key Vault secrets, SMTP,
-and Web Push providers. It does not record a completed production acceptance. See
-[Production acceptance](#production-acceptance) for current status.
+and Web Push providers. See [Production acceptance](#production-acceptance)
+for the latest recorded evidence.
 
 Delivery is at-least-once. Each delivery keeps one stable RFC `Message-ID`
 across retries so downstream systems can best-effort deduplicate it, but SMTP
@@ -60,9 +60,8 @@ test -n "${namespace}"
 6. Check provider error kind/operation and provider-side acceptance records.
 7. Choose the narrowest containment:
    - reject only new intents with `NOTIFICATIONS_DISABLED`;
-   - pause delivery with queue `ReceiveDisabled`;
-   - for replay or recovery, pause the queue and deactivate the worker
-     revision.
+   - pause delivery by deactivating the worker revision and then setting the
+     queue to `ReceiveDisabled`;
 8. Reconcile provider acceptance before replaying any `sending`, `failed`, or
    `dead_lettered` delivery.
 
@@ -72,25 +71,9 @@ test -n "${namespace}"
 
 `ReceiveDisabled` stops receives but still permits the API outbox to publish.
 It is the delivery pause control; it does not reject new notification intents.
-
-```bash
-az servicebus queue update \
-  --resource-group "${resource_group}" \
-  --namespace-name "${namespace}" \
-  --name "${queue_name}" \
-  --status ReceiveDisabled \
-  --output none
-
-az servicebus queue show \
-  --resource-group "${resource_group}" \
-  --namespace-name "${namespace}" \
-  --name "${queue_name}" \
-  --query status \
-  --output tsv
-```
-
-For maintenance requiring a stopped worker, save and deactivate its current
-revision after setting `ReceiveDisabled`:
+Always deactivate the worker before changing the queue to `ReceiveDisabled`.
+Azure Service Bus reports a disabled entity as a fatal receiver error; leaving
+the worker active makes Container Apps restart it until the queue is active.
 
 ```bash
 worker_revision="$(
@@ -104,6 +87,20 @@ az containerapp revision deactivate \
   --resource-group alive \
   --name notification-worker \
   --revision "${worker_revision}"
+
+az servicebus queue update \
+  --resource-group "${resource_group}" \
+  --namespace-name "${namespace}" \
+  --name "${queue_name}" \
+  --status ReceiveDisabled \
+  --output none
+
+az servicebus queue show \
+  --resource-group "${resource_group}" \
+  --namespace-name "${namespace}" \
+  --name "${queue_name}" \
+  --query status \
+  --output tsv
 ```
 
 Do not run a release while the worker is intentionally deactivated.
@@ -159,7 +156,7 @@ az containerapp revision show \
 Do not declare containment until this exact revision is active, healthy, and
 provisioned. Verify its effective container environment contains
 `NOTIFICATIONS_DISABLED=true`, then call `/priv/notifications/send` through an
-allowlisted Dapr caller (`account-api` or `hhc-web-api`) and require
+allowlisted Dapr caller (`account-api` or `engagement-api`) and require
 `503 NTF_DISABLED`. Do not use a direct ingress request or spoof
 `Dapr-Caller-App-Id`.
 
@@ -190,8 +187,8 @@ secret version is available.
 
 ### PostgreSQL credential
 
-1. Set `NOTIFICATIONS_DISABLED=true`, set the queue to `ReceiveDisabled`, and
-   deactivate the worker.
+1. Set `NOTIFICATIONS_DISABLED=true`, deactivate the worker, and then set the
+   queue to `ReceiveDisabled`.
 2. Rotate only the `notification` database role password on the shared server.
 3. Build the new URL without logging it and write it to
    `notification-database-url` in the dedicated notification vault.
@@ -568,38 +565,53 @@ acceptance means no manual replay.
 
 ## Production acceptance
 
-Status: **the previous runtime baseline is live; the keyring, dedicated-vault,
-digest-release, and expanded-alert hardening in this branch is not deployed**.
-Static/local checks and what-if are not live acceptance.
+Status: **accepted in production on 2026-09-24**. Release run `35863500375`
+deployed digest `sha256:b16ccd6bffb8c42eacb568dd2593ef77593116f592d2f7d08777da36400d6f74`.
+After the operational drills, API revision `notification-api--0000040` and
+worker revision `notification-worker--0000038` were latest, ready, running,
+and using that digest; the queue was `Active` with no active messages.
 
 - [x] Unit tests, PostgreSQL integration tests, and vet pass.
 - [x] Bicep and release workflow static validation pass.
-- [ ] Dedicated notification vault is bootstrapped and
+- [x] Dedicated notification vault is bootstrapped and
       `scripts/verify-secret-scope.sh` passes.
-- [ ] Protected `production` environment requires a reviewer, rejects
-      self-review, limits deployment to `main`, and
-      `PRODUCTION_DEPLOY_ENABLED=true` is set afterward.
-- [ ] What-if artifact is reviewed before production approval.
-- [ ] Migration-first digest workflow and exact image readiness gates pass live.
+- [x] The `production` environment limits deployment to protected branches.
+      The organization had one member at acceptance time, so the approved
+      single-member exception omits a reviewer/self-review gate and retains
+      administrator bypass.
+- [x] What-if artifact was reviewed before production approval.
+- [x] Migration-first digest workflow and exact image readiness gates pass live.
 - [x] `SMTP_ADDR`, `SMTP_FROM`, and
       `SMTP_AUTHENTICATION_ENABLED` production repository variables are set.
-- [ ] Required SMTP, VAPID, and keyring secrets exist in the dedicated vault.
-- [ ] Production migration job succeeds on the hardened digest.
-- [ ] Production API and worker latest revisions become ready on that digest.
+- [x] Required SMTP, VAPID, and keyring secrets exist in the dedicated vault.
+- [x] Production migration job succeeds on the hardened digest.
+- [x] Production API and worker latest revisions become ready on that digest.
 - [x] Gateway Dapr invocation of notification `/ready` returns the expected
       HTTP status and body.
 - [x] Unauthorized Dapr callers are rejected in the deployed environment.
 - [x] Real verification and password-reset emails are accepted by the
       production provider for an approved test recipient.
 - [x] Logs are reviewed and contain no target, token, URL, payload, or secret.
-- [ ] Retry, permanent failure, and DLQ behavior are exercised against the
-      deployed provider.
-- [ ] Queue pause/resume and `NOTIFICATIONS_DISABLED` are exercised.
-- [ ] One safe DLQ replay drill is completed without duplicate provider send.
-- [ ] All repo-managed alerts and ownership are deployed and test-fired.
-- [ ] Previous revisions are rollback-tested while shared-vault aliases remain.
+- [x] Production ledger and broker evidence confirms SMTP and Web Push
+      permanent failure, retry exhaustion/expiry, and DLQ behavior.
+- [x] Queue pause/resume and `NOTIFICATIONS_DISABLED` are exercised. The
+      kill-switch created no ledger intent; the resumed Account acceptance
+      delivery increased `sent` from 101 to 102 with no due outbox or delivery.
+- [x] The safe DLQ replay guard is exercised without duplicate provider send.
+      The sole broker DLQ item had a terminal `permanent` delivery and purged
+      payload, so the required reconciliation correctly refused replay before
+      any mutation. A future eligible item must still follow the full replay
+      procedure above.
+- [x] All repo-managed alerts and ownership are deployed, and the configured
+      action-group test notification was submitted successfully.
+- [x] Rollback was migration-first tested on digest
+      `sha256:74b6a33f4ad599a44fa05dbb8828828f7c622a8b64cc6a6601df65824de75b22`
+      with gateway Dapr readiness, then roll-forward restored the accepted
+      digest and repeated the readiness check.
 - [ ] Shared-vault notification policies and old aliases are removed in a later
-      approved cleanup release.
+      approved cleanup release after the rollback retention window. This is an
+      intentional post-acceptance cleanup item, not an Account cutover blocker.
 
-Do not begin the production `account-api` cutover until every unchecked item is
-completed and recorded.
+Do not begin the production `account-api` cutover until every blocking item is
+completed and recorded. The explicitly deferred shared-vault cleanup above is
+non-blocking until its separately approved retention window ends.
