@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -121,8 +122,12 @@ func TestAccountCleanupTombstonesWithoutDSRRequest(t *testing.T) {
 		t.Fatalf("cleanup = %#v, error=%v", result, err)
 	}
 	repeated, err := service.CleanupAccount(context.Background(), request)
-	if err != nil || repeated.RecordCount != 0 {
+	if err != nil || repeated.RecordCount != result.RecordCount || repeated.Status != result.Status || repeated.RemainingCount != result.RemainingCount {
 		t.Fatalf("repeated cleanup = %#v, error=%v", repeated, err)
+	}
+	request.UserID = uuid.NewString()
+	if _, err := service.CleanupAccount(context.Background(), request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("idempotency collision error=%v", err)
 	}
 }
 
@@ -179,7 +184,7 @@ func TestAccountCleanupUsesSubjectAttributionAcrossKeysAndChannels(t *testing.T)
 		t.Fatal("cleanup tombstoned unrelated subject")
 	}
 	replayed, err := service.CleanupAccount(context.Background(), request)
-	if err != nil || replayed.Status != "completed" || replayed.RecordCount != 0 || replayed.RemainingCount != 0 {
+	if err != nil || replayed.Status != "completed" || replayed.RecordCount != result.RecordCount || replayed.RemainingCount != 0 {
 		t.Fatalf("replay=%#v err=%v", replayed, err)
 	}
 }

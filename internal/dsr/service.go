@@ -2,8 +2,10 @@ package dsr
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/mail"
@@ -151,7 +153,7 @@ func (s *Service) CleanupAccount(ctx context.Context, request AccountCleanupRequ
 	if _, err := uuid.Parse(request.UserID); err != nil || !ValidEmail(request.Email) || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 200 {
 		return AccountCleanupResult{}, ErrInvalidRequest
 	}
-	result, err := s.erase(ctx, request.UserID, request.Email)
+	result, err := s.eraseIdempotent(ctx, request.UserID, request.Email, request.IdempotencyKey)
 	if err != nil {
 		return AccountCleanupResult{}, err
 	}
@@ -159,6 +161,10 @@ func (s *Service) CleanupAccount(ctx context.Context, request AccountCleanupRequ
 }
 
 func (s *Service) erase(ctx context.Context, userID, email string) (AccountCleanupResult, error) {
+	return s.eraseIdempotent(ctx, userID, email, "")
+}
+
+func (s *Service) eraseIdempotent(ctx context.Context, userID, email, idempotencyKey string) (AccountCleanupResult, error) {
 	emailKeyIDs, emailHashes := candidateHashes(s.hashKeys, email)
 	subjectKeyIDs, subjectHashes := candidateSubjectHashes(s.hashKeys, userID)
 	if len(emailKeyIDs) == 0 {
@@ -169,6 +175,28 @@ func (s *Service) erase(ctx context.Context, userID, email string) (AccountClean
 		return AccountCleanupResult{}, err
 	}
 	defer tx.Rollback()
+	if idempotencyKey != "" {
+		subjectHash := sha256.Sum256([]byte("notification-account-cleanup:" + userID + ":" + strings.ToLower(strings.TrimSpace(email))))
+		subjectRef := hex.EncodeToString(subjectHash[:])
+		if _, err := tx.ExecContext(ctx, `INSERT INTO account_cleanup_operations(idempotency_key,subject_ref) VALUES($1,$2) ON CONFLICT DO NOTHING`, idempotencyKey, subjectRef); err != nil {
+			return AccountCleanupResult{}, err
+		}
+		var operationSubject string
+		var stored []byte
+		if err := tx.QueryRowContext(ctx, `SELECT subject_ref,result FROM account_cleanup_operations WHERE idempotency_key=$1 FOR UPDATE`, idempotencyKey).Scan(&operationSubject, &stored); err != nil {
+			return AccountCleanupResult{}, err
+		}
+		if operationSubject != subjectRef {
+			return AccountCleanupResult{}, ErrInvalidRequest
+		}
+		if len(stored) != 0 {
+			var result AccountCleanupResult
+			if err := json.Unmarshal(stored, &result); err != nil {
+				return AccountCleanupResult{}, err
+			}
+			return result, tx.Commit()
+		}
+	}
 	if err := lockDeliveries(ctx, tx, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes); err != nil {
 		return AccountCleanupResult{}, err
 	}
@@ -193,9 +221,6 @@ func (s *Service) erase(ctx context.Context, userID, email string) (AccountClean
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM notification_messages WHERE caller_app_id IN ('account-api','engagement-api') AND subject_hash IS NULL AND target_hash<>repeat('0',64)`).Scan(&unattributedLegacy); err != nil {
 		return AccountCleanupResult{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return AccountCleanupResult{}, err
-	}
 	status := "completed"
 	if remaining != 0 {
 		status = "pending"
@@ -204,7 +229,17 @@ func (s *Service) erase(ctx context.Context, userID, email string) (AccountClean
 	if unattributedLegacy != 0 {
 		reasons = append(reasons, "legacy_unattributed_notifications")
 	}
-	return AccountCleanupResult{Owner: owner, Status: status, RecordCount: affected, RemainingCount: remaining, ReasonCodes: reasons}, nil
+	cleanupResult := AccountCleanupResult{Owner: owner, Status: status, RecordCount: affected, RemainingCount: remaining, ReasonCodes: reasons}
+	if idempotencyKey != "" && cleanupResult.Status == "completed" {
+		encoded, err := json.Marshal(cleanupResult)
+		if err != nil {
+			return AccountCleanupResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE account_cleanup_operations SET result=$2,updated_at=now() WHERE idempotency_key=$1`, idempotencyKey, encoded); err != nil {
+			return AccountCleanupResult{}, err
+		}
+	}
+	return cleanupResult, tx.Commit()
 }
 
 func lockDeliveries(ctx context.Context, tx *sql.Tx, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes []string) error {
