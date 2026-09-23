@@ -655,6 +655,26 @@ jobs:
           wait_for_revision "${API_APP_NAME}"
           wait_for_revision "${WORKER_APP_NAME}"
 
+      - name: Verify worker Dapr configuration
+        shell: bash
+        run: |
+          worker_dapr_enabled="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${WORKER_APP_NAME}" \
+            --query "properties.configuration.dapr.enabled" \
+            --output tsv \
+            --only-show-errors)"
+          worker_dapr_app_id="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${WORKER_APP_NAME}" \
+            --query "properties.configuration.dapr.appId" \
+            --output tsv \
+            --only-show-errors)"
+          if [[ "${worker_dapr_enabled}" != "true" || "${worker_dapr_app_id}" != "notification-worker" ]]; then
+            echo "Unexpected worker Dapr configuration: enabled=${worker_dapr_enabled:-missing} appId=${worker_dapr_app_id:-missing}" >&2
+            exit 1
+          fi
+
       - name: Verify Dapr readiness through API gateway
         id: smoke_runtime
         shell: bash
