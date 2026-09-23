@@ -22,6 +22,7 @@ var requiredOperations = map[string]struct {
 	"GET /priv/notifications/{messageId}": {visibility: "private", callers: []string{"account-api", "engagement-api"}},
 	"POST /priv/dsr/exports":              {visibility: "private", callers: []string{"account-api"}},
 	"POST /priv/dsr/actions":              {visibility: "private", callers: []string{"account-api"}},
+	"POST /priv/account-cleanup":          {visibility: "private", callers: []string{"account-api"}},
 }
 
 type operationMetadata struct {
@@ -162,6 +163,8 @@ func TestOpenAPIMatchesImplementedRuntimeSemantics(t *testing.T) {
 		"target: { $ref: '#/components/schemas/EmailTarget' }",
 		"channel: { const: web_push }",
 		"target: { $ref: '#/components/schemas/WebPushTarget' }",
+		"subjectAccountId:",
+		"Only account-api and engagement-api",
 	} {
 		requireContains(t, sendRequest, want)
 	}
@@ -241,12 +244,32 @@ func TestOpenAPIDSRContractsExposeOnlyRedactedNotificationMetadata(t *testing.T)
 	requireContains(t, actionResult, "action: { const: restrict_processing }")
 	requireContains(t, actionResult, "status: { const: not_applicable }")
 	requireContains(t, actionResult, "action: { const: erase }")
-	requireContains(t, actionResult, "status: { const: completed }")
+	requireContains(t, actionResult, "status: { type: string, enum: [pending, completed] }")
 	record := yamlBlock(document, "    DSRExportRecord:")
 	for _, forbidden := range []string{"ciphertext", "provider", "endpoint", "payload"} {
 		if strings.Contains(strings.ToLower(record), forbidden) {
 			t.Fatalf("DSR export record exposes %q: %s", forbidden, record)
 		}
+	}
+}
+
+func TestOpenAPIAccountCleanupIsSeparateFromDSR(t *testing.T) {
+	contents, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := string(contents)
+	route := yamlBlock(document, "  /priv/account-cleanup:")
+	requireContains(t, route, "x-hhc-callers: [account-api]")
+	requireContains(t, route, "AccountCleanupRequest")
+	request := yamlBlock(document, "    AccountCleanupRequest:")
+	requireContains(t, request, "required: [userId, canonicalEmail, idempotencyKey]")
+	result := yamlBlock(document, "    AccountCleanupResult:")
+	for _, want := range []string{"enum: [pending, completed]", "remainingCount", "reasonCodes", "legacy_unattributed_notifications"} {
+		requireContains(t, result, want)
+	}
+	if strings.Contains(request, "requestId") || strings.Contains(request, "action") {
+		t.Fatalf("manual cleanup depends on DSR fields: %s", request)
 	}
 }
 

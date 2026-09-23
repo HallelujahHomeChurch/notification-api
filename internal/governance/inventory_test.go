@@ -25,7 +25,7 @@ var excludedColumns = map[string]map[string]string{
 	},
 }
 
-const dsrUserIDBoundary = "DSR userId is validation/correlation only and is not queried; current DSR lookup uses retained key IDs and email-derived hashes."
+const dsrUserIDBoundary = "DSR userId is canonicalized and queried only through retained-key subject HMACs; current email remains a legacy fallback lookup."
 
 func notificationManifest(t *testing.T) map[string]any {
 	t.Helper()
@@ -46,6 +46,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		datasets[dataset["id"].(string)] = dataset
 	}
 	require.ElementsMatch(t, []string{
+		"notification.account-cleanup-operations",
 		"notification.message-sensitive",
 		"notification.message-metadata",
 		"notification.delivery-receipts",
@@ -54,11 +55,12 @@ func TestDataGovernanceManifest(t *testing.T) {
 	}, mapKeys(datasets))
 
 	exactPhysicalFields := map[string][]string{
+		"notification.account-cleanup-operations": {"idempotency_key", "subject_ref", "result", "created_at", "updated_at"},
 		"notification.message-sensitive": {"target_ciphertext", "payload_ciphertext"},
 		"notification.message-metadata": {
 			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",
 			"channel", "target_type", "target_hash", "resource_type", "resource_id", "eligibility_campaign_id", "eligibility_recipient_id", "status", "created_at",
-			"updated_at", "terminal_at", "payload_purged_at", "encryption_key_id", "hash_key_id", "expires_at",
+			"updated_at", "terminal_at", "payload_purged_at", "encryption_key_id", "hash_key_id", "expires_at", "subject_hash", "subject_hash_key_id",
 		},
 		"notification.delivery-receipts": {
 			"id", "message_id", "channel", "endpoint_ref", "provider", "status", "attempt_count",

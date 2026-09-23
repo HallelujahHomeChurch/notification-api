@@ -54,6 +54,33 @@ func (fakeDSR) Apply(_ context.Context, request dsr.ActionRequest) (dsr.ActionRe
 	return dsr.ActionResult{Owner: "notification-api", Action: request.Action, Status: "not_applicable", ReasonCodes: []string{"ordinary_receipt_retention"}}, nil
 }
 
+func (fakeDSR) CleanupAccount(context.Context, dsr.AccountCleanupRequest) (dsr.AccountCleanupResult, error) {
+	return dsr.AccountCleanupResult{Owner: "notification-api", Status: "completed"}, nil
+}
+
+func TestAccountCleanupRequiresExactAccountCallerAndStrictEnvelope(t *testing.T) {
+	handler := New(&fakeService{}, &fakePinger{}, []string{"account-api", "engagement-api"}, false, fakeDSR{})
+	body := `{"userId":"6d387ca2-dfa0-4713-8fa5-490c1c9f8304","canonicalEmail":"member@example.test","idempotencyKey":"delete-1"}`
+	for _, test := range []struct {
+		name, caller, body string
+		status             int
+	}{
+		{name: "account", caller: "account-api", body: body, status: http.StatusOK},
+		{name: "other caller", caller: "engagement-api", body: body, status: http.StatusForbidden},
+		{name: "missing key", caller: "account-api", body: `{"userId":"6d387ca2-dfa0-4713-8fa5-490c1c9f8304","canonicalEmail":"member@example.test"}`, status: http.StatusBadRequest},
+		{name: "unknown field", caller: "account-api", body: body[:len(body)-1] + `,"action":"erase"}`, status: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/priv/account-cleanup", strings.NewReader(test.body))
+			request.Header.Set("Dapr-Caller-App-Id", test.caller)
+			response := serve(handler, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, test.status, response.Body)
+			}
+		})
+	}
+}
+
 func TestDSRRoutesRequireExactAccountCallerAndStrictActionEnvelope(t *testing.T) {
 	handler := New(&fakeService{}, &fakePinger{}, []string{"account-api", "engagement-api"}, false, fakeDSR{})
 	export := `{"requestId":"019fd684-994e-798a-b5bc-62c535337fee","userId":"6d387ca2-dfa0-4713-8fa5-490c1c9f8304","canonicalEmail":"member@example.test"}`

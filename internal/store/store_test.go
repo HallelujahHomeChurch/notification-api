@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -126,6 +127,27 @@ func TestCreatePersistsMessageDeliveryAndOutboxInOneTransaction(t *testing.T) {
 	if !strings.Contains(tx.execs[1].query, "encryption_key_id") ||
 		!strings.Contains(tx.execs[1].query, "hash_key_id") {
 		t.Fatalf("message insert does not persist key IDs: %q", tx.execs[1].query)
+	}
+	if !strings.Contains(tx.execs[1].query, "subject_hash") || !strings.Contains(tx.execs[1].query, "subject_hash_key_id") {
+		t.Fatalf("message insert does not persist Account subject attribution: %q", tx.execs[1].query)
+	}
+}
+
+func TestCreateRejectsErasedAccountSubjectBeforeWriting(t *testing.T) {
+	tx := &fakeTransaction{rows: []fakeRow{{values: []any{true}}}}
+	db := &fakeDatabase{tx: tx}
+	instance := newStore(db, []byte("hash-key"))
+	params := createParams()
+	params.SubjectAccountID = "b038ad3f-d2cb-433e-85a9-cb277117b0a4"
+
+	if _, err := instance.Create(context.Background(), params); !errors.Is(err, ErrSubjectErased) {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(tx.execs) != 1 || !strings.Contains(tx.execs[0].query, "pg_advisory_xact_lock") || len(tx.queries) != 1 || !strings.Contains(tx.queries[0].query, "account_cleanup_operations") {
+		t.Fatalf("execs=%#v queries=%#v", tx.execs, tx.queries)
+	}
+	if tx.committed || !tx.rolledBack {
+		t.Fatalf("committed=%v rolledBack=%v", tx.committed, tx.rolledBack)
 	}
 }
 
@@ -297,6 +319,8 @@ func createParams() CreateParams {
 		TargetType:       "email",
 		TargetHash:       "target-hash",
 		TargetHashes:     map[string]string{"legacy-v1": "target-hash"},
+		SubjectHash:      "subject-hash",
+		SubjectHashKeyID: "legacy-v1",
 		TargetCiphertext: []byte("encrypted-target"),
 		PayloadCiphertext: []byte(
 			"encrypted-payload",

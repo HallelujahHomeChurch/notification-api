@@ -23,13 +23,14 @@ const (
 )
 
 type SendRequest struct {
-	TemplateID     string            `json:"templateId"`
-	Channel        string            `json:"channel"`
-	Target         Target            `json:"target"`
-	Locale         string            `json:"locale"`
-	Payload        map[string]string `json:"payload"`
-	Resource       Resource          `json:"resource"`
-	EligibilityRef *EligibilityRef   `json:"eligibilityRef,omitempty"`
+	TemplateID       string            `json:"templateId"`
+	Channel          string            `json:"channel"`
+	Target           Target            `json:"target"`
+	Locale           string            `json:"locale"`
+	Payload          map[string]string `json:"payload"`
+	Resource         Resource          `json:"resource"`
+	EligibilityRef   *EligibilityRef   `json:"eligibilityRef,omitempty"`
+	SubjectAccountID string            `json:"subjectAccountId,omitempty"`
 }
 
 type EligibilityRef struct {
