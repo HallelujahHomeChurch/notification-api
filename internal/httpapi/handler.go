@@ -26,6 +26,7 @@ type notificationService interface {
 type dsrService interface {
 	Export(context.Context, dsr.ExportRequest) (dsr.ExportPage, error)
 	Apply(context.Context, dsr.ActionRequest) (dsr.ActionResult, error)
+	CleanupAccount(context.Context, dsr.AccountCleanupRequest) (dsr.AccountCleanupResult, error)
 }
 
 type pinger interface {
@@ -76,10 +77,32 @@ func New(service notificationService, db pinger, allowedCallers []string, allowD
 	mux.Handle("/priv/notifications/{messageId}", h.requireMethod(http.MethodGet, h.authorize(http.HandlerFunc(h.get))))
 	mux.Handle("/priv/dsr/exports", h.requireMethod(http.MethodPost, h.authorizeCaller("account-api", http.HandlerFunc(h.exportDSR))))
 	mux.Handle("/priv/dsr/actions", h.requireMethod(http.MethodPost, h.authorizeCaller("account-api", http.HandlerFunc(h.applyDSR))))
+	mux.Handle("/priv/account-cleanup", h.requireMethod(http.MethodPost, h.authorizeCaller("account-api", http.HandlerFunc(h.cleanupAccount))))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "NTF_NOT_FOUND")
 	})
 	return h.withRequestID(mux)
+}
+
+func (h *handler) cleanupAccount(w http.ResponseWriter, r *http.Request) {
+	if h.dsr == nil {
+		writeError(w, r, http.StatusInternalServerError, "NTF_INTERNAL")
+		return
+	}
+	var request dsr.AccountCleanupRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if _, err := uuid.Parse(request.UserID); err != nil || !dsr.ValidEmail(request.Email) || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 200 {
+		writeError(w, r, http.StatusBadRequest, "NTF_INVALID_REQUEST")
+		return
+	}
+	result, err := h.dsr.CleanupAccount(r.Context(), request)
+	if err != nil {
+		handleDSRError(w, r, err)
+		return
+	}
+	writeEnvelope(w, http.StatusOK, r, result, nil)
 }
 
 func (h *handler) withRequestID(next http.Handler) http.Handler {

@@ -44,6 +44,12 @@ type ActionRequest struct {
 	IdempotencyKey string `json:"idempotencyKey"`
 }
 
+type AccountCleanupRequest struct {
+	UserID         string `json:"userId"`
+	Email          string `json:"canonicalEmail"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
 type Exception struct {
 	Code  string `json:"code"`
 	Count int64  `json:"count,omitempty"`
@@ -73,6 +79,12 @@ type ActionResult struct {
 	Status      string   `json:"status"`
 	RecordCount int64    `json:"recordCount"`
 	ReasonCodes []string `json:"reasonCodes"`
+}
+
+type AccountCleanupResult struct {
+	Owner       string `json:"owner"`
+	Status      string `json:"status"`
+	RecordCount int64  `json:"recordCount"`
 }
 
 func (s *Service) Export(ctx context.Context, request ExportRequest) (ExportPage, error) {
@@ -122,26 +134,7 @@ func (s *Service) Apply(ctx context.Context, request ActionRequest) (ActionResul
 	case "restrict_processing":
 		return ActionResult{Owner: owner, Action: request.Action, Status: "not_applicable", ReasonCodes: []string{"ordinary_receipt_retention"}}, nil
 	case "erase":
-		keyIDs, hashes := candidateHashes(s.hashKeys, request.Email)
-		if len(keyIDs) == 0 {
-			return ActionResult{}, ErrInvalidRequest
-		}
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return ActionResult{}, err
-		}
-		defer tx.Rollback()
-		if err := lockDeliveries(ctx, tx, keyIDs, hashes); err != nil {
-			return ActionResult{}, err
-		}
-		result, err := tx.ExecContext(ctx, eraseQuery, keyIDs, hashes)
-		if err != nil {
-			return ActionResult{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return ActionResult{}, err
-		}
-		count, err := result.RowsAffected()
+		count, err := s.erase(ctx, request.Email)
 		if err != nil {
 			return ActionResult{}, err
 		}
@@ -149,6 +142,40 @@ func (s *Service) Apply(ctx context.Context, request ActionRequest) (ActionResul
 	default:
 		return ActionResult{}, ErrInvalidRequest
 	}
+}
+
+func (s *Service) CleanupAccount(ctx context.Context, request AccountCleanupRequest) (AccountCleanupResult, error) {
+	if _, err := uuid.Parse(request.UserID); err != nil || !ValidEmail(request.Email) || strings.TrimSpace(request.IdempotencyKey) == "" || len(request.IdempotencyKey) > 200 {
+		return AccountCleanupResult{}, ErrInvalidRequest
+	}
+	count, err := s.erase(ctx, request.Email)
+	if err != nil {
+		return AccountCleanupResult{}, err
+	}
+	return AccountCleanupResult{Owner: owner, Status: "completed", RecordCount: count}, nil
+}
+
+func (s *Service) erase(ctx context.Context, email string) (int64, error) {
+	keyIDs, hashes := candidateHashes(s.hashKeys, email)
+	if len(keyIDs) == 0 {
+		return 0, ErrInvalidRequest
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := lockDeliveries(ctx, tx, keyIDs, hashes); err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, eraseQuery, keyIDs, hashes)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func lockDeliveries(ctx context.Context, tx *sql.Tx, keyIDs, hashes []string) error {

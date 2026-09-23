@@ -108,6 +108,24 @@ func TestEraseTombstonesAttributedPayloadAndBreaksEmailLookup(t *testing.T) {
 	}
 }
 
+func TestAccountCleanupTombstonesWithoutDSRRequest(t *testing.T) {
+	db := testDatabase(t)
+	key := []byte("11111111111111111111111111111111")
+	email := "member@example.test"
+	insertMessage(t, db, "v1", crypto.Hash(key, []byte(email)), "email", "sent", "")
+	service := New(db, map[string][]byte{"v1": key})
+	request := AccountCleanupRequest{UserID: uuid.NewString(), Email: email, IdempotencyKey: "delete-1"}
+
+	result, err := service.CleanupAccount(context.Background(), request)
+	if err != nil || result.Status != "completed" || result.RecordCount != 1 {
+		t.Fatalf("cleanup = %#v, error=%v", result, err)
+	}
+	repeated, err := service.CleanupAccount(context.Background(), request)
+	if err != nil || repeated.RecordCount != 0 {
+		t.Fatalf("repeated cleanup = %#v, error=%v", repeated, err)
+	}
+}
+
 func TestRestrictProcessingReturnsNotApplicableWithoutMutation(t *testing.T) {
 	db := testDatabase(t)
 	key := []byte("11111111111111111111111111111111")

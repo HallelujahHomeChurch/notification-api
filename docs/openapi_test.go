@@ -22,6 +22,7 @@ var requiredOperations = map[string]struct {
 	"GET /priv/notifications/{messageId}": {visibility: "private", callers: []string{"account-api", "engagement-api"}},
 	"POST /priv/dsr/exports":              {visibility: "private", callers: []string{"account-api"}},
 	"POST /priv/dsr/actions":              {visibility: "private", callers: []string{"account-api"}},
+	"POST /priv/account-cleanup":          {visibility: "private", callers: []string{"account-api"}},
 }
 
 type operationMetadata struct {
@@ -247,6 +248,22 @@ func TestOpenAPIDSRContractsExposeOnlyRedactedNotificationMetadata(t *testing.T)
 		if strings.Contains(strings.ToLower(record), forbidden) {
 			t.Fatalf("DSR export record exposes %q: %s", forbidden, record)
 		}
+	}
+}
+
+func TestOpenAPIAccountCleanupIsSeparateFromDSR(t *testing.T) {
+	contents, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := string(contents)
+	route := yamlBlock(document, "  /priv/account-cleanup:")
+	requireContains(t, route, "x-hhc-callers: [account-api]")
+	requireContains(t, route, "AccountCleanupRequest")
+	request := yamlBlock(document, "    AccountCleanupRequest:")
+	requireContains(t, request, "required: [userId, canonicalEmail, idempotencyKey]")
+	if strings.Contains(request, "requestId") || strings.Contains(request, "action") {
+		t.Fatalf("manual cleanup depends on DSR fields: %s", request)
 	}
 }
 

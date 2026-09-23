@@ -137,6 +137,47 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InternalErrorResponse' }
+  /priv/account-cleanup:
+    post:
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [account-api]
+      operationId: cleanupDeletedAccountNotifications
+      summary: Remove attributed Notification payloads for manual Account deletion
+      description: Tombstones attributed target and payload data without creating or advancing a DSR request.
+      security:
+        - daprCaller: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountCleanupRequest' }
+      responses:
+        '200':
+          description: Cleanup completed; safe to retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountCleanupResponse' }
+        '400':
+          description: Invalid cleanup request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidRequestErrorResponse' }
+        '401':
+          description: Dapr caller identity is missing.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnauthorizedErrorResponse' }
+        '403':
+          description: Caller is not account-api.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ForbiddenErrorResponse' }
+        '500':
+          description: Notification cleanup failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InternalErrorResponse' }
   /priv/notifications/send:
     post:
       tags: [Private]
@@ -423,6 +464,30 @@ components:
         canonicalEmail: { type: string, format: email, minLength: 1, description: Verified Account canonical email; accepted only by notification-api to derive retained hash-key lookups. }
         action: { type: string, enum: [restrict_processing, erase] }
         idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    AccountCleanupRequest:
+      type: object
+      additionalProperties: false
+      required: [userId, canonicalEmail, idempotencyKey]
+      properties:
+        userId: { type: string, format: uuid }
+        canonicalEmail: { type: string, format: email, minLength: 1 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 200 }
+    AccountCleanupResponse:
+      type: object
+      additionalProperties: false
+      required: [data, meta, error]
+      properties:
+        data: { $ref: '#/components/schemas/AccountCleanupResult' }
+        meta: { $ref: '#/components/schemas/ResponseMeta' }
+        error: { type: 'null' }
+    AccountCleanupResult:
+      type: object
+      additionalProperties: false
+      required: [owner, status, recordCount]
+      properties:
+        owner: { const: notification-api }
+        status: { const: completed }
+        recordCount: { type: integer, format: int64, minimum: 0 }
     DSRExportResponse:
       type: object
       additionalProperties: false
