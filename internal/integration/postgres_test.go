@@ -20,7 +20,9 @@ import (
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
+	"github.com/HallelujahHomeChurch/notification-api/internal/diagnostics"
 	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
@@ -47,6 +49,7 @@ func TestPostgresLedger(t *testing.T) {
 	testConcurrentIdempotentReplay(t, ctx, scoped)
 	testConcurrentIdempotencyConflict(t, ctx, scoped)
 	testKeyRotationCompatibility(t, ctx, scoped)
+	testDiagnosticLookup(t, ctx, scoped)
 
 	if _, err := scoped.ExecContext(ctx, `UPDATE schema_migrations SET checksum='changed' WHERE version='sql/001_initial.sql'`); err != nil {
 		t.Fatalf("corrupt migration checksum: %v", err)
@@ -56,6 +59,44 @@ func TestPostgresLedger(t *testing.T) {
 	}
 
 	testSkipLocked(t, ctx, scoped)
+}
+
+func testDiagnosticLookup(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	key := []byte("lookup-test-key-with-32-byte-minimum")
+	messageID, deliveryID, outboxID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	created := time.Now().UTC().Add(-time.Minute)
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO notification_messages (
+			id, caller_app_id, idempotency_key, request_hash, template_id, template_version,
+			channel, target_type, target_hash, hash_key_id, target_ciphertext, payload_ciphertext,
+			resource_type, resource_id, status, created_at
+		) VALUES ($1::uuid, 'account-api', $1::text, 'hash', 'account.oauth-onboarding-code', 3,
+		          'email', 'email', $2, 'test-key', '\x01', '\x02', 'account', $1::text, 'sent', $3)`,
+		messageID, notificationcrypto.Hash(key, []byte("user@example.test")), created)
+	if err != nil {
+		t.Fatalf("insert diagnostic message: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO notification_deliveries
+		(id, message_id, channel, provider, status, attempt_count, sent_at, provider_message_id)
+		VALUES ($1, $2, 'email', 'smtp', 'sent', 1, $3, '<receipt@example.test>')`,
+		deliveryID, messageID, created.Add(5*time.Second))
+	if err != nil {
+		t.Fatalf("insert diagnostic delivery: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO notification_outbox
+		(id, delivery_id, status, published_at) VALUES ($1, $2, 'published', $3)`,
+		outboxID, deliveryID, created.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("insert diagnostic outbox: %v", err)
+	}
+	records, err := diagnostics.Lookup(ctx, db, map[string][]byte{"test-key": key}, "User@Example.Test", created.Add(-time.Second), created.Add(time.Minute))
+	if err != nil || len(records) != 1 {
+		t.Fatalf("Lookup() = %#v, %v", records, err)
+	}
+	if records[0].MessageID != messageID || records[0].OutboxStatus != "published" || records[0].OutboxAttemptCount != 0 || records[0].QueueSeconds == nil || *records[0].QueueSeconds != 2 || records[0].SMTPSeconds == nil || *records[0].SMTPSeconds != 5 {
+		t.Fatalf("Lookup() record = %#v", records[0])
+	}
 }
 
 func TestPostgresDSRExportAndEraseAcrossHashRotation(t *testing.T) {

@@ -383,6 +383,28 @@ limit buckets are deleted after their own expiry.
 
 ## Database health queries
 
+### Single onboarding email timeline
+
+For an account onboarding incident, run `go run ./cmd/diagnose-notification` from
+an approved host inside the production VNet, with a read-only `DATABASE_URL`
+and the notification hash keyring in its normal configuration. Pass the known
+recipient on standard input and a narrow UTC window with `-from` and `-to`
+(RFC3339). Keep the email out of command arguments and shell history; do not
+enable shell tracing.
+The command returns up to 100 matching `account.oauth-onboarding-code` records
+with opaque IDs, create/publish/SMTP-accepted times, outbox/delivery attempt
+counts, status and error code. It does not return the recipient, code, token or
+message body. The recipient hash is computed in memory using every configured
+key version. Retain retired hash keys while their 730-day ledger metadata
+remains relevant.
+
+`queueSeconds` measures creation to first Service Bus publish. `smtpSeconds`
+measures creation to worker-recorded SMTP acceptance; it does not establish
+recipient server or inbox arrival. A missing `publishedAt` or `sentAt` is not
+evidence of downstream delay: inspect status, attempts and error code first.
+`providerMessageId` is the RFC Message-ID header set by our worker, not an ACS
+recipient-delivery event ID.
+
 Run with a secure connection and without shell tracing. These queries return
 only counts, statuses, and ages:
 
