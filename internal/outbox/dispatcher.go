@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand/v2"
 	"time"
 
@@ -68,7 +68,7 @@ func newDispatcher(store store, publisher queue.Publisher) *Dispatcher {
 		wait:                   wait,
 		publishTimeout:         publishTimeout,
 		maxConsecutiveFailures: defaultFailureLimit,
-		logf:                   log.Printf,
+		logf:                   func(format string, args ...any) { slog.Warn(fmt.Sprintf(format, args...)) },
 	}
 }
 

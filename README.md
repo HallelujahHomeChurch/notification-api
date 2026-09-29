@@ -133,3 +133,12 @@ go vet ./...
 go build ./cmd/notification
 docker build -t notification-api:local .
 ```
+
+## Application logging
+
+`LOG_LEVEL=debug|info|warn|error` defaults to `info`; invalid values stop
+startup. This controls application slog and default standard-log output.
+Persisted audit records remain independent of this setting.
+
+Provider success/failure events use their existing dedicated logger at every
+application level: the live provider failure ratio still requires both counts.

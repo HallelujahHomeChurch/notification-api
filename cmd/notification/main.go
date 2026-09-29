@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/eligibilityclient"
 	"github.com/HallelujahHomeChurch/notification-api/internal/httpapi"
+	"github.com/HallelujahHomeChurch/notification-api/internal/logging"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/outbox"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
@@ -54,12 +56,16 @@ type app struct {
 }
 
 func main() {
+	if err := logging.Init(); err != nil {
+		slog.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	application := productionApp()
 	if err := application.run(ctx, os.Args[1:]); err != nil {
-		log.Printf("notification-api stopped: %v", err)
+		slog.Error("notification-api stopped", "error", err)
 		os.Exit(1)
 	}
 }

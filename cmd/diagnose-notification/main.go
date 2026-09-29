@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -16,9 +17,14 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/diagnostics"
 	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
+	"github.com/HallelujahHomeChurch/notification-api/internal/logging"
 )
 
 func main() {
+	if err := logging.Init(); err != nil {
+		slog.Error("invalid logging configuration", "error", err)
+		os.Exit(1)
+	}
 	if err := run(context.Background(), os.Args[1:]); err != nil {
 		log.Fatal(err)
 	}
