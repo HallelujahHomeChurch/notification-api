@@ -271,3 +271,69 @@ func insertMessage(t *testing.T, db *sql.DB, hashKeyID, targetHash, channel, sta
 	}
 	return messageID
 }
+
+func TestExportUsesSubjectBindingAcrossEmailChangeAndPush(t *testing.T) {
+	db := testDatabase(t)
+	keys := map[string][]byte{"v1": []byte("11111111111111111111111111111111"), "v2": []byte("22222222222222222222222222222222")}
+	userID := uuid.NewString()
+	current := "current@example.test"
+	ids := []string{
+		insertMessage(t, db, "v1", crypto.Hash(keys["v1"], []byte(current)), "email", "sent", ""),
+		insertMessage(t, db, "v1", crypto.Hash(keys["v1"], []byte("old@example.test")), "email", "sent", ""),
+		insertMessage(t, db, "v2", crypto.Hash(keys["v2"], []byte("push-target")), "web_push", "sent", ""),
+	}
+	for i, id := range ids {
+		keyID := "v1"
+		if i == 2 {
+			keyID = "v2"
+		}
+		setSubjectAttribution(t, db, id, keyID, crypto.Hash(keys[keyID], []byte("notification-account-subject:"+userID)))
+	}
+	other := insertMessage(t, db, "v2", crypto.Hash(keys["v2"], []byte(current)), "email", "sent", "")
+	setSubjectAttribution(t, db, other, "v2", crypto.Hash(keys["v2"], []byte("notification-account-subject:"+uuid.NewString())))
+	request := ExportRequest{RequestID: uuid.NewString(), UserID: userID, Email: current, Limit: 1}
+	seen := map[string]bool{}
+	for {
+		page, err := New(db, keys).Export(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range page.Records {
+			if seen[record.RecordKey] {
+				t.Fatal("duplicate record")
+			}
+			seen[record.RecordKey] = true
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		request.Cursor = page.NextCursor
+	}
+	if len(seen) != 3 || seen[other] {
+		t.Fatalf("export did not isolate all subject-bound channels: count=%d", len(seen))
+	}
+	for _, id := range ids {
+		if !seen[id] {
+			t.Fatal("subject record omitted")
+		}
+	}
+}
+
+func TestEraseDoesNotUseEmailAgainstExplicitOtherSubject(t *testing.T) {
+	db := testDatabase(t)
+	key := []byte("11111111111111111111111111111111")
+	email := "same-address@example.test"
+	id := insertMessage(t, db, "v1", crypto.Hash(key, []byte(email)), "email", "sent", "")
+	setSubjectAttribution(t, db, id, "v1", crypto.Hash(key, []byte("notification-account-subject:"+uuid.NewString())))
+	result, err := New(db, map[string][]byte{"v1": key}).Apply(context.Background(), ActionRequest{RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "explicit-subject-boundary"})
+	if err != nil || result.RecordCount != 0 || result.RemainingCount != 0 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	var target []byte
+	if err := db.QueryRow(`SELECT target_ciphertext FROM notification_messages WHERE id=$1`, id).Scan(&target); err != nil {
+		t.Fatal(err)
+	}
+	if len(target) == 0 {
+		t.Fatal("erased another subject's explicitly bound data")
+	}
+}
