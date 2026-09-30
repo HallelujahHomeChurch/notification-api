@@ -63,6 +63,8 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 	}
 
 	switch {
+	case strings.HasPrefix(canonical.ID, "account.dsr-"):
+		return renderDSREmail(canonical.ID, locale, to, validated), nil
 	case canonical.ID == "account.verify-email" && canonical.Version == 1:
 		return renderVerificationEmailV1(locale, to, validated["verifyUrl"]), nil
 	case canonical.ID == "account.verify-email" && canonical.Version == 2:
@@ -329,9 +331,13 @@ func renderVerificationEmail(locale, to, verifyURL string) Email {
 }
 
 func brandedEmailHTML(locale, church, heading, message, action, actionURL, footer string) string {
-	return fmt.Sprintf(`<!doctype html><html lang="%s"><body style="margin:0;background:#fbf5eb;color:#342d2b;font-family:Arial,'Noto Sans TC',sans-serif"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#fbf5eb;padding:32px 16px"><tr><td align="center"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#fffdf9;border:1px solid #eaded2;border-radius:8px"><tr><td style="padding:32px"><p style="margin:0 0 28px;color:#b94f47;font-size:16px;font-weight:700">%s</p><h1 style="margin:0 0 16px;font-size:26px;line-height:1.35">%s</h1><p style="margin:0 0 28px;color:#665c58;font-size:16px;line-height:1.75">%s</p><a href="%s" style="display:inline-block;background:#c75d55;color:#fffaf5;text-decoration:none;font-weight:700;padding:13px 22px;border-radius:6px">%s</a><p style="margin:32px 0 0;padding-top:20px;border-top:1px solid #eaded2;color:#827773;font-size:13px;line-height:1.65">%s</p></td></tr></table></td></tr></table></body></html>`,
+	actionHTML := ""
+	if action != "" {
+		actionHTML = fmt.Sprintf(`<a href="%s" style="display:inline-block;background:#c75d55;color:#fffaf5;text-decoration:none;font-weight:700;padding:13px 22px;border-radius:6px">%s</a>`, html.EscapeString(actionURL), html.EscapeString(action))
+	}
+	return fmt.Sprintf(`<!doctype html><html lang="%s"><body style="margin:0;background:#fbf5eb;color:#342d2b;font-family:Arial,'Noto Sans TC',sans-serif"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="background:#fbf5eb;padding:32px 16px"><tr><td align="center"><table role="presentation" width="100%%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#fffdf9;border:1px solid #eaded2;border-radius:8px"><tr><td style="padding:32px"><p style="margin:0 0 28px;color:#b94f47;font-size:16px;font-weight:700">%s</p><h1 style="margin:0 0 16px;font-size:26px;line-height:1.35">%s</h1><p style="margin:0 0 28px;color:#665c58;font-size:16px;line-height:1.75">%s</p>%s<p style="margin:32px 0 0;padding-top:20px;border-top:1px solid #eaded2;color:#827773;font-size:13px;line-height:1.65">%s</p></td></tr></table></td></tr></table></body></html>`,
 		html.EscapeString(locale), html.EscapeString(church), html.EscapeString(heading), html.EscapeString(message),
-		html.EscapeString(actionURL), html.EscapeString(action), html.EscapeString(footer))
+		actionHTML, html.EscapeString(footer))
 }
 
 func brandedEmailHTMLV3(locale, church, heading, message, action, actionURL, footer string) string {

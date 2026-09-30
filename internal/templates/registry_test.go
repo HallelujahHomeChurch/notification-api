@@ -12,6 +12,11 @@ import (
 
 func TestGovernanceKnownTemplatePayloadFieldsMatchRegistry(t *testing.T) {
 	governanceFields := map[string][]string{
+		"account.dsr-received/1/email":             {"requestUrl", "requestId", "requestType"},
+		"account.dsr-information-required/1/email": {"requestUrl", "requestId", "requestType"},
+		"account.dsr-completed/1/email":            {"requestUrl", "requestId", "requestType"},
+		"account.dsr-action-required/1/email":      {"requestUrl", "requestId", "requestType"},
+
 		"account.verify-email/1/email":            {"verifyUrl"},
 		"account.verify-email/2/email":            {"verifyUrl"},
 		"account.verify-email/3/email":            {"verifyUrl"},

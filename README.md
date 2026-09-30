@@ -133,3 +133,43 @@ go vet ./...
 go build ./cmd/notification
 docker build -t notification-api:local .
 ```
+
+## Application logging
+
+`LOG_LEVEL=debug|info|warn|error` defaults to `info`; invalid values stop
+startup. This controls application slog and default standard-log output.
+Persisted audit records remain independent of this setting.
+
+Provider success/failure events use their existing dedicated logger at every
+application level: the live provider failure ratio still requires both counts.
+
+## Account data-request notices
+
+Account alone may send `account.dsr-received`,
+`account.dsr-information-required`, `account.dsr-completed`, and
+`account.dsr-action-required` (v1, email, delivery TTL 24 hours). They are
+transactional and use the existing durable/idempotent send path, without
+marketing eligibility or unsubscribe controls. No administrator subscriptions
+are enabled by these templates.
+
+All four require exactly this payload:
+
+```json
+{
+  "requestUrl": "https://account.alive.org.tw/data-requests",
+  "requestId": "0199bb0e-10a0-7e07-b25e-221d331b6d13",
+  "requestType": "access_export"
+}
+```
+
+`requestType` is `access_export`, `correction`, `restrict_processing`, or
+`erasure`; `requestId` must be a nonzero UUID. The URL must point exactly to
+`/data-requests` on the production/test Account host (or a local HTTP origin),
+without query or fragment. Extra fields, including internal notes and request
+contents, are rejected. `resource: {type: "account", id: <Account user ID>}`
+and `subjectAccountId` follow the existing Account MailService contract.
+Use a stable idempotency key per request lifecycle event.
+
+Locales are `zh-Hant`, `zh-Hans`, and `en`; others fall back to English.
+Erasure completion contains a reference and `support@alive.org.tw` contact,
+without a portal link or sign-in instruction for the deleted account.

@@ -105,7 +105,8 @@ func (s *Service) Export(ctx context.Context, request ExportRequest) (ExportPage
 	if len(keyIDs) == 0 {
 		return ExportPage{}, ErrInvalidRequest
 	}
-	rows, err := s.db.QueryContext(ctx, exportQuery, keyIDs, hashes, after.CreatedAt, after.ID, limit+1)
+	subjectKeyIDs, subjectHashes := candidateSubjectHashes(s.hashKeys, request.UserID)
+	rows, err := s.db.QueryContext(ctx, exportQuery, keyIDs, hashes, subjectKeyIDs, subjectHashes, after.CreatedAt, after.ID, limit+1)
 	if err != nil {
 		return ExportPage{}, err
 	}
@@ -257,7 +258,7 @@ func lockDeliveries(ctx context.Context, tx *sql.Tx, subjectKeyIDs, subjectHashe
 		FROM notification_deliveries AS delivery
 		JOIN notification_messages AS message ON message.id=delivery.message_id
 		WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
-		   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
+		   OR (message.subject_hash IS NULL AND EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash))
 		ORDER BY delivery.id`, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes)
 	if err != nil {
 		return err
@@ -367,17 +368,21 @@ func decodeCursor(value string) (cursor, error) {
 const exportQuery = `
 	WITH candidates AS (
 		SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, target_hash)
-	)
-	SELECT message.id::text, message.template_id, message.channel, message.status,
+ ), subject_candidates AS (
+ SELECT * FROM unnest($3::text[], $4::text[]) AS candidate(hash_key_id, subject_hash)
+ )
+ SELECT message.id::text, message.template_id, message.channel, message.status,
 	       message.created_at, message.updated_at, COALESCE(delivery.status, '')
 	FROM notification_messages AS message
-	JOIN candidates ON candidates.hash_key_id=message.hash_key_id AND candidates.target_hash=message.target_hash
-	LEFT JOIN LATERAL (
+		LEFT JOIN LATERAL (
 		SELECT status FROM notification_deliveries WHERE message_id=message.id ORDER BY created_at,id LIMIT 1
 	) AS delivery ON true
-	WHERE message.target_hash<>repeat('0',64) AND (message.created_at,message.id) > ($3::timestamptz,$4::uuid)
-	ORDER BY message.created_at,message.id
-	LIMIT $5`
+	WHERE message.target_hash<>repeat('0',64)
+ AND ((message.subject_hash IS NULL AND EXISTS (SELECT 1 FROM candidates WHERE candidates.hash_key_id=message.hash_key_id AND candidates.target_hash=message.target_hash))
+ OR EXISTS (SELECT 1 FROM subject_candidates WHERE subject_candidates.hash_key_id=message.subject_hash_key_id AND subject_candidates.subject_hash=message.subject_hash))
+ AND (message.created_at,message.id) > ($5::timestamptz,$6::uuid)
+ ORDER BY message.created_at,message.id
+ LIMIT $7`
 
 const eraseQuery = `
 	WITH subject_candidates AS (
@@ -403,7 +408,7 @@ const eraseQuery = `
 	WHERE message.target_hash<>repeat('0',64)
 	  AND (
 	    EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
-	    OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
+	    OR (message.subject_hash IS NULL AND EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash))
 	  )`
 
 const suppressOutboxQuery = `
@@ -414,7 +419,7 @@ const suppressOutboxQuery = `
 	), messages AS (
 		SELECT message.id FROM notification_messages message
 		WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
-		   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
+		   OR (message.subject_hash IS NULL AND EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash))
 	)
 	DELETE FROM notification_outbox outbox
 	USING notification_deliveries delivery, messages
@@ -428,7 +433,7 @@ const suppressDeliveriesQuery = `
 	), messages AS (
 		SELECT message.id FROM notification_messages message
 		WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
-		   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)
+		   OR (message.subject_hash IS NULL AND EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash))
 	)
 	UPDATE notification_deliveries delivery
 	SET status='suppressed',lease_expires_at=NULL,last_error_code='account_erased',updated_at=clock_timestamp()
@@ -444,4 +449,4 @@ const postconditionQuery = `
 	SELECT count(*)
 	FROM notification_messages AS message
 	WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
-	   OR EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash)`
+	   OR (message.subject_hash IS NULL AND EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash))`

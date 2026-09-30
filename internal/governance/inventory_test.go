@@ -25,7 +25,7 @@ var excludedColumns = map[string]map[string]string{
 	},
 }
 
-const dsrUserIDBoundary = "DSR userId is canonicalized and queried only through retained-key subject HMACs; current email remains a legacy fallback lookup."
+const dsrUserIDBoundary = "DSR userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash."
 
 func notificationManifest(t *testing.T) map[string]any {
 	t.Helper()

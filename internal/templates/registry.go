@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/google/uuid"
 )
 
 var (
@@ -29,6 +30,47 @@ type Definition struct {
 }
 
 var definitions = map[string]map[int]Definition{
+	"account.dsr-received": {
+		1: {
+			ID: "account.dsr-received", Version: 1, Channel: "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("requestUrl", "requestId", "requestType"),
+			AllowedFields:   set("requestUrl", "requestId", "requestType"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             24 * time.Hour,
+		},
+	},
+	"account.dsr-information-required": {
+		1: {
+			ID: "account.dsr-information-required", Version: 1, Channel: "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("requestUrl", "requestId", "requestType"),
+			AllowedFields:   set("requestUrl", "requestId", "requestType"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             24 * time.Hour,
+		},
+	},
+	"account.dsr-completed": {
+		1: {
+			ID: "account.dsr-completed", Version: 1, Channel: "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("requestUrl", "requestId", "requestType"),
+			AllowedFields:   set("requestUrl", "requestId", "requestType"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             24 * time.Hour,
+		},
+	},
+	"account.dsr-action-required": {
+		1: {
+			ID: "account.dsr-action-required", Version: 1, Channel: "email",
+			AllowedCallers:  set("account-api"),
+			RequiredFields:  set("requestUrl", "requestId", "requestType"),
+			AllowedFields:   set("requestUrl", "requestId", "requestType"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"),
+			TTL:             24 * time.Hour,
+		},
+	},
+
 	"account.verify-email": {
 		1: {
 			ID:              "account.verify-email",
@@ -224,6 +266,11 @@ var definitions = map[string]map[int]Definition{
 }
 
 var currentVersions = map[string]int{
+	"account.dsr-received":             1,
+	"account.dsr-information-required": 1,
+	"account.dsr-completed":            1,
+	"account.dsr-action-required":      1,
+
 	"account.verify-email":            2,
 	"account.reset-password":          2,
 	"account.oauth-link-confirmation": 2,
@@ -275,6 +322,23 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 		if !definition.AllowedFields[key] {
 			return nil, fmt.Errorf("%w: unexpected field %q", ErrInvalidPayload, key)
 		}
+		if key == "requestId" {
+			parsed, err := uuid.Parse(value)
+			if err != nil || len(value) != 36 || parsed == uuid.Nil {
+				return nil, fmt.Errorf("%w: invalid requestId", ErrInvalidPayload)
+			}
+			validated[key] = parsed.String()
+			continue
+		}
+		if key == "requestType" {
+			switch value {
+			case "access_export", "correction", "restrict_processing", "erasure":
+			default:
+				return nil, fmt.Errorf("%w: invalid requestType", ErrInvalidPayload)
+			}
+			validated[key] = value
+			continue
+		}
 		if key == "provider" {
 			if value != "google" && value != "line" && value != "microsoft" {
 				return nil, fmt.Errorf("%w: unsupported provider", ErrInvalidPayload)
@@ -316,6 +380,9 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 		isLocal := host == "localhost" || host == "127.0.0.1" || host == "::1"
 		if (parsed.Scheme != "https" || !isHHC) && (parsed.Scheme != "http" || !isLocal) {
 			return nil, fmt.Errorf("%w: %s must use an approved origin", ErrInvalidPayload, key)
+		}
+		if key == "requestUrl" && (parsed.Path != "/data-requests" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || !isLocal && (host != "account.alive.org.tw" && host != "account-test.alive.org.tw" || parsed.Port() != "" && parsed.Port() != "443")) {
+			return nil, fmt.Errorf("%w: requestUrl must point to the Account data requests page", ErrInvalidPayload)
 		}
 		validated[key] = parsed.String()
 	}
