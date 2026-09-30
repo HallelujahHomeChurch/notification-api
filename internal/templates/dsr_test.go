@@ -13,7 +13,7 @@ func dsrPayload() map[string]string {
 }
 
 func TestDSRLifecycleTemplates(t *testing.T) {
-	for _, id := range []string{"account.dsr-received", "account.dsr-information-required", "account.dsr-completed", "account.dsr-action-required"} {
+	for _, id := range []string{"account.dsr-received", "account.dsr-information-required", "account.dsr-completed", "account.dsr-action-required", "account.dsr-rejected", "account.dsr-extended"} {
 		t.Run(id, func(t *testing.T) {
 			definition, err := Resolve(id, "email")
 			if err != nil {
@@ -43,28 +43,30 @@ func TestDSRLifecycleTemplates(t *testing.T) {
 }
 
 func TestDSRPayloadRejectsUntrustedOrSensitiveFields(t *testing.T) {
-	definition, err := Resolve("account.dsr-received", "email")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct{ key, value string }{
-		{"requestId", "not-a-uuid"}, {"requestType", "unknown"}, {"internalNote", "private"}, {"supplement", "private"},
-		{"requestUrl", "https://evil.test/data-requests"}, {"requestUrl", "https://www.alive.org.tw/data-requests"},
-		{"requestUrl", "https://account.alive.org.tw/data-requests?token=secret"}, {"requestUrl", "https://account.alive.org.tw/data-requests#secret"},
-		{"requestUrl", "https://account.alive.org.tw/other"},
-	} {
-		payload := dsrPayload()
-		payload[tc.key] = tc.value
-		_, err := validatePayload(definition, payload)
-		if !errors.Is(err, ErrInvalidPayload) {
-			t.Fatalf("accepted %s %s: %v", tc.key, tc.value, err)
+	for _, id := range []string{"account.dsr-received", "account.dsr-information-required", "account.dsr-completed", "account.dsr-action-required", "account.dsr-rejected", "account.dsr-extended"} {
+		definition, err := Resolve(id, "email")
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	for key := range dsrPayload() {
-		payload := dsrPayload()
-		delete(payload, key)
-		if _, err := validatePayload(definition, payload); !errors.Is(err, ErrInvalidPayload) {
-			t.Fatalf("accepted missing %s", key)
+		for _, tc := range []struct{ key, value string }{
+			{"requestId", "not-a-uuid"}, {"requestType", "unknown"}, {"internalNote", "private"}, {"supplement", "private"},
+			{"requestUrl", "https://evil.test/data-requests"}, {"requestUrl", "https://www.alive.org.tw/data-requests"},
+			{"requestUrl", "https://account.alive.org.tw/data-requests?token=secret"}, {"requestUrl", "https://account.alive.org.tw/data-requests#secret"},
+			{"requestUrl", "https://account.alive.org.tw/other"},
+		} {
+			payload := dsrPayload()
+			payload[tc.key] = tc.value
+			_, err := validatePayload(definition, payload)
+			if !errors.Is(err, ErrInvalidPayload) {
+				t.Fatalf("accepted %s %s: %v", tc.key, tc.value, err)
+			}
+		}
+		for key := range dsrPayload() {
+			payload := dsrPayload()
+			delete(payload, key)
+			if _, err := validatePayload(definition, payload); !errors.Is(err, ErrInvalidPayload) {
+				t.Fatalf("accepted missing %s", key)
+			}
 		}
 	}
 }

@@ -173,3 +173,5 @@ Use a stable idempotency key per request lifecycle event.
 Locales are `zh-Hant`, `zh-Hans`, and `en`; others fall back to English.
 Erasure completion contains a reference and `support@alive.org.tw` contact,
 without a portal link or sign-in instruction for the deleted account.
+
+DSR decision notices `account.dsr-rejected` and `account.dsr-extended` use the same caller-scoped v1 lifecycle contract: only `account-api`, `requestUrl`, `requestId` and `requestType`. They direct the subject to the protected decision/reason/deadline in Account; no decision text, evidence or ZIP travels in email. Adding templates alone does not enable extensions or statutory deadline policy. Existing `GET /priv/notifications/{messageId}` remains the caller-scoped delivery-state contract (`sent` describes provider acceptance, not recipient receipt/read).
