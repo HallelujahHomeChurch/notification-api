@@ -30,6 +30,20 @@ type Definition struct {
 }
 
 var definitions = map[string]map[int]Definition{
+	"account.dsr-rejected": {1: {
+		ID: "account.dsr-rejected", Version: 1, Channel: "email",
+		AllowedCallers:  set("account-api"),
+		RequiredFields:  set("requestUrl", "requestId", "requestType"),
+		AllowedFields:   set("requestUrl", "requestId", "requestType"),
+		SupportedLocale: set("zh-Hant", "zh-Hans", "en"), TTL: 24 * time.Hour,
+	}},
+	"account.dsr-extended": {1: {
+		ID: "account.dsr-extended", Version: 1, Channel: "email",
+		AllowedCallers:  set("account-api"),
+		RequiredFields:  set("requestUrl", "requestId", "requestType"),
+		AllowedFields:   set("requestUrl", "requestId", "requestType"),
+		SupportedLocale: set("zh-Hant", "zh-Hans", "en"), TTL: 24 * time.Hour,
+	}},
 	"account.dsr-received": {
 		1: {
 			ID: "account.dsr-received", Version: 1, Channel: "email",
@@ -266,6 +280,8 @@ var definitions = map[string]map[int]Definition{
 }
 
 var currentVersions = map[string]int{
+	"account.dsr-rejected":             1,
+	"account.dsr-extended":             1,
 	"account.dsr-received":             1,
 	"account.dsr-information-required": 1,
 	"account.dsr-completed":            1,

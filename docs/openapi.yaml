@@ -334,7 +334,12 @@ components:
       properties:
         templateId:
           type: string
-          description: Registered template identifier allowed for the authenticated caller.
+          description: >-
+            Registered template identifier allowed for the authenticated caller.
+            Account DSR v1 includes received, information-required, action-required,
+            completed, rejected and extended lifecycle templates (account.dsr-*).
+            DSR payload permits only requestUrl, requestId and requestType; decision,
+            extension details and personal data remain in the authenticated Account portal.
           examples: [account.verify-email]
         channel:
           type: string
