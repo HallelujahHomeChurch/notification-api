@@ -311,6 +311,8 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 		return providers.DeliveryPayload{}, err
 	}
 	switch claimed.Channel {
+	case "native_push":
+		return providers.DeliveryPayload{Recipient: string(target), MessageID: envelope.Fields["deliveryId"], ActionURL: envelope.Fields["assignmentId"]}, nil
 	case "email":
 		email, err := templates.RenderEmail(definition, envelope.Locale, string(target), envelope.Fields)
 		if err != nil {

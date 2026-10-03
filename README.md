@@ -175,3 +175,15 @@ Erasure completion contains a reference and `support@alive.org.tw` contact,
 without a portal link or sign-in instruction for the deleted account.
 
 DSR decision notices `account.dsr-rejected` and `account.dsr-extended` use the same caller-scoped v1 lifecycle contract: only `account-api`, `requestUrl`, `requestId` and `requestType`. They direct the subject to the protected decision/reason/deadline in Account; no decision text, evidence or ZIP travels in email. Adding templates alone does not enable extensions or statutory deadline policy. Existing `GET /priv/notifications/{messageId}` remains the caller-scoped delivery-state contract (`sent` describes provider acceptance, not recipient receipt/read).
+
+### Native service push (opt-in)
+
+Set `NATIVE_PUSH_ENABLED=true` on both API and worker only after the test
+Operations deployment has its `/priv/service-push/eligibility` and `/result`
+endpoints. Add `operations-api` to `NOTIFICATION_ALLOWED_CALLERS` and allow
+`notification-api` to invoke the two Operations private endpoints in Dapr ACLs.
+`EXPO_ACCESS_TOKEN` is optional unless enhanced Expo push security is enabled.
+Never put this token in the mobile app. The provider uses the existing durable
+outbox and encrypted payload storage. Failed eligibility checks suppress sends;
+unavailable checks retry. Expo receipt callbacks are version fenced. A receipt
+means APNs/FCM acceptance, not evidence that a member saw the notification.

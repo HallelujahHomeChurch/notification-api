@@ -164,7 +164,9 @@ func TestOpenAPIMatchesImplementedRuntimeSemantics(t *testing.T) {
 		"channel: { const: web_push }",
 		"target: { $ref: '#/components/schemas/WebPushTarget' }",
 		"subjectAccountId:",
-		"Only account-api and engagement-api",
+		"Only account-api, engagement-api and operations-api",
+		"channel: { const: native_push }",
+		"target: { $ref: '#/components/schemas/NativePushTarget' }",
 	} {
 		requireContains(t, sendRequest, want)
 	}

@@ -331,6 +331,9 @@ components:
         - properties:
             channel: { const: web_push }
             target: { $ref: '#/components/schemas/WebPushTarget' }
+        - properties:
+            channel: { const: native_push }
+            target: { $ref: '#/components/schemas/NativePushTarget' }
       properties:
         templateId:
           type: string
@@ -343,11 +346,12 @@ components:
           examples: [account.verify-email]
         channel:
           type: string
-          enum: [email, web_push]
+          enum: [email, web_push, native_push]
         target:
           oneOf:
             - $ref: '#/components/schemas/EmailTarget'
             - $ref: '#/components/schemas/WebPushTarget'
+            - $ref: '#/components/schemas/NativePushTarget'
         locale:
           type: string
           description: Current v2 templates support zh-Hant, zh-Hans, and en. Unsupported or omitted locales fall back to en.
@@ -361,7 +365,7 @@ components:
         subjectAccountId:
           type: string
           format: uuid
-          description: Optional Account subject attribution. Only account-api and engagement-api may set it; notification-api stores only an HMAC and key ID.
+          description: Optional Account subject attribution. Only account-api, engagement-api and operations-api may set it; notification-api stores only an HMAC and key ID.
     EmailTarget:
       type: object
       additionalProperties: false
@@ -373,6 +377,21 @@ components:
           format: email
           minLength: 1
           description: Email address accepted by Go mail.ParseAddress after trimming and lowercase normalization. Stored encrypted.
+    NativePushTarget:
+      type: object
+      additionalProperties: false
+      required:
+      - type
+      - address
+      properties:
+        type:
+          const: native_push
+        address:
+          type: string
+          pattern: ^(ExpoPushToken|ExponentPushToken)\[[A-Za-z0-9_-]{10,200}\]$
+          description: Encrypted Expo installation token; operations.native-push requires
+            opaque assignmentId and deliveryId UUID fields and the exact operations-api
+            caller. Disabled unless NATIVE_PUSH_ENABLED=true.
     WebPushTarget:
       type: object
       additionalProperties: false
@@ -538,7 +557,7 @@ components:
         recordType: { const: notification_message }
         recordKey: { type: string, format: uuid }
         templateId: { type: string }
-        channel: { type: string, enum: [email, web_push] }
+        channel: { type: string, enum: [email, web_push, native_push] }
         status: { $ref: '#/components/schemas/MessageStatus' }
         deliveryStatus: { $ref: '#/components/schemas/MessageStatus' }
         createdAt: { type: string, format: date-time }

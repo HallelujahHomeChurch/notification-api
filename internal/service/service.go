@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/mail"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ type Config struct {
 	HashKeys              map[string][]byte
 	DataEncryptionKey     []byte
 	HashKey               []byte
+	NativePushEnabled     bool
 	NotificationsDisabled bool
 	RateLimits            []store.RateLimit
 }
@@ -94,6 +96,9 @@ func (s *Service) Send(
 		return Result{}, ErrInvalidRequest
 	}
 
+	if request.Channel == "native_push" && !s.config.NativePushEnabled {
+		return Result{}, ErrInvalidRequest
+	}
 	definition, err := templates.Resolve(request.TemplateID, request.Channel)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
@@ -118,7 +123,7 @@ func (s *Service) Send(
 	}
 	if request.SubjectAccountID != "" {
 		subjectID, err := uuid.Parse(request.SubjectAccountID)
-		if (caller != "account-api" && caller != "engagement-api") || err != nil {
+		if (caller != "account-api" && caller != "engagement-api" && caller != "operations-api") || err != nil {
 			return Result{}, ErrInvalidRequest
 		}
 		request.SubjectAccountID = subjectID.String()
@@ -184,6 +189,10 @@ func (s *Service) Send(
 		subjectHashKeyID = s.config.ActiveHashKeyID
 	}
 
+	rateLimits := s.config.RateLimits
+	if request.Channel == "native_push" {
+		rateLimits = []store.RateLimit{{Window: time.Minute, Maximum: 30}, {Window: 24 * time.Hour, Maximum: 1000}}
+	}
 	created, err := s.repository.Create(ctx, store.CreateParams{
 		MessageID:         messageID,
 		DeliveryID:        uuid.NewString(),
@@ -209,7 +218,7 @@ func (s *Service) Send(
 		ResourceID:        request.Resource.ID,
 		EligibilityRef:    request.EligibilityRef,
 		Provider:          provider,
-		RateLimits:        s.config.RateLimits,
+		RateLimits:        rateLimits,
 		ExpiresAfter:      definition.TTL,
 	})
 	if errors.Is(err, store.ErrSubjectErased) {
@@ -285,6 +294,11 @@ func normalizeEmail(value string) (string, error) {
 
 func normalizeTarget(target contracts.Target, channel string) (string, string, error) {
 	switch {
+	case channel == "native_push" && target.Type == "native_push":
+		if !regexp.MustCompile(`^(ExpoPushToken|ExponentPushToken)\[[A-Za-z0-9_-]{10,200}\]$`).MatchString(target.Address) {
+			return "", "", ErrInvalidRequest
+		}
+		return target.Address, "expo", nil
 	case channel == "email" && target.Type == "email":
 		normalized, err := normalizeEmail(target.Address)
 		return normalized, "smtp", err

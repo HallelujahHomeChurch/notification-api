@@ -49,3 +49,14 @@ Behavioral references:
 - Web Push target plaintext is normalized JSON with exactly `endpoint`, `keys.p256dh`, and `keys.auth`.
 - Encrypted payload plaintext contains `locale` separately from `fields`. Current registry fields are: Account verification `verifyUrl`; password reset `resetUrl`; OAuth link confirmation `confirmUrl` and `provider`; OAuth onboarding `code` and `provider`; newsletter `subject`, `body`, `actionUrl`, `unsubscribeUrl`, and `oneClickUnsubscribeUrl`; Web Push `title`, `body`, `clickBehavior`, and `actionUrl`.
 - `template_id`, `template_version`, `channel`, `target_type`, `resource_type`, and `resource_id` are retained message metadata, not encrypted payload fields.
+
+## Native service notifications
+
+`operations.native-push` v1 (`native_push`) accepts only opaque `assignmentId` and
+`deliveryId` UUID fields from `operations-api`. The target is an encrypted Expo
+installation token; Account attribution uses the existing subject HMAC. No
+member name, roster, phone number, email, or duty description enters a push.
+Provider acceptance and APNs/FCM receipt are distinct: existing delivery rows
+store the Expo ticket and are polled after 15 minutes. An invalid endpoint is
+reported to Operations, which fences revocation by the installation version.
+Existing retention, DSR encryption/purge, and outbox rules apply to these rows.

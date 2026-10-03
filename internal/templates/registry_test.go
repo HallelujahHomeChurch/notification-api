@@ -12,6 +12,7 @@ import (
 
 func TestGovernanceKnownTemplatePayloadFieldsMatchRegistry(t *testing.T) {
 	governanceFields := map[string][]string{
+		"operations.native-push/1/native_push":     {"assignmentId", "deliveryId"},
 		"account.dsr-rejected/1/email":             {"requestUrl", "requestId", "requestType"},
 		"account.dsr-extended/1/email":             {"requestUrl", "requestId", "requestType"},
 		"account.dsr-received/1/email":             {"requestUrl", "requestId", "requestType"},

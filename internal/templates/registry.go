@@ -30,6 +30,7 @@ type Definition struct {
 }
 
 var definitions = map[string]map[int]Definition{
+	"operations.native-push": {1: {ID: "operations.native-push", Version: 1, Channel: "native_push", AllowedCallers: set("operations-api"), RequiredFields: set("assignmentId", "deliveryId"), AllowedFields: set("assignmentId", "deliveryId"), SupportedLocale: set("zh-Hant"), TTL: 24 * time.Hour}},
 	"account.dsr-rejected": {1: {
 		ID: "account.dsr-rejected", Version: 1, Channel: "email",
 		AllowedCallers:  set("account-api"),
@@ -280,6 +281,7 @@ var definitions = map[string]map[int]Definition{
 }
 
 var currentVersions = map[string]int{
+	"operations.native-push":           1,
 	"account.dsr-rejected":             1,
 	"account.dsr-extended":             1,
 	"account.dsr-received":             1,
@@ -338,7 +340,7 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 		if !definition.AllowedFields[key] {
 			return nil, fmt.Errorf("%w: unexpected field %q", ErrInvalidPayload, key)
 		}
-		if key == "requestId" {
+		if key == "requestId" || key == "assignmentId" || key == "deliveryId" {
 			parsed, err := uuid.Parse(value)
 			if err != nil || len(value) != 36 || parsed == uuid.Nil {
 				return nil, fmt.Errorf("%w: invalid requestId", ErrInvalidPayload)
