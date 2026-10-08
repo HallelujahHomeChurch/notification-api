@@ -94,7 +94,7 @@ assert_contains "${workflow}" 'vars\.SMTP_FROM' "SMTP_FROM must come from reposi
 assert_contains "${workflow}" 'vars\.VAPID_PUBLIC_KEY' "VAPID_PUBLIC_KEY must come from repository variables"
 assert_contains "${workflow}" 'vars\.VAPID_SUBJECT' "VAPID_SUBJECT must come from repository variables"
 assert_contains "${bicep}" "param smtpFromName string = '哈利路亞家教會'" "SMTP sender display name must remain branded"
-assert_contains "${bicep}" "NOTIFICATION_ALLOWED_CALLERS', value: 'account-api,engagement-api'" "notification callers must match contract"
+assert_contains "${bicep}" "NOTIFICATION_ALLOWED_CALLERS', value: nativePushEnabled \? 'account-api,engagement-api,operations-api' : 'account-api,engagement-api'" "notification callers must match contract"
 assert_not_contains "${bicep}" "NOTIFICATION_ALLOWED_CALLERS', value: 'account-api,hhc-web-api,engagement-api'" "hhc-web-api must not call notification directly"
 assert_contains "${bicep}" "name: 'SMTP_FROM_NAME', value: smtpFromName" "worker must receive the branded SMTP sender name"
 grep -Fq "appId: 'notification-worker'" <<<"${worker_runtime}" || fail "worker must have a unique Dapr app ID"
@@ -432,3 +432,7 @@ pointer_upload_line="$(awk '/az storage blob upload/ { upload = 1 } upload && /-
 [[ "${deploy_line}" -lt "${publish_line}" && "${guard_line}" -lt "${guard_exit_line}" && "${guard_exit_line}" -lt "${pointer_upload_line}" ]]
 
 echo "release static test ok"
+
+assert_contains "${bicep}" 'param nativePushEnabled bool = false' "native push must be opt-in"
+assert_contains "${bicep}" "name: 'NATIVE_PUSH_ENABLED', value: toLower" "both API and worker need native push flag"
+[[ "$(grep -Fc 'nativePushEnabled="${NATIVE_PUSH_ENABLED}"' "${workflow}")" == "4" ]] || fail "all plans and deployments must carry native push flag"

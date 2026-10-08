@@ -181,7 +181,7 @@ DSR decision notices `account.dsr-rejected` and `account.dsr-extended` use the s
 Set `NATIVE_PUSH_ENABLED=true` on both API and worker only after the test
 Operations deployment has its `/priv/service-push/eligibility` and `/result`
 endpoints. Add `operations-api` to `NOTIFICATION_ALLOWED_CALLERS` and allow
-`notification-api` to invoke the two Operations private endpoints in Dapr ACLs.
+`notification-worker` to invoke the two Operations private endpoints in Dapr ACLs.
 `EXPO_ACCESS_TOKEN` is optional unless enhanced Expo push security is enabled.
 Never put this token in the mobile app. The provider uses the existing durable
 outbox and encrypted payload storage. Failed eligibility checks suppress sends;
@@ -193,3 +193,8 @@ callback outage retries the stored result without depending on Expo retaining
 its receipt. Failed/dead-lettered native deliveries report `provider_failed`;
 invalid endpoints keep their specific outcome. Callback retries never resubmit
 the push. No member-visible delivery/read guarantee follows from these states.
+
+The release workflow maps repository variable `NATIVE_PUSH_ENABLED` (exactly
+`true`, otherwise false) to both runtime roles and conditionally adds only
+Operations to the caller allowlist. All what-if and apply invocations use the
+same value. The variable is not enabled by this feature PR.
