@@ -65,15 +65,22 @@ func TestNativeReceiptsRetryCallbackAndDoNotResendPush(t *testing.T) {
 	}
 	failed := true
 	callbacks := 0
+	wantResult := "invalid_endpoint"
+	receiptReads := 0
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/getReceipts":
+			receiptReads++
+			if receiptReads > 1 {
+				w.Write([]byte(`{"data":{}}`))
+				return
+			}
 			w.Write([]byte(`{"data":{"ticket":{"status":"error","details":{"error":"DeviceNotRegistered"}}}}`))
 		case "/priv/service-push/result":
 			callbacks++
 			var v map[string]string
 			json.NewDecoder(r.Body).Decode(&v)
-			if v["deliveryId"] != job || v["result"] != "invalid_endpoint" {
+			if v["deliveryId"] != job || v["result"] != wantResult {
 				t.Error(v)
 			}
 			if failed {
@@ -92,12 +99,18 @@ func TestNativeReceiptsRetryCallbackAndDoNotResendPush(t *testing.T) {
 	if e = p.PollReceipts(t.Context(), db, keys); e == nil {
 		t.Fatal("callback failure lost")
 	}
+	if _, e = db.Exec(`UPDATE notification_deliveries SET sent_at=now()-interval '25 hours' WHERE id=$1`, delivery); e != nil {
+		t.Fatal(e)
+	}
 	failed = false
 	if e = p.PollReceipts(t.Context(), db, keys); e != nil {
 		t.Fatal(e)
 	}
 	if e = p.PollReceipts(t.Context(), db, keys); e != nil {
 		t.Fatal(e)
+	}
+	if receiptReads != 1 {
+		t.Fatalf("receipt re-fetched after durable observation: %d", receiptReads)
 	}
 	if callbacks != 2 {
 		t.Fatalf("callbacks=%d", callbacks)
@@ -106,4 +119,29 @@ func TestNativeReceiptsRetryCallbackAndDoNotResendPush(t *testing.T) {
 	if e = db.QueryRow(`SELECT last_error_code FROM notification_deliveries WHERE id=$1`, delivery).Scan(&reason); e != nil || reason != "native_invalid_endpoint" {
 		t.Fatalf("reason=%s err=%v", reason, e)
 	}
+	wantResult = "provider_failed"
+	for _, tc := range []struct{ status, code, result string }{
+		{"failed", "permanent", "provider_failed"}, {"dead_lettered", "temporary", "provider_failed"}, {"failed", "invalid_endpoint", "invalid_endpoint"},
+	} {
+		wantResult = tc.result
+		if _, e = db.Exec(`UPDATE notification_deliveries SET status=$2,sent_at=NULL,provider_message_id=NULL,last_error_code=$3 WHERE id=$1`, delivery, tc.status, tc.code); e != nil {
+			t.Fatal(e)
+		}
+		before := callbacks
+		failed = true
+		if e = p.PollReceipts(t.Context(), db, keys); e == nil {
+			t.Fatal("terminal callback failure lost")
+		}
+		failed = false
+		if e = p.PollReceipts(t.Context(), db, keys); e != nil {
+			t.Fatal(e)
+		}
+		if e = p.PollReceipts(t.Context(), db, keys); e != nil {
+			t.Fatal(e)
+		}
+		if callbacks != before+2 || receiptReads != 1 {
+			t.Fatalf("terminal report callbacks=%d receipts=%d", callbacks, receiptReads)
+		}
+	}
+
 }

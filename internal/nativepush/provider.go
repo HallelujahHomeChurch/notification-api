@@ -8,10 +8,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
@@ -116,19 +118,19 @@ func (p *Provider) Send(ctx context.Context, v providers.DeliveryPayload) (provi
 // PollReceipts distinguishes Expo acceptance from APNs/FCM receipt. The existing
 // delivery row is the durable receipt queue; callbacks are idempotent.
 func (p *Provider) PollReceipts(ctx context.Context, db *sql.DB, keys map[string][]byte) error {
-	rows, e := db.QueryContext(ctx, `SELECT d.id::text,d.provider_message_id,m.id::text,m.encryption_key_id,m.payload_ciphertext,d.sent_at FROM notification_deliveries d JOIN notification_messages m ON m.id=d.message_id WHERE d.provider='expo' AND d.status='sent' AND d.last_error_code IS NULL AND d.sent_at<now()-interval '15 minutes' AND m.payload_purged_at IS NULL ORDER BY d.sent_at LIMIT 100`)
+	rows, e := db.QueryContext(ctx, `SELECT d.id::text,COALESCE(d.provider_message_id,''),m.id::text,m.encryption_key_id,m.payload_ciphertext,COALESCE(d.sent_at,d.updated_at),COALESCE(d.last_error_code,''),d.status FROM notification_deliveries d JOIN notification_messages m ON m.id=d.message_id WHERE d.provider='expo' AND m.payload_purged_at IS NULL AND ((d.status='sent' AND (d.last_error_code IS NULL OR d.last_error_code IN ('native_pending_provider_received','native_pending_provider_failed','native_pending_invalid_endpoint','native_pending_receipt_unknown')) AND d.sent_at<now()-interval '15 minutes') OR (d.status IN ('failed','dead_lettered') AND COALESCE(d.last_error_code,'') NOT IN ('native_provider_failed','native_invalid_endpoint'))) ORDER BY d.updated_at LIMIT 100`)
 	if e != nil {
 		return e
 	}
 	type pending struct {
-		id, ticket, message, key string
-		payload                  []byte
-		sent                     time.Time
+		id, ticket, message, key, pendingResult, status string
+		payload                                         []byte
+		sent                                            time.Time
 	}
 	list := []pending{}
 	for rows.Next() {
 		var v pending
-		if e = rows.Scan(&v.id, &v.ticket, &v.message, &v.key, &v.payload, &v.sent); e != nil {
+		if e = rows.Scan(&v.id, &v.ticket, &v.message, &v.key, &v.payload, &v.sent, &v.pendingResult, &v.status); e != nil {
 			rows.Close()
 			return e
 		}
@@ -150,28 +152,46 @@ func (p *Provider) PollReceipts(ctx context.Context, db *sql.DB, keys map[string
 		if e = json.Unmarshal(raw, &envelope); e != nil {
 			return e
 		}
-		var response struct {
-			Data map[string]ticket `json:"data"`
-		}
-		if e = p.post(ctx, p.ExpoURL+"/getReceipts", map[string]any{"ids": []string{v.ticket}}, &response, true); e != nil {
-			return e
-		}
-		receipt, ok := response.Data[v.ticket]
-		if !ok && time.Since(v.sent) < 23*time.Hour {
-			continue
-		}
-		result := "receipt_unknown"
-		if ok && receipt.Status == "ok" {
-			result = "provider_received"
-		} else if receipt.Details.Error == "DeviceNotRegistered" {
-			result = "invalid_endpoint"
-		} else if ok {
-			result = "provider_failed"
+		result := strings.TrimPrefix(v.pendingResult, "native_pending_")
+		if !strings.HasPrefix(v.pendingResult, "native_pending_") {
+			if v.status != "sent" {
+				result = "provider_failed"
+				if v.pendingResult == "invalid_endpoint" {
+					result = "invalid_endpoint"
+				}
+			} else {
+				var response struct {
+					Data map[string]ticket `json:"data"`
+				}
+				if e = p.post(ctx, p.ExpoURL+"/getReceipts", map[string]any{"ids": []string{v.ticket}}, &response, true); e != nil {
+					return e
+				}
+				receipt, ok := response.Data[v.ticket]
+				if !ok && time.Since(v.sent) < 23*time.Hour {
+					continue
+				}
+				result = "receipt_unknown"
+				if ok && receipt.Status == "ok" {
+					result = "provider_received"
+				} else if receipt.Details.Error == "DeviceNotRegistered" {
+					result = "invalid_endpoint"
+				} else if ok {
+					result = "provider_failed"
+				}
+			}
+			// Keep the receipt even if the callback outlives Expo's retention window.
+			e = db.QueryRowContext(ctx, `UPDATE notification_deliveries SET last_error_code=$2 WHERE id=$1 AND status IN ('sent','failed','dead_lettered') AND COALESCE(last_error_code,'')=$3 RETURNING last_error_code`, v.id, "native_pending_"+result, v.pendingResult).Scan(&v.pendingResult)
+			if errors.Is(e, sql.ErrNoRows) {
+				continue
+			}
+			if e != nil {
+				return e
+			}
 		}
 		if e = p.callback(ctx, envelope.Fields["deliveryId"], result); e != nil {
 			return e
 		}
-		if _, e = db.ExecContext(ctx, `UPDATE notification_deliveries SET last_error_code=$2 WHERE id=$1 AND last_error_code IS NULL`, v.id, "native_"+result); e != nil {
+		if _, e = db.ExecContext(ctx, `UPDATE notification_deliveries SET last_error_code=$2 WHERE id=$1 AND status IN ('sent','failed','dead_lettered') AND last_error_code=$3`, v.id, "native_"+result, "native_pending_"+result); e != nil {
 			return e
 		}
 	}

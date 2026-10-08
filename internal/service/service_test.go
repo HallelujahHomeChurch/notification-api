@@ -452,3 +452,47 @@ func validWebPushRequest() contracts.SendRequest {
 		Resource: contracts.Resource{Type: "campaign", ID: "campaign-1"},
 	}
 }
+
+func TestNativePushTrustBoundary(t *testing.T) {
+	const assignment = "11111111-1111-4111-8111-111111111111"
+	request := contracts.SendRequest{TemplateID: "operations.native-push", Channel: "native_push", Target: contracts.Target{Type: "native_push", Address: "ExpoPushToken[example-token]"}, Locale: "zh-Hant", Payload: map[string]string{"assignmentId": assignment, "deliveryId": "22222222-2222-4222-8222-222222222222"}, Resource: contracts.Resource{Type: "service_assignment", ID: assignment}}
+	for _, tc := range []struct {
+		name, caller string
+		enabled      bool
+		change       func(*contracts.SendRequest)
+		want         error
+	}{
+		{name: "disabled", caller: "operations-api", want: ErrInvalidRequest},
+		{name: "other caller", caller: "account-api", enabled: true, want: ErrForbiddenTemplate},
+		{name: "bad token", caller: "operations-api", enabled: true, change: func(r *contracts.SendRequest) { r.Target.Address = "not-a-token" }, want: ErrInvalidRequest},
+		{name: "invalid resource reference", caller: "operations-api", enabled: true, change: func(r *contracts.SendRequest) { r.Payload["assignmentId"] = "not-a-uuid" }, want: ErrInvalidRequest},
+		{name: "extra personal data", caller: "operations-api", enabled: true, change: func(r *contracts.SendRequest) { r.Payload["memberName"] = "private" }, want: ErrInvalidRequest},
+		{name: "allowed", caller: "operations-api", enabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := request
+			r.Payload = map[string]string{"assignmentId": assignment, "deliveryId": request.Payload["deliveryId"]}
+			if tc.change != nil {
+				tc.change(&r)
+			}
+			repository := &memoryRepository{}
+			svc := New(repository, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey, NativePushEnabled: tc.enabled})
+			result, err := svc.Send(t.Context(), tc.caller, "native-trust-boundary", r)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v want %v", err, tc.want)
+			}
+			if tc.want != nil {
+				if len(repository.creates) != 0 {
+					t.Fatal("rejected input reached storage")
+				}
+				return
+			}
+			if result.Status != contracts.MessageStatusQueued || len(repository.creates) != 1 {
+				t.Fatalf("not queued: %+v", result)
+			}
+			if bytes.Contains(repository.creates[0].TargetCiphertext, []byte(r.Target.Address)) {
+				t.Fatal("plaintext token persisted")
+			}
+		})
+	}
+}

@@ -187,3 +187,9 @@ Never put this token in the mobile app. The provider uses the existing durable
 outbox and encrypted payload storage. Failed eligibility checks suppress sends;
 unavailable checks retry. Expo receipt callbacks are version fenced. A receipt
 means APNs/FCM acceptance, not evidence that a member saw the notification.
+
+Terminal native delivery results are persisted before calling Operations. A
+callback outage retries the stored result without depending on Expo retaining
+its receipt. Failed/dead-lettered native deliveries report `provider_failed`;
+invalid endpoints keep their specific outcome. Callback retries never resubmit
+the push. No member-visible delivery/read guarantee follows from these states.
