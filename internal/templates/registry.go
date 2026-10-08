@@ -31,6 +31,7 @@ type Definition struct {
 
 var definitions = map[string]map[int]Definition{
 	"operations.native-push": {1: {ID: "operations.native-push", Version: 1, Channel: "native_push", AllowedCallers: set("operations-api"), RequiredFields: set("assignmentId", "deliveryId"), AllowedFields: set("assignmentId", "deliveryId"), SupportedLocale: set("zh-Hant"), TTL: 24 * time.Hour}},
+	"operations.web-push":    {1: {ID: "operations.web-push", Version: 1, Channel: "web_push", AllowedCallers: set("operations-api"), RequiredFields: set("assignmentId", "deliveryId"), AllowedFields: set("assignmentId", "deliveryId"), SupportedLocale: set("zh-Hant"), TTL: 24 * time.Hour}},
 	"account.dsr-rejected": {1: {
 		ID: "account.dsr-rejected", Version: 1, Channel: "email",
 		AllowedCallers:  set("account-api"),
@@ -282,6 +283,7 @@ var definitions = map[string]map[int]Definition{
 
 var currentVersions = map[string]int{
 	"operations.native-push":           1,
+	"operations.web-push":              1,
 	"account.dsr-rejected":             1,
 	"account.dsr-extended":             1,
 	"account.dsr-received":             1,

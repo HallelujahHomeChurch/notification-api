@@ -496,3 +496,31 @@ func TestNativePushTrustBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceWebPushFlagIsIndependentOfNativePush(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		repo := &memoryRepository{}
+		svc := New(repo, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey, ServiceWebPushEnabled: enabled})
+		req := contracts.SendRequest{TemplateID: "operations.web-push", Channel: "web_push", Target: contracts.Target{Type: "web_push", Address: `{"endpoint":"https://fcm.googleapis.com/fcm/send/example","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`}, Locale: "zh-Hant", Payload: map[string]string{"assignmentId": "11111111-1111-4111-8111-111111111111", "deliveryId": "22222222-2222-4222-8222-222222222222"}, Resource: contracts.Resource{Type: "service_assignment", ID: "11111111-1111-4111-8111-111111111111"}}
+		_, err := svc.Send(t.Context(), "operations-api", "service:"+req.Payload["deliveryId"], req)
+		if !enabled {
+			if !errors.Is(err, ErrInvalidRequest) || len(repo.creates) != 0 {
+				t.Fatal("disabled service accepted")
+			}
+			continue
+		}
+		if err != nil || len(repo.creates) != 1 {
+			t.Fatalf("web depends on native flag: %v", err)
+		}
+		if _, err := svc.Send(t.Context(), "operations-api", "wrong-delivery-id", req); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatal("callback identity mismatch accepted")
+		}
+		req.Target.Address = strings.ReplaceAll(req.Target.Address, "fcm.googleapis.com", "127.0.0.1")
+		if _, err := svc.Send(t.Context(), "operations-api", "service:"+req.Payload["deliveryId"], req); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatal("untrusted push endpoint accepted")
+		}
+		if bytes.Contains(repo.creates[0].TargetCiphertext, []byte("fcm.googleapis.com")) {
+			t.Fatal("plaintext subscription persisted")
+		}
+	}
+}

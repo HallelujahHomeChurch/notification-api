@@ -85,9 +85,15 @@ func (w *WebPush) Send(ctx context.Context, payload DeliveryPayload) (ProviderRe
 	if err != nil {
 		return ProviderReceipt{}, w.failed(ErrorPermanent, "encode", err)
 	}
+	ttl := 24 * 60 * 60
+	var client webpush.HTTPClient
+	if payload.TTL > 0 {
+		ttl = min(ttl, payload.TTL)
+		client = &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
 	response, err := w.send(ctx, message, &subscription, &webpush.Options{
 		Subscriber: webPushSubscriber(w.config.Subject), VAPIDPublicKey: w.config.PublicKey,
-		VAPIDPrivateKey: w.config.PrivateKey, TTL: 24 * 60 * 60,
+		VAPIDPrivateKey: w.config.PrivateKey, TTL: ttl, HTTPClient: client,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -126,6 +132,20 @@ func validSubscription(subscription webpush.Subscription) bool {
 	}
 	auth, err := base64.RawURLEncoding.DecodeString(subscription.Keys.Auth)
 	return err == nil && len(auth) == 16
+}
+
+// ValidServiceWebPushSubscription restricts service reminders to browser push providers.
+func ValidServiceWebPushSubscription(raw string) bool {
+	var subscription webpush.Subscription
+	if len(raw) > 4096 || json.Unmarshal([]byte(raw), &subscription) != nil || !validSubscription(subscription) || len(subscription.Endpoint) > 2048 {
+		return false
+	}
+	endpoint, err := url.Parse(subscription.Endpoint)
+	if err != nil || endpoint.Port() != "" || endpoint.Fragment != "" {
+		return false
+	}
+	host := endpoint.Host
+	return host == "fcm.googleapis.com" || host == "web.push.apple.com" || host == "updates.push.services.mozilla.com" || strings.HasSuffix(host, ".notify.windows.com")
 }
 
 func classifyWebPushResponse(response *http.Response, providerFamily string) *ProviderError {

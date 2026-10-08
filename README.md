@@ -198,3 +198,20 @@ The release workflow maps repository variable `NATIVE_PUSH_ENABLED` (exactly
 `true`, otherwise false) to both runtime roles and conditionally adds only
 Operations to the caller allowlist. All what-if and apply invocations use the
 same value. The variable is not enabled by this feature PR.
+
+### Browser service reminders (opt-in)
+
+`SERVICE_WEB_PUSH_ENABLED=true` independently enables `operations.web-push` on
+API and worker. Operations must expose eligibility/result callbacks and use the
+same public VAPID key as this service. Native Expo delivery can remain disabled.
+Only `operations-api` may call this template, with opaque assignment/delivery
+UUIDs and `Idempotency-Key: service:<deliveryId>`; browser endpoints and curve keys
+are validated again here. The worker rechecks eligibility immediately before
+sending generic text with an authenticated Account detail link and bounded TTL.
+
+Provider outcomes are persisted before callback. Callback retries use the
+existing idempotency metadata (730-day retention), so seven-day encrypted payload
+purging does not lose the result or resend the notification. Provider acceptance
+is not proof of display or reading; a crash between provider acceptance and
+persisting its response can still produce an at-least-once duplicate. Enable only
+after a reviewed release and a consenting browser/device smoke test.

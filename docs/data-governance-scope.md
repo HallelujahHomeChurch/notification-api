@@ -60,3 +60,12 @@ Provider acceptance and APNs/FCM receipt are distinct: existing delivery rows
 store the Expo ticket and are polled after 15 minutes. An invalid endpoint is
 reported to Operations, which fences revocation by the installation version.
 Existing retention, DSR encryption/purge, and outbox rules apply to these rows.
+
+## Browser service notifications
+
+`operations.web-push` uses the same opaque assignment/delivery fields and encrypted
+Web Push subscription storage. It adds no recipient names or roster descriptions.
+The existing idempotency key is constrained to `service:<deliveryId>` and retains
+callback correlation after sensitive payload tombstoning; existing metadata
+retention and subject-erasure policies remain in force. Terminal status/error
+metadata records callback acknowledgement, without retaining endpoint material.

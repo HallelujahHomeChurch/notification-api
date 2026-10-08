@@ -226,7 +226,11 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	}
 
 	providerCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-	provider, ok := w.providers[claimed.Channel]
+	providerKey := claimed.Channel
+	if claimed.TemplateID == "operations.web-push" {
+		providerKey = "service_web_push"
+	}
+	provider, ok := w.providers[providerKey]
 	if !ok {
 		cancel()
 		return fmt.Errorf("provider for channel %q is not configured", claimed.Channel)
@@ -309,6 +313,9 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 	)
 	if err != nil {
 		return providers.DeliveryPayload{}, err
+	}
+	if claimed.TemplateID == "operations.web-push" {
+		return providers.DeliveryPayload{Recipient: string(target), MessageID: envelope.Fields["deliveryId"], ActionURL: envelope.Fields["assignmentId"]}, nil
 	}
 	switch claimed.Channel {
 	case "native_push":

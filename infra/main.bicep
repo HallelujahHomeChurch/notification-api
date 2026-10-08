@@ -21,6 +21,7 @@ param smtpAuthenticationEnabled bool = true
 @minValue(1)
 param notificationTemplateDailyLimit int = 1000
 param nativePushEnabled bool = false
+param serviceWebPushEnabled bool = false
 param notificationsDisabled bool
 param activeEncryptionKeyID string = 'legacy-v1'
 param activeHashKeyID string = 'legacy-v1'
@@ -47,6 +48,7 @@ var legacySMTPPasswordSecretUrl = '${legacyVault.properties.vaultUri}secrets/${s
 var imageReference = '${registry.properties.loginServer}/alive/notification-api@${imageDigest}'
 var smtpFromParts = split(smtpFrom, '@')
 var commonEnvironment = [
+  { name: 'SERVICE_WEB_PUSH_ENABLED', value: toLower(string(serviceWebPushEnabled)) }
   { name: 'NATIVE_PUSH_ENABLED', value: toLower(string(nativePushEnabled)) }
   { name: 'ENVIRONMENT', value: 'production' }
   { name: 'PORT', value: '8081' }
@@ -243,7 +245,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'NOTIFICATION_ENCRYPTION_KEYS_JSON', secretRef: 'encryption-keys-json-v2' }
             { name: 'NOTIFICATION_ACTIVE_HASH_KEY_ID', value: activeHashKeyID }
             { name: 'NOTIFICATION_HASH_KEYS_JSON', secretRef: 'hash-keys-json-v2' }
-            { name: 'NOTIFICATION_ALLOWED_CALLERS', value: nativePushEnabled ? 'account-api,engagement-api,operations-api' : 'account-api,engagement-api' }
+            { name: 'NOTIFICATION_ALLOWED_CALLERS', value: (nativePushEnabled || serviceWebPushEnabled) ? 'account-api,engagement-api,operations-api' : 'account-api,engagement-api' }
             { name: 'NOTIFICATION_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'NOTIFICATION_TEMPLATE_DAILY_LIMIT', value: '${notificationTemplateDailyLimit}' }
             { name: 'NOTIFICATIONS_DISABLED', value: toLower(string(notificationsDisabled)) }

@@ -79,18 +79,28 @@ func (p *Provider) callback(ctx context.Context, id, result string) error {
 	}
 	return nil
 }
-func (p *Provider) Send(ctx context.Context, v providers.DeliveryPayload) (providers.ProviderReceipt, error) {
-	var allowed struct {
-		AssignmentID string `json:"assignmentId"`
-		Allow        bool   `json:"allow"`
-		TTL          int    `json:"ttl"`
-	}
+
+type ServiceEligibility struct {
+	AssignmentID string `json:"assignmentId"`
+	Allow        bool   `json:"allow"`
+	TTL          int    `json:"ttl"`
+}
+
+func (p *Provider) Eligibility(ctx context.Context, v providers.DeliveryPayload) (ServiceEligibility, error) {
+	var allowed ServiceEligibility
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(v.Recipient)))
 	if e := p.post(ctx, p.OperationsURL+"/priv/service-push/eligibility", map[string]string{"deliveryId": v.MessageID, "tokenHash": hash}, &allowed, false); e != nil {
-		return providers.ProviderReceipt{}, e
+		return allowed, e
 	}
 	if !allowed.Allow || allowed.TTL <= 0 || allowed.AssignmentID != v.ActionURL {
-		return providers.ProviderReceipt{}, &providers.ProviderError{Kind: providers.ErrorSuppressed, Operation: "native_eligibility"}
+		return allowed, &providers.ProviderError{Kind: providers.ErrorSuppressed, Operation: "native_eligibility"}
+	}
+	return allowed, nil
+}
+func (p *Provider) Send(ctx context.Context, v providers.DeliveryPayload) (providers.ProviderReceipt, error) {
+	allowed, err := p.Eligibility(ctx, v)
+	if err != nil {
+		return providers.ProviderReceipt{}, err
 	}
 	var response struct {
 		Data ticket `json:"data"`

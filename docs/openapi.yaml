@@ -339,6 +339,9 @@ components:
           type: string
           description: >-
             Registered template identifier allowed for the authenticated caller.
+            operations.web-push is restricted to operations-api and accepts only
+            assignmentId and deliveryId UUIDs; service web delivery must be enabled.
+            Its Idempotency-Key must be service:<deliveryId> for durable result callbacks.
             Account DSR v1 includes received, information-required, action-required,
             completed, rejected and extended lifecycle templates (account.dsr-*).
             DSR payload permits only requestUrl, requestId and requestType; decision,
