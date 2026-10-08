@@ -181,3 +181,34 @@ func TestWebPushClassifiesResponses(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceWebPushUsesBoundedTTLAndRejectsRedirects(t *testing.T) {
+	p := NewWebPush(WebPushConfig{})
+	p.send = func(_ context.Context, _ []byte, _ *webpush.Subscription, o *webpush.Options) (*http.Response, error) {
+		if o.TTL != 123 {
+			t.Fatalf("stale notification TTL: %d", o.TTL)
+		}
+		client, ok := o.HTTPClient.(*http.Client)
+		if !ok || client.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+			t.Fatal("service push can follow redirects")
+		}
+		return &http.Response{StatusCode: 201, Body: io.NopCloser(strings.NewReader(""))}, nil
+	}
+	_, err := p.Send(context.Background(), DeliveryPayload{TTL: 123, Recipient: `{"endpoint":"https://fcm.googleapis.com/fcm/send/example","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceWebPushSubscriptionTrustBoundary(t *testing.T) {
+	for _, endpoint := range []string{"https://fcm.googleapis.com/send/id", "https://web.push.apple.com/id", "https://updates.push.services.mozilla.com/id", "https://db5.notify.windows.com/id", "https://127.0.0.1/id", "https://fcm.googleapis.com.evil.example/id", "https://fcm.googleapis.com:443/id", "https://user@fcm.googleapis.com/id", "https://fcm.googleapis.com/id#fragment"} {
+		raw, _ := json.Marshal(webpush.Subscription{Endpoint: endpoint, Keys: webpush.Keys{P256dh: testVAPIDPublicKey, Auth: "AAAAAAAAAAAAAAAAAAAAAA"}})
+		want := endpoint == "https://fcm.googleapis.com/send/id" || endpoint == "https://web.push.apple.com/id" || endpoint == "https://updates.push.services.mozilla.com/id" || endpoint == "https://db5.notify.windows.com/id"
+		if got := ValidServiceWebPushSubscription(string(raw)); got != want {
+			t.Errorf("endpoint %s: got %v", endpoint, got)
+		}
+	}
+	if ValidServiceWebPushSubscription(`{"endpoint":"https://fcm.googleapis.com/id","keys":{"p256dh":"invalid","auth":"invalid"}}`) {
+		t.Fatal("invalid keys accepted")
+	}
+}

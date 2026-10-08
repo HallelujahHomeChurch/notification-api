@@ -175,3 +175,43 @@ Erasure completion contains a reference and `support@alive.org.tw` contact,
 without a portal link or sign-in instruction for the deleted account.
 
 DSR decision notices `account.dsr-rejected` and `account.dsr-extended` use the same caller-scoped v1 lifecycle contract: only `account-api`, `requestUrl`, `requestId` and `requestType`. They direct the subject to the protected decision/reason/deadline in Account; no decision text, evidence or ZIP travels in email. Adding templates alone does not enable extensions or statutory deadline policy. Existing `GET /priv/notifications/{messageId}` remains the caller-scoped delivery-state contract (`sent` describes provider acceptance, not recipient receipt/read).
+
+### Native service push (opt-in)
+
+Set `NATIVE_PUSH_ENABLED=true` on both API and worker only after the test
+Operations deployment has its `/priv/service-push/eligibility` and `/result`
+endpoints. Add `operations-api` to `NOTIFICATION_ALLOWED_CALLERS` and allow
+`notification-worker` to invoke the two Operations private endpoints in Dapr ACLs.
+`EXPO_ACCESS_TOKEN` is optional unless enhanced Expo push security is enabled.
+Never put this token in the mobile app. The provider uses the existing durable
+outbox and encrypted payload storage. Failed eligibility checks suppress sends;
+unavailable checks retry. Expo receipt callbacks are version fenced. A receipt
+means APNs/FCM acceptance, not evidence that a member saw the notification.
+
+Terminal native delivery results are persisted before calling Operations. A
+callback outage retries the stored result without depending on Expo retaining
+its receipt. Failed/dead-lettered native deliveries report `provider_failed`;
+invalid endpoints keep their specific outcome. Callback retries never resubmit
+the push. No member-visible delivery/read guarantee follows from these states.
+
+The release workflow maps repository variable `NATIVE_PUSH_ENABLED` (exactly
+`true`, otherwise false) to both runtime roles and conditionally adds only
+Operations to the caller allowlist. All what-if and apply invocations use the
+same value. The variable is not enabled by this feature PR.
+
+### Browser service reminders (opt-in)
+
+`SERVICE_WEB_PUSH_ENABLED=true` independently enables `operations.web-push` on
+API and worker. Operations must expose eligibility/result callbacks and use the
+same public VAPID key as this service. Native Expo delivery can remain disabled.
+Only `operations-api` may call this template, with opaque assignment/delivery
+UUIDs and `Idempotency-Key: service:<deliveryId>`; browser endpoints and curve keys
+are validated again here. The worker rechecks eligibility immediately before
+sending generic text with an authenticated Account detail link and bounded TTL.
+
+Provider outcomes are persisted before callback. Callback retries use the
+existing idempotency metadata (730-day retention), so seven-day encrypted payload
+purging does not lose the result or resend the notification. Provider acceptance
+is not proof of display or reading; a crash between provider acceptance and
+persisting its response can still produce an at-least-once duplicate. Enable only
+after a reviewed release and a consenting browser/device smoke test.

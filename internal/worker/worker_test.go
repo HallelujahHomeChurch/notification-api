@@ -602,3 +602,23 @@ func equalStrings(left, right []string) bool {
 	}
 	return true
 }
+
+func TestServiceWebPushCannotUseUnguardedNewsletterProvider(t *testing.T) {
+	repo := webPushDeliveryRepository(t)
+	repo.claimResult.Claim.TemplateID = "operations.web-push"
+	repo.claimResult.Claim.TemplateVersion = 1
+	payload, err := notificationcrypto.Encrypt(testKey, []byte("message-1:payload"), []byte(`{"locale":"zh-Hant","fields":{"assignmentId":"11111111-1111-4111-8111-111111111111","deliveryId":"22222222-2222-4222-8222-222222222222"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.claimResult.Claim.PayloadCiphertext = payload
+	newsletter := &fakeProvider{}
+	guarded := &fakeProvider{receipt: providers.ProviderReceipt{Provider: "webpush"}}
+	instance := newWorkerWithProviders(repo, map[string]providers.Provider{"web_push": newsletter, "service_web_push": guarded}, map[string][]byte{"legacy-v1": testKey})
+	if err = instance.Process(t.Context(), &fakeMessage{id: "delivery-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if newsletter.calls != 0 || guarded.calls != 1 || guarded.payloads[0].MessageID != "22222222-2222-4222-8222-222222222222" || guarded.payloads[0].ActionURL != "11111111-1111-4111-8111-111111111111" {
+		t.Fatal("service bypassed the guarded provider")
+	}
+}

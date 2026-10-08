@@ -452,3 +452,75 @@ func validWebPushRequest() contracts.SendRequest {
 		Resource: contracts.Resource{Type: "campaign", ID: "campaign-1"},
 	}
 }
+
+func TestNativePushTrustBoundary(t *testing.T) {
+	const assignment = "11111111-1111-4111-8111-111111111111"
+	request := contracts.SendRequest{TemplateID: "operations.native-push", Channel: "native_push", Target: contracts.Target{Type: "native_push", Address: "ExpoPushToken[example-token]"}, Locale: "zh-Hant", Payload: map[string]string{"assignmentId": assignment, "deliveryId": "22222222-2222-4222-8222-222222222222"}, Resource: contracts.Resource{Type: "service_assignment", ID: assignment}}
+	for _, tc := range []struct {
+		name, caller string
+		enabled      bool
+		change       func(*contracts.SendRequest)
+		want         error
+	}{
+		{name: "disabled", caller: "operations-api", want: ErrInvalidRequest},
+		{name: "other caller", caller: "account-api", enabled: true, want: ErrForbiddenTemplate},
+		{name: "bad token", caller: "operations-api", enabled: true, change: func(r *contracts.SendRequest) { r.Target.Address = "not-a-token" }, want: ErrInvalidRequest},
+		{name: "invalid resource reference", caller: "operations-api", enabled: true, change: func(r *contracts.SendRequest) { r.Payload["assignmentId"] = "not-a-uuid" }, want: ErrInvalidRequest},
+		{name: "extra personal data", caller: "operations-api", enabled: true, change: func(r *contracts.SendRequest) { r.Payload["memberName"] = "private" }, want: ErrInvalidRequest},
+		{name: "allowed", caller: "operations-api", enabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := request
+			r.Payload = map[string]string{"assignmentId": assignment, "deliveryId": request.Payload["deliveryId"]}
+			if tc.change != nil {
+				tc.change(&r)
+			}
+			repository := &memoryRepository{}
+			svc := New(repository, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey, NativePushEnabled: tc.enabled})
+			result, err := svc.Send(t.Context(), tc.caller, "native-trust-boundary", r)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v want %v", err, tc.want)
+			}
+			if tc.want != nil {
+				if len(repository.creates) != 0 {
+					t.Fatal("rejected input reached storage")
+				}
+				return
+			}
+			if result.Status != contracts.MessageStatusQueued || len(repository.creates) != 1 {
+				t.Fatalf("not queued: %+v", result)
+			}
+			if bytes.Contains(repository.creates[0].TargetCiphertext, []byte(r.Target.Address)) {
+				t.Fatal("plaintext token persisted")
+			}
+		})
+	}
+}
+
+func TestServiceWebPushFlagIsIndependentOfNativePush(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		repo := &memoryRepository{}
+		svc := New(repo, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey, ServiceWebPushEnabled: enabled})
+		req := contracts.SendRequest{TemplateID: "operations.web-push", Channel: "web_push", Target: contracts.Target{Type: "web_push", Address: `{"endpoint":"https://fcm.googleapis.com/fcm/send/example","keys":{"p256dh":"BGsX0fLhLEJH-Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","auth":"AAAAAAAAAAAAAAAAAAAAAA"}}`}, Locale: "zh-Hant", Payload: map[string]string{"assignmentId": "11111111-1111-4111-8111-111111111111", "deliveryId": "22222222-2222-4222-8222-222222222222"}, Resource: contracts.Resource{Type: "service_assignment", ID: "11111111-1111-4111-8111-111111111111"}}
+		_, err := svc.Send(t.Context(), "operations-api", "service:"+req.Payload["deliveryId"], req)
+		if !enabled {
+			if !errors.Is(err, ErrInvalidRequest) || len(repo.creates) != 0 {
+				t.Fatal("disabled service accepted")
+			}
+			continue
+		}
+		if err != nil || len(repo.creates) != 1 {
+			t.Fatalf("web depends on native flag: %v", err)
+		}
+		if _, err := svc.Send(t.Context(), "operations-api", "wrong-delivery-id", req); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatal("callback identity mismatch accepted")
+		}
+		req.Target.Address = strings.ReplaceAll(req.Target.Address, "fcm.googleapis.com", "127.0.0.1")
+		if _, err := svc.Send(t.Context(), "operations-api", "service:"+req.Payload["deliveryId"], req); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatal("untrusted push endpoint accepted")
+		}
+		if bytes.Contains(repo.creates[0].TargetCiphertext, []byte("fcm.googleapis.com")) {
+			t.Fatal("plaintext subscription persisted")
+		}
+	}
+}

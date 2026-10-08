@@ -21,6 +21,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/httpapi"
 	"github.com/HallelujahHomeChurch/notification-api/internal/logging"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
+	"github.com/HallelujahHomeChurch/notification-api/internal/nativepush"
 	"github.com/HallelujahHomeChurch/notification-api/internal/outbox"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/HallelujahHomeChurch/notification-api/internal/queue"
@@ -183,6 +184,8 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		ActiveHashKeyID:       cfg.ActiveHashKeyID,
 		HashKeys:              cfg.HashKeys,
 		NotificationsDisabled: cfg.NotificationsDisabled,
+		NativePushEnabled:     os.Getenv("NATIVE_PUSH_ENABLED") == "true",
+		ServiceWebPushEnabled: os.Getenv("SERVICE_WEB_PUSH_ENABLED") == "true",
 		RateLimits: []store.RateLimit{
 			{Window: 15 * time.Minute, Maximum: 1},
 			{Window: 24 * time.Hour, Maximum: 5},
@@ -241,13 +244,28 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		_ = db.Close()
 		return workerComponents{}, fmt.Errorf("create consumer: %w", err)
 	}
-	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
-		"email": providers.NewSMTP(smtpConfig), "web_push": providers.NewWebPush(webPushConfig),
-	}, cfg.EncryptionKeys).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
+	providerMap := map[string]providers.Provider{"email": providers.NewSMTP(smtpConfig), "web_push": providers.NewWebPush(webPushConfig)}
+	var nativeProvider *nativepush.Provider
+	if os.Getenv("NATIVE_PUSH_ENABLED") == "true" {
+		nativeProvider = nativepush.New("http://127.0.0.1:3500/v1.0/invoke/operations-api/method", os.Getenv("EXPO_ACCESS_TOKEN"))
+		providerMap["native_push"] = nativeProvider
+	}
+	var serviceWebProvider *nativepush.WebProvider
+	if os.Getenv("SERVICE_WEB_PUSH_ENABLED") == "true" {
+		serviceWebProvider = &nativepush.WebProvider{Operations: nativepush.New("http://127.0.0.1:3500/v1.0/invoke/operations-api/method", ""), Web: providerMap["web_push"]}
+		providerMap["service_web_push"] = serviceWebProvider
+	}
+	deliveryWorker := worker.NewWithProviders(db, providerMap, cfg.EncryptionKeys).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
 
 	return workerComponents{
 		http: httpProcess(cfg.Port, workerHealthHandler(db), cfg.ShutdownTimeout),
 		consumer: func(ctx context.Context) error {
+			if nativeProvider != nil {
+				go nativeProvider.RunReceipts(ctx, db, cfg.EncryptionKeys)
+			}
+			if serviceWebProvider != nil {
+				go serviceWebProvider.RunResults(ctx, db)
+			}
 			return consumer.Run(ctx, deliveryWorker.Process)
 		},
 		close: func(ctx context.Context) error {

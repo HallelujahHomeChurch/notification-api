@@ -12,6 +12,8 @@ import (
 
 func TestGovernanceKnownTemplatePayloadFieldsMatchRegistry(t *testing.T) {
 	governanceFields := map[string][]string{
+		"operations.web-push/1/web_push":           {"assignmentId", "deliveryId"},
+		"operations.native-push/1/native_push":     {"assignmentId", "deliveryId"},
 		"account.dsr-rejected/1/email":             {"requestUrl", "requestId", "requestType"},
 		"account.dsr-extended/1/email":             {"requestUrl", "requestId", "requestType"},
 		"account.dsr-received/1/email":             {"requestUrl", "requestId", "requestType"},
@@ -364,4 +366,17 @@ func verificationRequest(payload map[string]string) contracts.SendRequest {
 		Payload:    payload,
 		Resource:   contracts.Resource{Type: "account", ID: "user-id"},
 	}
+}
+
+func TestServiceWebPushOnlyAcceptsOpaqueIDsFromOperations(t *testing.T) {
+	definition, err := Resolve("operations.web-push", "web_push")
+	require.NoError(t, err)
+	request := contracts.SendRequest{TemplateID: "operations.web-push", Channel: "web_push", Payload: map[string]string{"assignmentId": "11111111-1111-4111-8111-111111111111", "deliveryId": "22222222-2222-4222-8222-222222222222"}}
+	_, err = Validate(definition, "operations-api", request)
+	require.NoError(t, err)
+	_, err = Validate(definition, "engagement-api", request)
+	require.ErrorIs(t, err, ErrForbiddenCaller)
+	request.Payload["actionUrl"] = "https://evil.example"
+	_, err = Validate(definition, "operations-api", request)
+	require.ErrorIs(t, err, ErrInvalidPayload)
 }
