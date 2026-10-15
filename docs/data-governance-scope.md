@@ -39,7 +39,7 @@ Completed Account cleanup also retains a bounded idempotency tombstone: the call
 
 Behavioral references:
 
-- `internal/accountcleanup/service_test.go`: `TestExportFindsMessagesAcrossRetainedHashKeys`, `TestExportReturnsMetadataWithoutCiphertextOrProviderIdentifiers`, `TestAccountCleanupUsesSubjectAttributionAcrossKeysAndChannels`, `TestRestrictProcessingReturnsNotApplicableWithoutMutation`.
+- `internal/accountcleanup/service_test.go`: `TestAccountCleanupTombstonesWithoutDSRRequest`, `TestAccountCleanupUsesSubjectAttributionAcrossKeysAndChannels`, `TestEraseDoesNotUseEmailAgainstExplicitOtherSubject`.
 - `internal/integration/postgres_test.go`: `TestPostgresAccountCleanupAcrossHashRotation`.
 - `internal/worker/worker_integration_test.go`: `TestPostgresEraseWaitsForClaimedProviderCall`, `TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable`.
 
