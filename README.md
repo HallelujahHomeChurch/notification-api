@@ -175,3 +175,26 @@ Erasure completion contains a reference and `support@alive.org.tw` contact,
 without a portal link or sign-in instruction for the deleted account.
 
 DSR decision notices `account.dsr-rejected` and `account.dsr-extended` use the same caller-scoped v1 lifecycle contract: only `account-api`, `requestUrl`, `requestId` and `requestType`. They direct the subject to the protected decision/reason/deadline in Account; no decision text, evidence or ZIP travels in email. Adding templates alone does not enable extensions or statutory deadline policy. Existing `GET /priv/notifications/{messageId}` remains the caller-scoped delivery-state contract (`sent` describes provider acceptance, not recipient receipt/read).
+
+## Temporary A4 owner inventory
+
+The immutable image also packages `/app/dsr-inventory`. After merged CI/CD,
+its owner operator may execute it with explicit UUID message IDs freshly read
+from Account `dsr_notifications.message_id`; it uses only resident `DATABASE_URL`.
+It accepts only the exact `hhc-pg.postgres.database.azure.com:5432/notification`
+TLS target and verifies the hostname against system roots. It does not start
+API, worker, migration, queue, or provider code.
+
+The read-only repeatable-read snapshot requires every requested ID to match
+`account-api` and the six exact Account DSR templates. It exports bounded
+metadata for messages, linked deliveries/outbox, observed delivery fences, and
+schema columns/FKs/triggers; other DSR messages are `unknownNotApproved`.
+It never prints recipients, payloads, provider IDs, or errors. Unknown FK shape,
+missing IDs, query failure, or bounds prevent completed output. Fence status is
+an observation, not a lock or approval to delete.
+
+Output is buffered JSON between `DSR_INVENTORY_V1_BEGIN`, `SHA256 <hex>` (the
+SHA-256 of the exact JSON line), and `DSR_INVENTORY_V1_COMPLETE`. Capture stdout
+in a restricted local file and verify the whole frame/hash before using it.
+The caps are 2 minutes, 10,000 total rows, and 4 MiB JSON. Remove this temporary
+command, tests, and Docker binary after A5 acceptance.
