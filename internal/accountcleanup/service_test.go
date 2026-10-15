@@ -1,9 +1,8 @@
-package dsr
+package accountcleanup
 
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -15,99 +14,6 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
-
-func TestExportFindsMessagesAcrossRetainedHashKeys(t *testing.T) {
-	db := testDatabase(t)
-	keys := map[string][]byte{"v1": []byte("11111111111111111111111111111111"), "v2": []byte("22222222222222222222222222222222")}
-	email := "member@example.test"
-	insertMessage(t, db, "v1", crypto.Hash(keys["v1"], []byte(email)), "email", "sent", "")
-	insertMessage(t, db, "v2", crypto.Hash(keys["v2"], []byte(email)), "web_push", "failed", "temporary")
-
-	request := ExportRequest{RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: " MEMBER@EXAMPLE.TEST ", Limit: 1}
-	page, err := New(db, keys).Export(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.RecordCount != 1 || len(page.Records) != 1 || page.NextCursor == "" {
-		t.Fatalf("first export = %#v, want one rotated-key record and cursor", page)
-	}
-	request.Cursor = page.NextCursor
-	page, err = New(db, keys).Export(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.RecordCount != 1 || len(page.Records) != 1 || page.NextCursor != "" {
-		t.Fatalf("second export = %#v, want remaining rotated-key record", page)
-	}
-}
-
-func TestExportReturnsMetadataWithoutCiphertextOrProviderIdentifiers(t *testing.T) {
-	db := testDatabase(t)
-	key := []byte("11111111111111111111111111111111")
-	email := "member@example.test"
-	insertMessage(t, db, "v1", crypto.Hash(key, []byte(email)), "email", "sent", "temporary")
-
-	page, err := New(db, map[string][]byte{"v1": key}).Export(context.Background(), ExportRequest{RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page.Records) != 1 {
-		t.Fatalf("records = %#v", page.Records)
-	}
-	record := page.Records[0]
-	if record.TemplateID != "account.verify-email" || record.Channel != "email" || record.Status != "sent" || record.CreatedAt.IsZero() || record.UpdatedAt.IsZero() || record.DeliveryStatus != "sent" {
-		t.Fatalf("record = %#v", record)
-	}
-	encoded, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, forbidden := range []string{"ciphertext", "provider", "endpoint", "temporary"} {
-		if strings.Contains(string(encoded), forbidden) {
-			t.Fatalf("record leaked %q: %s", forbidden, encoded)
-		}
-	}
-}
-
-func TestEraseTombstonesAttributedPayloadAndBreaksEmailLookup(t *testing.T) {
-	db := testDatabase(t)
-	key := []byte("11111111111111111111111111111111")
-	email := "member@example.test"
-	hash := crypto.Hash(key, []byte(email))
-	messageID := insertMessage(t, db, "v1", hash, "email", "sent", "")
-	service := New(db, map[string][]byte{"v1": key})
-	request := ActionRequest{RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "erase-1"}
-
-	result, err := service.Apply(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "completed" || result.RecordCount != 1 {
-		t.Fatalf("erase = %#v", result)
-	}
-	repeated, err := service.Apply(context.Background(), request)
-	if err != nil || repeated.Status != "completed" || repeated.Action != "erase" || repeated.Owner != "notification-api" {
-		t.Fatalf("repeated erase = %#v, error=%v", repeated, err)
-	}
-	page, err := service.Export(context.Background(), ExportRequest{RequestID: request.RequestID, UserID: request.UserID, Email: email})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.RecordCount != 0 {
-		t.Fatalf("erased lookup returned %#v", page.Records)
-	}
-	var target, payload []byte
-	var receipt, status string
-	if err := db.QueryRow(`SELECT target_ciphertext,payload_ciphertext FROM notification_messages WHERE id=$1`, messageID).Scan(&target, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT provider_message_id,status FROM notification_deliveries WHERE message_id=$1`, messageID).Scan(&receipt, &status); err != nil {
-		t.Fatal(err)
-	}
-	if len(target) != 0 || len(payload) != 0 || receipt != "receipt-id" || status != "sent" {
-		t.Fatalf("tombstone target=%q payload=%q receipt=%q status=%q", target, payload, receipt, status)
-	}
-}
 
 func TestAccountCleanupTombstonesWithoutDSRRequest(t *testing.T) {
 	db := testDatabase(t)
@@ -196,28 +102,6 @@ func setSubjectAttribution(t *testing.T, db *sql.DB, messageID, keyID, hash stri
 	}
 }
 
-func TestRestrictProcessingReturnsNotApplicableWithoutMutation(t *testing.T) {
-	db := testDatabase(t)
-	key := []byte("11111111111111111111111111111111")
-	email := "member@example.test"
-	messageID := insertMessage(t, db, "v1", crypto.Hash(key, []byte(email)), "email", "sent", "")
-
-	result, err := New(db, map[string][]byte{"v1": key}).Apply(context.Background(), ActionRequest{RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "restrict_processing", IdempotencyKey: "restrict-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "not_applicable" || result.RecordCount != 0 || !strings.Contains(strings.Join(result.ReasonCodes, ","), "ordinary_receipt_retention") {
-		t.Fatalf("restrict result=%#v", result)
-	}
-	var target, payload []byte
-	if err := db.QueryRow(`SELECT target_ciphertext,payload_ciphertext FROM notification_messages WHERE id=$1`, messageID).Scan(&target, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(target) == 0 || len(payload) == 0 {
-		t.Fatalf("restrict processing mutated message target=%q payload=%q", target, payload)
-	}
-}
-
 func testDatabase(t *testing.T) *sql.DB {
 	t.Helper()
 	rawURL := os.Getenv("TEST_DATABASE_URL")
@@ -272,60 +156,13 @@ func insertMessage(t *testing.T, db *sql.DB, hashKeyID, targetHash, channel, sta
 	return messageID
 }
 
-func TestExportUsesSubjectBindingAcrossEmailChangeAndPush(t *testing.T) {
-	db := testDatabase(t)
-	keys := map[string][]byte{"v1": []byte("11111111111111111111111111111111"), "v2": []byte("22222222222222222222222222222222")}
-	userID := uuid.NewString()
-	current := "current@example.test"
-	ids := []string{
-		insertMessage(t, db, "v1", crypto.Hash(keys["v1"], []byte(current)), "email", "sent", ""),
-		insertMessage(t, db, "v1", crypto.Hash(keys["v1"], []byte("old@example.test")), "email", "sent", ""),
-		insertMessage(t, db, "v2", crypto.Hash(keys["v2"], []byte("push-target")), "web_push", "sent", ""),
-	}
-	for i, id := range ids {
-		keyID := "v1"
-		if i == 2 {
-			keyID = "v2"
-		}
-		setSubjectAttribution(t, db, id, keyID, crypto.Hash(keys[keyID], []byte("notification-account-subject:"+userID)))
-	}
-	other := insertMessage(t, db, "v2", crypto.Hash(keys["v2"], []byte(current)), "email", "sent", "")
-	setSubjectAttribution(t, db, other, "v2", crypto.Hash(keys["v2"], []byte("notification-account-subject:"+uuid.NewString())))
-	request := ExportRequest{RequestID: uuid.NewString(), UserID: userID, Email: current, Limit: 1}
-	seen := map[string]bool{}
-	for {
-		page, err := New(db, keys).Export(context.Background(), request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, record := range page.Records {
-			if seen[record.RecordKey] {
-				t.Fatal("duplicate record")
-			}
-			seen[record.RecordKey] = true
-		}
-		if page.NextCursor == "" {
-			break
-		}
-		request.Cursor = page.NextCursor
-	}
-	if len(seen) != 3 || seen[other] {
-		t.Fatalf("export did not isolate all subject-bound channels: count=%d", len(seen))
-	}
-	for _, id := range ids {
-		if !seen[id] {
-			t.Fatal("subject record omitted")
-		}
-	}
-}
-
 func TestEraseDoesNotUseEmailAgainstExplicitOtherSubject(t *testing.T) {
 	db := testDatabase(t)
 	key := []byte("11111111111111111111111111111111")
 	email := "same-address@example.test"
 	id := insertMessage(t, db, "v1", crypto.Hash(key, []byte(email)), "email", "sent", "")
 	setSubjectAttribution(t, db, id, "v1", crypto.Hash(key, []byte("notification-account-subject:"+uuid.NewString())))
-	result, err := New(db, map[string][]byte{"v1": key}).Apply(context.Background(), ActionRequest{RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "explicit-subject-boundary"})
+	result, err := New(db, map[string][]byte{"v1": key}).CleanupAccount(context.Background(), AccountCleanupRequest{UserID: uuid.NewString(), Email: email, IdempotencyKey: "explicit-subject-boundary"})
 	if err != nil || result.RecordCount != 0 || result.RemainingCount != 0 {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}

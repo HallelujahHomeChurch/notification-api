@@ -25,7 +25,7 @@ var excludedColumns = map[string]map[string]string{
 	},
 }
 
-const dsrUserIDBoundary = "DSR userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash."
+const dsrUserIDBoundary = "Cleanup userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash."
 
 func notificationManifest(t *testing.T) map[string]any {
 	t.Helper()
@@ -56,7 +56,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 
 	exactPhysicalFields := map[string][]string{
 		"notification.account-cleanup-operations": {"idempotency_key", "subject_ref", "result", "created_at", "updated_at"},
-		"notification.message-sensitive": {"target_ciphertext", "payload_ciphertext"},
+		"notification.message-sensitive":          {"target_ciphertext", "payload_ciphertext"},
 		"notification.message-metadata": {
 			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",
 			"channel", "target_type", "target_hash", "resource_type", "resource_id", "eligibility_campaign_id", "eligibility_recipient_id", "status", "created_at",
@@ -117,7 +117,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"internal/service/service.go#Service.Send",
 		"internal/store/store.go#Store.Create",
 		"internal/retention/worker.go#postgresRepository.retain",
-		"internal/dsr/service.go#Service.Apply",
+		"internal/accountcleanup/service.go#Service.CleanupAccount",
 		"internal/httpapi/handler.go#handler.authorizeCaller",
 		"internal/worker/worker.go#postgresStore.markSent",
 		"internal/providers/provider.go#ProviderReceipt",
