@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -18,12 +17,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/diagnostics"
-	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
 	"github.com/HallelujahHomeChurch/notification-api/internal/store"
@@ -99,7 +98,7 @@ func testDiagnosticLookup(t *testing.T, ctx context.Context, db *sql.DB) {
 	}
 }
 
-func TestPostgresDSRExportAndEraseAcrossHashRotation(t *testing.T) {
+func TestPostgresAccountCleanupAcrossHashRotation(t *testing.T) {
 	ctx := context.Background()
 	admin, db := testDatabases(t)
 	defer admin.Close()
@@ -131,38 +130,13 @@ func TestPostgresDSRExportAndEraseAcrossHashRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	owner := dsr.New(db, hashKeys)
-	requestID, userID := uuid.NewString(), uuid.NewString()
-	page, err := owner.Export(ctx, dsr.ExportRequest{RequestID: requestID, UserID: userID, Email: " MEMBER@EXAMPLE.TEST ", Limit: 100})
+	owner := accountcleanup.New(db, hashKeys)
+	result, err := owner.CleanupAccount(ctx, accountcleanup.AccountCleanupRequest{UserID: uuid.NewString(), Email: " MEMBER@EXAMPLE.TEST ", IdempotencyKey: "account-cleanup"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.RecordCount != 2 || len(page.Records) != 2 {
-		t.Fatalf("export=%#v", page)
-	}
-	encoded, err := json.Marshal(page)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, forbidden := range []string{"ciphertext", "provider", "endpoint", "receipt-id", "verifyUrl"} {
-		if strings.Contains(string(encoded), forbidden) {
-			t.Fatalf("export leaked %q: %s", forbidden, encoded)
-		}
-	}
-
-	result, err := owner.Apply(ctx, dsr.ActionRequest{RequestID: requestID, UserID: userID, Email: email, Action: "erase", IdempotencyKey: "dsr-erase"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "completed" || result.RecordCount != 2 {
-		t.Fatalf("erase=%#v", result)
-	}
-	page, err = owner.Export(ctx, dsr.ExportRequest{RequestID: requestID, UserID: userID, Email: email})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.RecordCount != 0 {
-		t.Fatalf("erased records=%#v", page.Records)
+	if result.Status != "completed" || result.RecordCount != 2 || result.RemainingCount != 0 {
+		t.Fatalf("cleanup=%#v", result)
 	}
 	var tombstones, receipts int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM notification_messages WHERE target_hash=repeat('0',64) AND octet_length(target_ciphertext)=0 AND octet_length(payload_ciphertext)=0`).Scan(&tombstones); err != nil {

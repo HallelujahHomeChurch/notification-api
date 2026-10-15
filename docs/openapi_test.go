@@ -20,8 +20,6 @@ var requiredOperations = map[string]struct {
 	"GET /ready":                          {visibility: "operations"},
 	"POST /priv/notifications/send":       {visibility: "private", callers: []string{"account-api", "engagement-api"}},
 	"GET /priv/notifications/{messageId}": {visibility: "private", callers: []string{"account-api", "engagement-api"}},
-	"POST /priv/dsr/exports":              {visibility: "private", callers: []string{"account-api"}},
-	"POST /priv/dsr/actions":              {visibility: "private", callers: []string{"account-api"}},
 	"POST /priv/account-cleanup":          {visibility: "private", callers: []string{"account-api"}},
 }
 
@@ -223,33 +221,6 @@ func TestOpenAPIMatchesImplementedRuntimeSemantics(t *testing.T) {
 		"InternalErrorResponse":            "NTF_INTERNAL",
 	} {
 		requireContains(t, yamlBlock(document, "    "+schema+":"), "const: "+code)
-	}
-}
-
-func TestOpenAPIDSRContractsExposeOnlyRedactedNotificationMetadata(t *testing.T) {
-	contents, err := os.ReadFile("openapi.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	document := string(contents)
-	for _, route := range []string{"/priv/dsr/exports", "/priv/dsr/actions"} {
-		block := yamlBlock(document, "  "+route+":")
-		requireContains(t, block, "x-hhc-callers: [account-api]")
-	}
-	exportRequest := yamlBlock(document, "    DSRExportRequest:")
-	requireContains(t, exportRequest, "required: [requestId, userId, canonicalEmail]")
-	actionRequest := yamlBlock(document, "    DSRActionRequest:")
-	requireContains(t, actionRequest, "required: [requestId, userId, canonicalEmail, action, idempotencyKey]")
-	actionResult := yamlBlock(document, "    DSRActionResult:")
-	requireContains(t, actionResult, "action: { const: restrict_processing }")
-	requireContains(t, actionResult, "status: { const: not_applicable }")
-	requireContains(t, actionResult, "action: { const: erase }")
-	requireContains(t, actionResult, "status: { type: string, enum: [pending, completed] }")
-	record := yamlBlock(document, "    DSRExportRecord:")
-	for _, forbidden := range []string{"ciphertext", "provider", "endpoint", "payload"} {
-		if strings.Contains(strings.ToLower(record), forbidden) {
-			t.Fatalf("DSR export record exposes %q: %s", forbidden, record)
-		}
 	}
 }
 

@@ -6,8 +6,8 @@ datasets:
     owner: notification-api
     purpose: "Store encrypted recipient and template payload data until the existing terminal-message tombstone window elapses."
     necessity: required
-    storage: {"kind":"postgres","resource":"notification_messages","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_messages"},{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/dsr/service.go","symbol":"Service.Apply"}]}
-    subject_keys: [{"kind":"user_id","field":"subject_hash_key_id + subject_hash","evidence":[{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/dsr/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"hash_key_id + target_hash","evidence":[{"path":"internal/httpapi/handler.go","symbol":"handler.authorizeCaller"},{"path":"internal/dsr/service.go","symbol":"candidateHashes"}]}]
+    storage: {"kind":"postgres","resource":"notification_messages","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_messages"},{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/accountcleanup/service.go","symbol":"Service.CleanupAccount"}]}
+    subject_keys: [{"kind":"user_id","field":"subject_hash_key_id + subject_hash","evidence":[{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/accountcleanup/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"hash_key_id + target_hash","evidence":[{"path":"internal/httpapi/handler.go","symbol":"handler.authorizeCaller"},{"path":"internal/accountcleanup/service.go","symbol":"candidateHashes"}]}]
     data_classes: ["identity","contact","security","content","activity"]
     fields:
       - {"name":"target_ciphertext","purpose":"Encrypt canonical email or Web Push subscription target material at rest; ciphertext remains pseudonymous personal data.","necessity":"required","data_classes":["identity","contact","security"]}
@@ -38,8 +38,8 @@ datasets:
     owner: notification-api
     purpose: "Retain notification identity, routing, pseudonymous lookup, lifecycle and correlation metadata after ciphertext tombstoning."
     necessity: required
-    storage: {"kind":"postgres","resource":"notification_messages","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_messages"},{"path":"internal/migrations/sql/002_crypto_keys_and_retention_indexes.sql","symbol":"notification_messages_crypto_retention"},{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/dsr/service.go","symbol":"Service.Export"}]}
-    subject_keys: [{"kind":"user_id","field":"subject_hash_key_id + subject_hash","evidence":[{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/dsr/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"hash_key_id + target_hash","evidence":[{"path":"internal/httpapi/handler.go","symbol":"handler.authorizeCaller"},{"path":"internal/dsr/service.go","symbol":"candidateHashes"}]}]
+    storage: {"kind":"postgres","resource":"notification_messages","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_messages"},{"path":"internal/migrations/sql/002_crypto_keys_and_retention_indexes.sql","symbol":"notification_messages_crypto_retention"},{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/accountcleanup/service.go","symbol":"Service.CleanupAccount"}]}
+    subject_keys: [{"kind":"user_id","field":"subject_hash_key_id + subject_hash","evidence":[{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/accountcleanup/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"hash_key_id + target_hash","evidence":[{"path":"internal/httpapi/handler.go","symbol":"handler.authorizeCaller"},{"path":"internal/accountcleanup/service.go","symbol":"candidateHashes"}]}]
     data_classes: ["identity","security","activity"]
     fields:
       - {"name":"id","purpose":"Identify the notification message and parent delivery chain.","necessity":"required","data_classes":["activity"]}
@@ -65,7 +65,7 @@ datasets:
       - {"name":"expires_at","purpose":"Bound delivery eligibility; this deadline is separate from row retention.","necessity":"required","data_classes":["security","activity"]}
       - {"name":"subject_hash","purpose":"HMAC the canonical Account subject identifier for exact cleanup attribution without storing the identifier.","necessity":"optional","data_classes":["identity","security"]}
       - {"name":"subject_hash_key_id","purpose":"Select the retained HMAC key used for Account subject attribution.","necessity":"optional","data_classes":["security"]}
-    attribution: {"mode":"verified_lookup","explanation":"DSR userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash. Web Push and prior Email rows are deterministic only when trusted Account or Engagement producers supplied subjectAccountId. Generic resource fields are never used to infer identity."}
+    attribution: {"mode":"verified_lookup","explanation":"Cleanup userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash. Web Push and prior Email rows are deterministic only when trusted Account or Engagement producers supplied subjectAccountId. Generic resource fields are never used to infer identity."}
     legal_basis: {"status":"pending_legal","reference":null}
     retention: {"status":"enforced","rule":{"trigger":"age_since","field":"terminal_at","source":{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"},"duration_source":{"path":"internal/retention/worker.go","symbol":"metadataRetention"},"predicate":"terminal_at <= now-730d","description":"The existing retention worker deletes the terminal parent message and cascades to delivery and outbox rows after 730 days."},"action":"delete"}
     cleanup: {"mode":"existing_worker","implementation":[{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}],"evidence":[{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata"},{"kind":"go_test","path":"internal/retention/worker_test.go","test_name":"TestRunOnceUsesRequiredRetentionWindowsAndBoundedBatch"}]}
@@ -75,7 +75,7 @@ datasets:
     purpose: "Record provider delivery attempts, leases, outcomes and optional provider receipt metadata."
     necessity: required
     storage: {"kind":"postgres","resource":"notification_deliveries","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_deliveries"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/worker/worker.go","symbol":"postgresStore.markSent"},{"path":"internal/providers/provider.go","symbol":"ProviderReceipt"}]}
-    subject_keys: [{"kind":"user_id","field":"message_id -> notification_messages(subject_hash_key_id,subject_hash)","evidence":[{"path":"internal/dsr/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/dsr/service.go","symbol":"Service.Export"},{"path":"internal/dsr/service.go","symbol":"candidateHashes"}]}]
+    subject_keys: [{"kind":"user_id","field":"message_id -> notification_messages(subject_hash_key_id,subject_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/accountcleanup/service.go","symbol":"candidateHashes"}]}]
     data_classes: ["identity","security","activity"]
     fields:
       - {"name":"id","purpose":"Identify the delivery attempt chain.","necessity":"required","data_classes":["activity"]}
@@ -102,7 +102,7 @@ datasets:
     purpose: "Record durable queue publication attempts and fencing for each delivery."
     necessity: required
     storage: {"kind":"postgres","resource":"notification_outbox","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_outbox"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/outbox/dispatcher.go","symbol":"Dispatcher.DispatchOne"},{"path":"internal/queue/servicebus.go","symbol":"ServiceBus.Publish"}]}
-    subject_keys: [{"kind":"user_id","field":"delivery_id -> notification_deliveries.message_id -> notification_messages(subject_hash_key_id,subject_hash)","evidence":[{"path":"internal/dsr/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"delivery_id -> notification_deliveries.message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/dsr/service.go","symbol":"Service.Export"},{"path":"internal/dsr/service.go","symbol":"candidateHashes"}]}]
+    subject_keys: [{"kind":"user_id","field":"delivery_id -> notification_deliveries.message_id -> notification_messages(subject_hash_key_id,subject_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"delivery_id -> notification_deliveries.message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/accountcleanup/service.go","symbol":"candidateHashes"}]}]
     data_classes: ["identity","security","activity"]
     fields:
       - {"name":"id","purpose":"Identify the durable publication operation.","necessity":"required","data_classes":["activity"]}
@@ -139,8 +139,8 @@ datasets:
     owner: notification-api
     purpose: "Persist bounded idempotency results and an irreversible Account subject reference so completed account cleanup cannot be replayed for a different subject or silently recreated."
     necessity: required
-    storage: {"kind":"postgres","resource":"account_cleanup_operations","sources":[{"path":"internal/migrations/sql/005_account_cleanup_operations.sql","symbol":"account_cleanup_operations"},{"path":"internal/dsr/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/dsr/service.go","symbol":"Service.eraseIdempotent"}]}
-    subject_keys: [{"kind":"user_id","field":"subject_ref","evidence":[{"path":"internal/dsr/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/dsr/service.go","symbol":"Service.eraseIdempotent"}]}]
+    storage: {"kind":"postgres","resource":"account_cleanup_operations","sources":[{"path":"internal/migrations/sql/005_account_cleanup_operations.sql","symbol":"account_cleanup_operations"},{"path":"internal/accountcleanup/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/accountcleanup/service.go","symbol":"Service.eraseIdempotent"}]}
+    subject_keys: [{"kind":"user_id","field":"subject_ref","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/accountcleanup/service.go","symbol":"Service.eraseIdempotent"}]}]
     data_classes: ["identity","security","activity"]
     fields:
       - {"name":"idempotency_key","purpose":"Deduplicate one Account cleanup operation and reject reuse for a different subject.","necessity":"required","data_classes":["security","activity"]}

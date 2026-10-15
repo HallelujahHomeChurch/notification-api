@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
-	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/eligibilityclient"
 	"github.com/HallelujahHomeChurch/notification-api/internal/httpapi"
 	"github.com/HallelujahHomeChurch/notification-api/internal/logging"
@@ -194,7 +194,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		db,
 		cfg.AllowedCallers,
 		cfg.AllowDevCallerHeader,
-		dsr.New(db, cfg.HashKeys),
+		accountcleanup.New(db, cfg.HashKeys),
 	)
 	dispatcher := outbox.New(db, publisher)
 	retentionWorker := retention.New(db)

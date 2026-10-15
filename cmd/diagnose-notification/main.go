@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
+	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/diagnostics"
-	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/logging"
 )
 
@@ -85,7 +85,7 @@ func readEmail(input io.Reader) (string, error) {
 		return "", err
 	}
 	email := strings.ToLower(strings.TrimSpace(string(value)))
-	if len(value) > 320 || !dsr.ValidEmail(email) {
+	if len(value) > 320 || !contracts.ValidEmail(email) {
 		return "", errors.New("stdin must contain one recipient email")
 	}
 	return email, nil

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
-	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/google/uuid"
@@ -137,8 +137,8 @@ func TestPostgresEraseWaitsForClaimedProviderCall(t *testing.T) {
 
 	eraseDone := make(chan error, 1)
 	go func() {
-		_, err := dsr.New(db, map[string][]byte{"v1": key}).Apply(context.Background(), dsr.ActionRequest{
-			RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "erase-race",
+		_, err := accountcleanup.New(db, map[string][]byte{"v1": key}).CleanupAccount(context.Background(), accountcleanup.AccountCleanupRequest{
+			UserID: uuid.NewString(), Email: email, IdempotencyKey: "erase-race",
 		})
 		eraseDone <- err
 	}()
@@ -206,8 +206,8 @@ func TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable(t *testing.T) {
 	defer cancelErase()
 	eraseDone := make(chan error, 1)
 	go func() {
-		_, err := dsr.New(db, map[string][]byte{"v1": key}).Apply(eraseCtx, dsr.ActionRequest{
-			RequestID: uuid.NewString(), UserID: uuid.NewString(), Email: email, Action: "erase", IdempotencyKey: "erase-rollback",
+		_, err := accountcleanup.New(db, map[string][]byte{"v1": key}).CleanupAccount(eraseCtx, accountcleanup.AccountCleanupRequest{
+			UserID: uuid.NewString(), Email: email, IdempotencyKey: "erase-rollback",
 		})
 		eraseDone <- err
 	}()

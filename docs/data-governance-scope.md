@@ -4,8 +4,8 @@ This inventory describes existing metadata and behavior only. It exports no data
 
 ## Deterministic Account attribution
 
-- The private DSR routes accept only the exact `account-api` caller. That trust boundary supplies the verified canonical email used for lookup; `notification-api` lowercases, trims and validates email syntax, but syntax validation alone does not verify an Account identity.
-- Trusted Account and Engagement senders may supply `subjectAccountId`. Notification canonicalizes the UUID and stores only `subject_hash_key_id + subject_hash`, computed across its own HMAC key ring; this makes new Email and Web Push rows deterministic without storing the Account ID. DSR cleanup also normalizes current Email and calculates legacy target hashes across retained keys. Delivery and outbox rows inherit attribution through enforced foreign-key joins.
+- The private account-cleanup route accepts only the exact `account-api` caller. That trust boundary supplies the verified canonical email used for lookup; `notification-api` lowercases, trims and validates email syntax, but syntax validation alone does not verify an Account identity.
+- Trusted Account and Engagement senders may supply `subjectAccountId`. Notification canonicalizes the UUID and stores only `subject_hash_key_id + subject_hash`, computed across its own HMAC key ring; this makes new Email and Web Push rows deterministic without storing the Account ID. Account cleanup also normalizes current Email and calculates legacy target hashes across retained keys. Delivery and outbox rows inherit attribution through enforced foreign-key joins.
 - `request_hash`, `target_hash`, `bucket_key`, ciphertext and provider identifiers are pseudonymous or personal data, not anonymous data. Generic `resource_type` and `resource_id` values remain manual scope until a tested Account predicate exists; they are not deterministic joins today.
 
 ## Explicit manual and excluded boundaries
@@ -31,16 +31,16 @@ This inventory describes existing metadata and behavior only. It exports no data
 
 These boundaries are characterized by `TestRunOnceUsesRequiredRetentionWindowsAndBoundedBatch`, `TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata`, `TestRetentionPreservesRecentAndNonterminalPayloadsOnRepeat`, and `TestPostgresRetentionIsSafeAcrossReplicas`.
 
-## Existing request-triggered DSR behavior
+## Account cleanup behavior
 
-DSR is separate from age-based retention and is not encoded as an unsupported duration or expiry rule. The private Account caller supplies request/user identifiers and a verified canonical email. DSR userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash. Unattributed historical rows are not inferred from payload or generic resource text and are surfaced as `legacy_unattributed_notifications`. Erasure waits for claimed provider calls, clears target and payload ciphertext plus direct subject hashes, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent deterministic lookup return no rows. Restrict-processing reports `not_applicable` without mutation.
+Account cleanup is separate from age-based retention. The private Account caller supplies the user identifier, idempotency key and verified canonical email. Cleanup userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash. Unattributed historical rows are not inferred from payload or generic resource text and are surfaced as `legacy_unattributed_notifications`. Erasure waits for claimed provider calls, clears target and payload ciphertext plus direct subject hashes, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent deterministic lookup return no rows. Legacy DSR export and action routes are retired. DSR notification templates remain available for durable deliveries until the separate reviewed data cleanup.
 
 Completed Account cleanup also retains a bounded idempotency tombstone: the caller key, a domain-separated SHA-256 reference to the canonical Account UUID, result counts/status/reason codes, and timestamps. It retains neither the UUID nor email. This prevents a completed destructive operation from being replayed for another subject or the deleted account from being silently recreated; its retention period remains `pending_legal` and no unsupported cleanup is claimed.
 
 Behavioral references:
 
-- `internal/dsr/service_test.go`: `TestExportFindsMessagesAcrossRetainedHashKeys`, `TestExportReturnsMetadataWithoutCiphertextOrProviderIdentifiers`, `TestEraseTombstonesAttributedPayloadAndBreaksEmailLookup`, `TestRestrictProcessingReturnsNotApplicableWithoutMutation`.
-- `internal/integration/postgres_test.go`: `TestPostgresDSRExportAndEraseAcrossHashRotation`.
+- `internal/accountcleanup/service_test.go`: `TestAccountCleanupTombstonesWithoutDSRRequest`, `TestAccountCleanupUsesSubjectAttributionAcrossKeysAndChannels`, `TestEraseDoesNotUseEmailAgainstExplicitOtherSubject`.
+- `internal/integration/postgres_test.go`: `TestPostgresAccountCleanupAcrossHashRotation`.
 - `internal/worker/worker_integration_test.go`: `TestPostgresEraseWaitsForClaimedProviderCall`, `TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable`.
 
 ## Encrypted writer shapes

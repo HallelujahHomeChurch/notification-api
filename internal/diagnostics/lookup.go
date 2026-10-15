@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
-	"github.com/HallelujahHomeChurch/notification-api/internal/dsr"
 )
 
 const lookupQuery = `
@@ -61,7 +61,7 @@ type Record struct {
 
 // Lookup reads a bounded delivery timeline without returning recipient or payload data.
 func Lookup(ctx context.Context, db *sql.DB, hashKeys map[string][]byte, email string, from, to time.Time) ([]Record, error) {
-	if !dsr.ValidEmail(email) || len(hashKeys) == 0 || from.IsZero() || to.IsZero() || !from.Before(to) || to.Sub(from) > 31*24*time.Hour {
+	if !contracts.ValidEmail(email) || len(hashKeys) == 0 || from.IsZero() || to.IsZero() || !from.Before(to) || to.Sub(from) > 31*24*time.Hour {
 		return nil, errors.New("email, hash keys, and a time range up to 31 days are required")
 	}
 	if db == nil {
