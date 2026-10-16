@@ -59,6 +59,7 @@ type CreateParams struct {
 	Provider          string
 	RateLimits        []RateLimit
 	ExpiresAfter      time.Duration
+	ExpiresAt         *time.Time
 }
 
 type CreateResult struct {
@@ -276,14 +277,14 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 				subject_hash, subject_hash_key_id, expires_at, status
 			) VALUES (
 				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-				clock_timestamp()+($20::bigint*interval '1 microsecond'),'queued'
+				LEAST(clock_timestamp()+($20::bigint*interval '1 microsecond'),$21::timestamptz),'queued'
 			)`,
 		params.MessageID, params.Caller, params.IdempotencyKey, params.RequestHash,
 		params.TemplateID, params.TemplateVersion, params.Channel, params.TargetType,
 		params.TargetHash, params.TargetCiphertext, params.PayloadCiphertext,
 		params.ResourceType, params.ResourceID, eligibilityCampaignID(params.EligibilityRef), eligibilityRecipientID(params.EligibilityRef), params.EncryptionKeyID, params.HashKeyID,
 		nullString(params.SubjectHash), nullString(params.SubjectHashKeyID),
-		params.ExpiresAfter.Microseconds(),
+		params.ExpiresAfter.Microseconds(), params.ExpiresAt,
 	); err != nil {
 		if isUniqueViolation(err) {
 			_ = tx.Rollback()

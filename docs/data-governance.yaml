@@ -17,14 +17,15 @@ datasets:
       - {"name":"target_ciphertext.web_push.keys.auth","purpose":"Encrypt the Web Push authentication key material.","necessity":"optional","data_classes":["security"]}
       - {"name":"payload_ciphertext","purpose":"Encrypt locale and validated template fields at rest; ciphertext remains pseudonymous personal data.","necessity":"required","data_classes":["security","content","activity"]}
       - {"name":"payload_ciphertext.locale","purpose":"Select localized rendering within the encrypted payload envelope.","necessity":"required","data_classes":["activity"]}
-      - {"name":"payload_ciphertext.fields.verifyUrl","purpose":"Carry the Account email-verification URL.","necessity":"optional","data_classes":["security","content"]}
+      - {"name":"payload_ciphertext.fields.verifyUrl","purpose":"Carry the Account email-verification URL, including the secret-bearing email-correction verification fragment.","necessity":"optional","data_classes":["security","content"]}
+      - {"name":"payload_ciphertext.fields.reviewUrl","purpose":"Carry the authenticated admin detail URL for an email-correction request; opening it never approves the request.","necessity":"optional","data_classes":["content","activity"]}
       - {"name":"payload_ciphertext.fields.resetUrl","purpose":"Carry the Account password-reset URL.","necessity":"optional","data_classes":["security","content"]}
       - {"name":"payload_ciphertext.fields.confirmUrl","purpose":"Carry the OAuth link-confirmation URL.","necessity":"optional","data_classes":["security","content"]}
       - {"name":"payload_ciphertext.fields.provider","purpose":"Identify the OAuth provider used by link confirmation or onboarding.","necessity":"optional","data_classes":["activity"]}
       - {"name":"payload_ciphertext.fields.code","purpose":"Carry the OAuth onboarding one-time code.","necessity":"optional","data_classes":["security"]}
       - {"name":"payload_ciphertext.fields.subject","purpose":"Carry caller-supplied newsletter subject content.","necessity":"optional","data_classes":["content"]}
       - {"name":"payload_ciphertext.fields.body","purpose":"Carry caller-supplied newsletter or Web Push body content.","necessity":"optional","data_classes":["content"]}
-      - {"name":"payload_ciphertext.fields.actionUrl","purpose":"Carry an optional newsletter or Web Push action URL.","necessity":"optional","data_classes":["content"]}
+      - {"name":"payload_ciphertext.fields.actionUrl","purpose":"Carry a newsletter or Web Push action URL, or the fixed Account security/login landing URL for email-correction notices.","necessity":"optional","data_classes":["content"]}
       - {"name":"payload_ciphertext.fields.unsubscribeUrl","purpose":"Carry the newsletter unsubscribe URL.","necessity":"optional","data_classes":["security","content"]}
       - {"name":"payload_ciphertext.fields.oneClickUnsubscribeUrl","purpose":"Carry the one-click newsletter unsubscribe URL.","necessity":"optional","data_classes":["security","content"]}
       - {"name":"payload_ciphertext.fields.title","purpose":"Carry the Web Push title.","necessity":"optional","data_classes":["content"]}

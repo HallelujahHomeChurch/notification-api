@@ -47,5 +47,5 @@ Behavioral references:
 
 - Email target plaintext is the normalized canonical address.
 - Web Push target plaintext is normalized JSON with exactly `endpoint`, `keys.p256dh`, and `keys.auth`.
-- Encrypted payload plaintext contains `locale` separately from `fields`. Current registry fields are: Account verification `verifyUrl`; password reset `resetUrl`; OAuth link confirmation `confirmUrl` and `provider`; OAuth onboarding `code` and `provider`; newsletter `subject`, `body`, `actionUrl`, `unsubscribeUrl`, and `oneClickUnsubscribeUrl`; Web Push `title`, `body`, `clickBehavior`, and `actionUrl`.
+- Encrypted payload plaintext contains `locale` separately from `fields`. Current registry fields are: Account verification `verifyUrl` (including email-correction token fragments); email-correction admin review `reviewUrl` and security/completion notices `actionUrl`; password reset `resetUrl`; OAuth link confirmation `confirmUrl` and `provider`; OAuth onboarding `code` and `provider`; newsletter `subject`, `body`, `actionUrl`, `unsubscribeUrl`, and `oneClickUnsubscribeUrl`; Web Push `title`, `body`, `clickBehavior`, and `actionUrl`.
 - `template_id`, `template_version`, `channel`, `target_type`, `resource_type`, and `resource_id` are retained message metadata, not encrypted payload fields.
