@@ -189,7 +189,7 @@ The read-only repeatable-read snapshot requires every requested ID to match
 `account-api` and the six exact Account DSR templates. It exports bounded
 metadata for messages, linked deliveries/outbox, observed delivery fences, and
 schema columns/FKs/triggers; other DSR messages are `unknownNotApproved`.
-It never prints recipients, payloads, provider IDs, or errors. Unknown FK shape,
+The metadata mode never prints recipients, payloads, provider IDs, or errors. Unknown FK shape,
 missing IDs, query failure, or bounds prevent completed output. Fence status is
 an observation, not a lock or approval to delete.
 
@@ -198,3 +198,54 @@ SHA-256 of the exact JSON line), and `DSR_INVENTORY_V1_COMPLETE`. Capture stdout
 in a restricted local file and verify the whole frame/hash before using it.
 The caps are 2 minutes, 10,000 total rows, and 4 MiB JSON. Remove this temporary
 command, tests, and Docker binary after A5 acceptance.
+
+### Temporary A5 protected backup and exact retirement
+
+Two explicit operator modes extend that command:
+
+```text
+/app/dsr-inventory --backup <base64-manifest>
+/app/dsr-inventory --retire <base64-manifest>
+```
+
+The bounded manifest is standard base64 of one JSON object with exactly these
+collections and fields: `messages: [{id, xmin}]`,
+`deliveries: [{id, messageId, xmin}]`, `outbox: [{id, deliveryId, xmin}]`.
+Every collection must contain the three exact A4-reviewed IDs and links compiled
+into this temporary command. Only canonical positive decimal PostgreSQL xmin
+values may vary. Unknown/duplicate JSON fields, duplicate IDs, expanded scope,
+changed links, invalid versions, extra arguments or more than 4 KiB decoded
+manifest fail before connecting. The command sorts collections by ID; its
+`manifestSHA256` hashes compact Go JSON encoding of that normalized manifest.
+
+`--backup` remains a read-only repeatable-read transaction, takes no fence locks,
+and refuses held delivery fences or drift. It returns **protected raw database
+rows**, including stored ciphertext and provider fields, without decryption.
+The separate `DSR_BACKUP_V1_BEGIN` / `DSR_BACKUP_V1_COMPLETE` frame and
+`protectedBackup: true` distinguish it from metadata output. Root must capture
+stdout directly into a 0600 file on the existing FileVault-protected filesystem;
+never display or publish the backup. Each `contentSHA256` hashes Go
+`json.Marshal([]json.RawMessage)` of the full rows ordered by ID. Restore only
+into an isolated matching schema, reselect `row_to_json` in UTC ordered by ID,
+and compare these hashes. xmin is system metadata in the manifest and is not
+part of restorable row content. Verify the complete protected backup and this
+isolated restore before any live retirement.
+
+`--retire` takes nonblocking transaction advisory delivery fences in sorted ID
+order, then the ordinary DELETE table lock mode and parent-first sorted row
+locks. Ordinary DML remains compatible with the table lock; new children of
+locked rows and concurrent DDL are blocked. Fresh guarded reads require the
+exact sent/sent/published rows, null leases, fixed ID/version/link sets, no other
+DSR messages, known foreign keys, the reviewed column hash, and no user triggers,
+rewrite rules, RLS or partitioning. It deletes only exact ID+xmin matches in
+outbox → deliveries → messages order, checks each RETURNING set, and commits
+one transaction. Any database guard/delete failure rolls back all three tables.
+No ordinary cleanup, queue operation, provider call, or decryption is invoked.
+
+Only a postcommit metadata receipt uses the separate
+`DSR_RETIREMENT_V1_BEGIN` / `DSR_RETIREMENT_V1_COMPLETE` frame. A missing receipt
+or connection/output failure can leave commit outcome uncertain: reconcile the
+exact rows through a fresh metadata observation before deciding the next step.
+Never infer rollback from a lost receipt. TLS, target, execution/output bounds
+and the original UUID-only read-only inventory remain in force. Remove all
+these temporary modes with the A4 command after A5 acceptance.

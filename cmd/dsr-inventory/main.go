@@ -1,4 +1,4 @@
-// Temporary A4 owner-local metadata inventory; remove after A5 acceptance.
+// Temporary A4 inventory and explicitly gated A5 owner operations; remove after A5.
 package main
 
 import (
@@ -68,9 +68,26 @@ func databaseConfig(dsn string) (*pgx.ConnConfig, error) {
 }
 
 func execute(ctx context.Context, args []string, out io.Writer) error {
-	ids, err := parseIDs(args)
-	if err != nil {
-		return err
+	mode := ""
+	var manifest retirementManifest
+	if len(args) > 0 && (args[0] == "--backup" || args[0] == "--retire") {
+		if len(args) != 2 {
+			return errors.New("operation requires one bounded manifest")
+		}
+		var err error
+		mode = args[0]
+		manifest, err = parseManifest(args[1])
+		if err != nil {
+			return err
+		}
+	}
+	var ids []string
+	var err error
+	if mode == "" {
+		ids, err = parseIDs(args)
+		if err != nil {
+			return err
+		}
 	}
 	cfg, err := databaseConfig(os.Getenv("DATABASE_URL"))
 	if err != nil {
@@ -81,18 +98,31 @@ func execute(ctx context.Context, args []string, out io.Writer) error {
 	db := stdlib.OpenDB(*cfg)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	data, err := inventory(ctx, db, databaseName, ids)
+	var data []byte
+	if mode == "" {
+		data, err = inventory(ctx, db, databaseName, ids)
+	} else {
+		data, err = operate(ctx, db, databaseName, mode, manifest)
+	}
 	if err != nil {
 		return err
+	}
+	if mode == "--backup" {
+		return writeOperationFrame(out, data, "BACKUP")
+	}
+	if mode == "--retire" {
+		return writeOperationFrame(out, data, "RETIREMENT")
 	}
 	return writeFrame(out, data)
 }
 
-func writeFrame(out io.Writer, data []byte) error {
+func writeFrame(out io.Writer, data []byte) error { return writeOperationFrame(out, data, "INVENTORY") }
+
+func writeOperationFrame(out io.Writer, data []byte, kind string) error {
 	if len(data) > maxBytes || !json.Valid(data) {
 		return errors.New("inventory encoding or bound failure")
 	}
-	_, err := fmt.Fprintf(out, "DSR_INVENTORY_V1_BEGIN\n%s\nSHA256 %x\nDSR_INVENTORY_V1_COMPLETE\n", data, sha256.Sum256(data))
+	_, err := fmt.Fprintf(out, "DSR_%s_V1_BEGIN\n%s\nSHA256 %x\nDSR_%s_V1_COMPLETE\n", kind, data, sha256.Sum256(data), kind)
 	return err
 }
 
@@ -115,13 +145,20 @@ func beginSnapshot(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
 	if err != nil {
 		return nil, errors.New("snapshot unavailable")
 	}
-	for _, statement := range []string{`SET LOCAL statement_timeout='15s'`, `SET LOCAL lock_timeout='2s'`, `SET LOCAL idle_in_transaction_session_timeout='30s'`, `SET LOCAL TIME ZONE 'UTC'`, `SET LOCAL search_path=pg_catalog,public`} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			_ = tx.Rollback()
-			return nil, errors.New("snapshot limits unavailable")
-		}
+	if err := setTransactionLimits(ctx, tx); err != nil {
+		_ = tx.Rollback()
+		return nil, err
 	}
 	return tx, nil
+}
+
+func setTransactionLimits(ctx context.Context, tx *sql.Tx) error {
+	for _, statement := range []string{`SET LOCAL statement_timeout='15s'`, `SET LOCAL lock_timeout='2s'`, `SET LOCAL idle_in_transaction_session_timeout='30s'`, `SET LOCAL TIME ZONE 'UTC'`, `SET LOCAL search_path=pg_catalog,public`} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return errors.New("snapshot limits unavailable")
+		}
+	}
+	return nil
 }
 
 const allowedTemplates = `('account.dsr-received','account.dsr-information-required','account.dsr-completed','account.dsr-action-required','account.dsr-rejected','account.dsr-extended')`
