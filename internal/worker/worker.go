@@ -408,7 +408,7 @@ func (s postgresStore) claimFenced(
 	}
 	if !locked {
 		_ = conn.Close()
-		return claimResult{}, nil, errors.New("delivery DSR fence held")
+		return claimResult{}, nil, errors.New("delivery fence held")
 	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
