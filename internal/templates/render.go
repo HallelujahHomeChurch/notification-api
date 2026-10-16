@@ -63,8 +63,6 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 	}
 
 	switch {
-	case strings.HasPrefix(canonical.ID, "account.dsr-"):
-		return renderDSREmail(canonical.ID, locale, to, validated), nil
 	case canonical.ID == "account.verify-email" && canonical.Version == 1:
 		return renderVerificationEmailV1(locale, to, validated["verifyUrl"]), nil
 	case canonical.ID == "account.verify-email" && canonical.Version == 2:

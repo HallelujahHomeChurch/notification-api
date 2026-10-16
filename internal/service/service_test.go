@@ -452,3 +452,21 @@ func validWebPushRequest() contracts.SendRequest {
 		Resource: contracts.Resource{Type: "campaign", ID: "campaign-1"},
 	}
 }
+
+func TestSendRejectsRetiredDSRTemplatesBeforePersistence(t *testing.T) {
+	for _, templateID := range []string{"account.dsr-received", "account.dsr-information-required", "account.dsr-completed", "account.dsr-action-required", "account.dsr-rejected", "account.dsr-extended"} {
+		t.Run(templateID, func(t *testing.T) {
+			repository := &memoryRepository{}
+			svc := New(repository, Config{DataEncryptionKey: testEncryptionKey, HashKey: testHashKey})
+			request := validRequest()
+			request.TemplateID = templateID
+			request.Payload = map[string]string{"requestUrl": "https://account.alive.org.tw/data-requests", "requestId": "0199bb0e-10a0-7e07-b25e-221d331b6d13", "requestType": "access_export"}
+			if _, err := svc.Send(context.Background(), "account-api", templateID, request); !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("Send() error = %v, want ErrInvalidRequest", err)
+			}
+			if len(repository.creates) != 0 {
+				t.Fatal("retired template reached persistence")
+			}
+		})
+	}
+}

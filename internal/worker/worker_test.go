@@ -602,3 +602,26 @@ func equalStrings(left, right []string) bool {
 	}
 	return true
 }
+
+func TestRetiredDSRTemplatesNeverReachProvider(t *testing.T) {
+	for _, templateID := range []string{"account.dsr-received", "account.dsr-information-required", "account.dsr-completed", "account.dsr-action-required", "account.dsr-rejected", "account.dsr-extended"} {
+		t.Run(templateID, func(t *testing.T) {
+			repository := deliveryRepository(t, nil, 1)
+			repository.claimResult.Claim.TemplateID = templateID
+			repository.claimResult.Claim.TemplateVersion = 1
+			payload, err := notificationcrypto.Encrypt(testKey, []byte("message-1:payload"), []byte(`{"locale":"zh-Hant","fields":{"requestUrl":"https://account.alive.org.tw/data-requests","requestId":"0199bb0e-10a0-7e07-b25e-221d331b6d13","requestType":"access_export"}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			repository.claimResult.Claim.PayloadCiphertext = payload
+			provider := &fakeProvider{}
+			message := &fakeMessage{id: "delivery-1"}
+			if err := newWorker(repository, provider, testKey).Process(context.Background(), message); err != nil {
+				t.Fatal(err)
+			}
+			if provider.calls != 0 || message.deadLettered != 1 {
+				t.Fatalf("provider calls=%d dead-letter=%d", provider.calls, message.deadLettered)
+			}
+		})
+	}
+}
