@@ -254,6 +254,19 @@ components:
           type: string
           description: >-
             Registered template identifier allowed for the authenticated caller.
+            Account-only email-correction v1 templates: account.email-correction-verify
+            (verifyUrl, mandatory expiresAt, 30-minute delivery TTL),
+            account.email-correction-security-notice (actionUrl),
+            account.email-correction-admin-review (reviewUrl), and
+            account.email-correction-completed (actionUrl). Notices have a 24-hour delivery TTL.
+            Each requires a canonical nonzero applicant subjectAccountId and resource
+            type email_correction with a canonical nonzero request UUID.
+            Only the named URL field is accepted. Verification uses
+            https://account.alive.org.tw/data-requests/verify-email#token=BASE64URL_TOKEN;
+            review uses https://admin.alive.org.tw/data-requests/{resource.id};
+            security and completion use https://account.alive.org.tw/security and
+            https://account.alive.org.tw/login respectively. No query strings or
+            other fragments are accepted. Existing HTTP loopback origins remain available for local tests.
           examples: [account.verify-email]
         channel:
           type: string
@@ -264,7 +277,7 @@ components:
             - $ref: '#/components/schemas/WebPushTarget'
         locale:
           type: string
-          description: Current v2 templates support zh-Hant, zh-Hans, and en. Unsupported or omitted locales fall back to en.
+          description: Current v2 templates support zh-Hant, zh-Hans, and en; email-correction v1 also supports ja and ko. Unsupported or omitted locales fall back to en.
         payload:
           type: object
           description: Template-specific string fields validated by notification-api.
@@ -272,10 +285,20 @@ components:
             type: string
         resource:
           $ref: '#/components/schemas/Resource'
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            Optional original absolute delivery deadline, normalized to UTC for idempotency.
+            Stored expiry is the earlier of this value and database-now plus template TTL.
+            Mandatory and nonzero for account.email-correction-verify. Omission preserves
+            existing request hashes and TTL behavior. Accepted idempotent replays remain
+            valid after expiry; a new expired intent is queued then settled as expired
+            without provider delivery. Expiry never extends on dispatch or retry.
         subjectAccountId:
           type: string
           format: uuid
-          description: Optional Account subject attribution. Only account-api and engagement-api may set it; notification-api stores only an HMAC and key ID.
+          description: Optional Account subject attribution. Required for email-correction templates and always identifies the applicant, including admin-review messages sent to a different administrator. Only account-api and engagement-api may set it; notification-api stores only an HMAC and key ID.
     EmailTarget:
       type: object
       additionalProperties: false

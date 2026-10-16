@@ -1,5 +1,7 @@
 package contracts
 
+import "time"
+
 type MessageStatus string
 
 const (
@@ -23,6 +25,7 @@ const (
 )
 
 type SendRequest struct {
+	ExpiresAt        *time.Time        `json:"expiresAt,omitempty"`
 	TemplateID       string            `json:"templateId"`
 	Channel          string            `json:"channel"`
 	Target           Target            `json:"target"`

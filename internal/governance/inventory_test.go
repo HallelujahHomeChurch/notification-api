@@ -89,6 +89,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"target_ciphertext.web_push.keys.auth",
 		"payload_ciphertext.locale",
 		"payload_ciphertext.fields.verifyUrl",
+		"payload_ciphertext.fields.reviewUrl",
 		"payload_ciphertext.fields.resetUrl",
 		"payload_ciphertext.fields.confirmUrl",
 		"payload_ciphertext.fields.provider",

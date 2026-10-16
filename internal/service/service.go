@@ -118,7 +118,7 @@ func (s *Service) Send(
 	}
 	if request.SubjectAccountID != "" {
 		subjectID, err := uuid.Parse(request.SubjectAccountID)
-		if (caller != "account-api" && caller != "engagement-api") || err != nil {
+		if (caller != "account-api" && caller != "engagement-api") || err != nil || (strings.HasPrefix(request.TemplateID, "account.email-correction-") && request.SubjectAccountID != subjectID.String()) {
 			return Result{}, ErrInvalidRequest
 		}
 		request.SubjectAccountID = subjectID.String()
@@ -136,6 +136,10 @@ func (s *Service) Send(
 	}
 	request.Payload = validatedPayload
 
+	if request.ExpiresAt != nil {
+		deadline := request.ExpiresAt.UTC()
+		request.ExpiresAt = &deadline
+	}
 	canonical, err := canonicalRequest(request, definition.Version)
 	if err != nil {
 		return Result{}, fmt.Errorf("canonicalize notification request: %w", err)
@@ -211,6 +215,7 @@ func (s *Service) Send(
 		Provider:          provider,
 		RateLimits:        s.config.RateLimits,
 		ExpiresAfter:      definition.TTL,
+		ExpiresAt:         request.ExpiresAt,
 	})
 	if errors.Is(err, store.ErrSubjectErased) {
 		return Result{}, ErrInvalidRequest
@@ -261,6 +266,7 @@ func canonicalRequest(request contracts.SendRequest, templateVersion int) ([]byt
 		Resource         contracts.Resource        `json:"resource"`
 		EligibilityRef   *contracts.EligibilityRef `json:"eligibilityRef,omitempty"`
 		SubjectAccountID string                    `json:"subjectAccountId,omitempty"`
+		ExpiresAt        *time.Time                `json:"expiresAt,omitempty"`
 	}{
 		TemplateID:       request.TemplateID,
 		TemplateVersion:  templateVersion,
@@ -271,6 +277,7 @@ func canonicalRequest(request contracts.SendRequest, templateVersion int) ([]byt
 		Resource:         request.Resource,
 		EligibilityRef:   request.EligibilityRef,
 		SubjectAccountID: request.SubjectAccountID,
+		ExpiresAt:        request.ExpiresAt,
 	})
 }
 

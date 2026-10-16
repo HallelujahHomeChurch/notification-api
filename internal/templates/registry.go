@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/google/uuid"
 )
 
 var (
@@ -29,6 +30,14 @@ type Definition struct {
 }
 
 var definitions = map[string]map[int]Definition{
+	"account.email-correction-verify": {1: {ID: "account.email-correction-verify", Version: 1, Channel: "email", AllowedCallers: set("account-api"), RequiredFields: set("verifyUrl"), AllowedFields: set("verifyUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 30 * time.Minute}},
+
+	"account.email-correction-security-notice": {1: {ID: "account.email-correction-security-notice", Version: 1, Channel: "email", AllowedCallers: set("account-api"), RequiredFields: set("actionUrl"), AllowedFields: set("actionUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
+
+	"account.email-correction-admin-review": {1: {ID: "account.email-correction-admin-review", Version: 1, Channel: "email", AllowedCallers: set("account-api"), RequiredFields: set("reviewUrl"), AllowedFields: set("reviewUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
+
+	"account.email-correction-completed": {1: {ID: "account.email-correction-completed", Version: 1, Channel: "email", AllowedCallers: set("account-api"), RequiredFields: set("actionUrl"), AllowedFields: set("actionUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
+
 	"account.verify-email": {
 		1: {
 			ID:              "account.verify-email",
@@ -224,6 +233,11 @@ var definitions = map[string]map[int]Definition{
 }
 
 var currentVersions = map[string]int{
+	"account.email-correction-verify":          1,
+	"account.email-correction-security-notice": 1,
+	"account.email-correction-admin-review":    1,
+	"account.email-correction-completed":       1,
+
 	"account.verify-email":            2,
 	"account.reset-password":          2,
 	"account.oauth-link-confirmation": 2,
@@ -265,6 +279,20 @@ func Validate(definition Definition, caller string, request contracts.SendReques
 	}
 	if !canonical.AllowedCallers[caller] {
 		return nil, fmt.Errorf("%w: %s", ErrForbiddenCaller, caller)
+	}
+	if strings.HasPrefix(canonical.ID, "account.email-correction-") {
+		if !canonicalNonzeroUUID(request.SubjectAccountID) || request.Resource.Type != "email_correction" || !canonicalNonzeroUUID(request.Resource.ID) {
+			return nil, fmt.Errorf("%w: email correction requires applicant subject and request UUID", ErrInvalidPayload)
+		}
+		if canonical.ID == "account.email-correction-verify" && (request.ExpiresAt == nil || request.ExpiresAt.IsZero()) {
+			return nil, fmt.Errorf("%w: verification expiresAt is required", ErrInvalidPayload)
+		}
+		if canonical.ID == "account.email-correction-admin-review" {
+			parsed, err := url.Parse(request.Payload["reviewUrl"])
+			if err != nil || parsed.Path != "/data-requests/"+request.Resource.ID {
+				return nil, fmt.Errorf("%w: review URL must identify the correction request", ErrInvalidPayload)
+			}
+		}
 	}
 	return validatePayload(canonical, request.Payload)
 }
@@ -317,6 +345,9 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 		if (parsed.Scheme != "https" || !isHHC) && (parsed.Scheme != "http" || !isLocal) {
 			return nil, fmt.Errorf("%w: %s must use an approved origin", ErrInvalidPayload, key)
 		}
+		if strings.HasPrefix(definition.ID, "account.email-correction-") && (value != parsed.String() || !validEmailCorrectionURL(definition.ID, parsed, isLocal)) {
+			return nil, fmt.Errorf("%w: invalid email correction URL", ErrInvalidPayload)
+		}
 		validated[key] = parsed.String()
 	}
 	for key := range definition.RequiredFields {
@@ -361,4 +392,35 @@ func cloneSet(source map[string]bool) map[string]bool {
 		clone[value] = present
 	}
 	return clone
+}
+
+func canonicalNonzeroUUID(value string) bool {
+	id, err := uuid.Parse(value)
+	return err == nil && id != uuid.Nil && id.String() == value
+}
+
+func validEmailCorrectionURL(templateID string, parsed *url.URL, isLocal bool) bool {
+	host := "account.alive.org.tw"
+	if templateID == "account.email-correction-admin-review" {
+		host = "admin.alive.org.tw"
+	}
+	if !(parsed.Scheme == "https" && parsed.Host == host) && !(parsed.Scheme == "http" && isLocal) {
+		return false
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.RawPath != "" {
+		return false
+	}
+	switch templateID {
+	case "account.email-correction-verify":
+		token, ok := strings.CutPrefix(parsed.Fragment, "token=")
+		return parsed.Path == "/data-requests/verify-email" && ok && token != "" && parsed.RawFragment == "" && strings.Trim(token, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_") == ""
+	case "account.email-correction-admin-review":
+		id, ok := strings.CutPrefix(parsed.Path, "/data-requests/")
+		return ok && canonicalNonzeroUUID(id) && parsed.Fragment == ""
+	case "account.email-correction-security-notice":
+		return parsed.Path == "/security" && parsed.Fragment == ""
+	case "account.email-correction-completed":
+		return parsed.Path == "/login" && parsed.Fragment == ""
+	}
+	return false
 }
