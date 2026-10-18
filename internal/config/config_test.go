@@ -502,3 +502,46 @@ func TestSMTPBudgetConfigurationValidation(t *testing.T) {
 		t.Fatal("reserve consuming the whole quota accepted")
 	}
 }
+
+func TestInboxEnableRequiresBothVisibilityOwners(t *testing.T) {
+	t.Setenv("NOTIFICATION_INBOX_ENABLED", "true")
+	t.Setenv("NOTIFICATION_INBOX_OPERATIONS_VISIBILITY_URL", "")
+	t.Setenv("NOTIFICATION_INBOX_WEBSITE_VISIBILITY_URL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Isolate API settings validation from the existing queue/encryption requirements.
+	cfg.DatabaseURL = "postgres://test"
+	cfg.DataEncryptionKey = make([]byte, 32)
+	cfg.HashKey = make([]byte, 32)
+	cfg.AllowedCallers = []string{"account-api"}
+	cfg.ServiceBusNamespace = "test"
+	if err = cfg.Validate("api"); err == nil {
+		t.Fatal("enabled inbox accepted missing owner contracts")
+	}
+}
+
+func TestInboxConfiguredOwnersValidateWithoutAdditionalSecret(t *testing.T) {
+	t.Setenv("NOTIFICATION_INBOX_ENABLED", "true")
+	t.Setenv("NOTIFICATION_INBOX_OPERATIONS_VISIBILITY_URL", "http://127.0.0.1:3500/v1.0/invoke/operations-api/method/priv/operations/inbox-visibility")
+	t.Setenv("NOTIFICATION_INBOX_WEBSITE_VISIBILITY_URL", "http://127.0.0.1:3500/v1.0/invoke/hhc-web-api/method/priv/website/inbox-visibility")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.DatabaseURL = "postgres://test"
+	cfg.DataEncryptionKey = make([]byte, 32)
+	cfg.HashKey = make([]byte, 32)
+	cfg.AllowedCallers = []string{"account-api"}
+	cfg.ServiceBusNamespace = "test"
+	if err = cfg.Validate("api"); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"https://owner/incorrect", "http://user:password@owner/priv/website/inbox-visibility", "http://owner/priv/website/inbox-visibility?actor=other"} {
+		cfg.InboxWebsiteVisibilityURL = endpoint
+		if cfg.Validate("api") == nil {
+			t.Fatalf("invalid owner URL accepted: %s", endpoint)
+		}
+	}
+}

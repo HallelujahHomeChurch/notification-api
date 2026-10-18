@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,42 +23,50 @@ const (
 )
 
 type Config struct {
-	Environment                string
-	Port                       string
-	DatabaseURL                string
-	DBMaxOpenConns             int
-	DBMaxIdleConns             int
-	DBConnMaxLifetime          time.Duration
-	AllowedCallers             []string
-	AllowDevCallerHeader       bool
-	ActiveEncryptionKeyID      string
-	EncryptionKeys             map[string][]byte
-	DataEncryptionKey          []byte
-	ActiveHashKeyID            string
-	HashKeys                   map[string][]byte
-	HashKey                    []byte
-	QueueDriver                string
-	ServiceBusNamespace        string
-	ServiceBusQueueName        string
-	ServiceBusConnectionString string
-	SMTPEmailsPerMinute        int
-	SMTPEmailsPerHour          int
-	SMTPReservePerMinute       int
-	SMTPReservePerHour         int
-	SMTPAddr                   string
-	SMTPUsername               string
-	SMTPPassword               string
-	SMTPFrom                   string
-	SMTPFromName               string
-	VAPIDPublicKey             string
-	VAPIDPrivateKey            string
-	VAPIDSubject               string
-	NotificationsDisabled      bool
-	TemplateDailyLimit         int
-	ShutdownTimeout            time.Duration
+	InboxEnabled                 bool
+	InboxOperationsVisibilityURL string
+	InboxWebsiteVisibilityURL    string
+	DaprAPIToken                 string
+	Environment                  string
+	Port                         string
+	DatabaseURL                  string
+	DBMaxOpenConns               int
+	DBMaxIdleConns               int
+	DBConnMaxLifetime            time.Duration
+	AllowedCallers               []string
+	AllowDevCallerHeader         bool
+	ActiveEncryptionKeyID        string
+	EncryptionKeys               map[string][]byte
+	DataEncryptionKey            []byte
+	ActiveHashKeyID              string
+	HashKeys                     map[string][]byte
+	HashKey                      []byte
+	QueueDriver                  string
+	ServiceBusNamespace          string
+	ServiceBusQueueName          string
+	ServiceBusConnectionString   string
+	SMTPEmailsPerMinute          int
+	SMTPEmailsPerHour            int
+	SMTPReservePerMinute         int
+	SMTPReservePerHour           int
+	SMTPAddr                     string
+	SMTPUsername                 string
+	SMTPPassword                 string
+	SMTPFrom                     string
+	SMTPFromName                 string
+	VAPIDPublicKey               string
+	VAPIDPrivateKey              string
+	VAPIDSubject                 string
+	NotificationsDisabled        bool
+	TemplateDailyLimit           int
+	ShutdownTimeout              time.Duration
 }
 
 func Load() (Config, error) {
+	inboxEnabled, err := boolEnv("NOTIFICATION_INBOX_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
 	allowDevCallerHeader, err := boolEnv("NOTIFICATION_ALLOW_DEV_CALLER_HEADER", false)
 	if err != nil {
 		return Config{}, err
@@ -133,25 +142,29 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
-		Environment:                env("ENVIRONMENT", EnvironmentDevelopment),
-		Port:                       env("PORT", "8081"),
-		DatabaseURL:                os.Getenv("DATABASE_URL"),
-		DBMaxOpenConns:             dbMaxOpenConns,
-		DBMaxIdleConns:             dbMaxIdleConns,
-		DBConnMaxLifetime:          dbConnMaxLifetime,
-		AllowedCallers:             parseCallers(os.Getenv("NOTIFICATION_ALLOWED_CALLERS")),
-		AllowDevCallerHeader:       allowDevCallerHeader,
-		ActiveEncryptionKeyID:      activeEncryptionKeyID,
-		EncryptionKeys:             encryptionKeys,
-		DataEncryptionKey:          dataEncryptionKey,
-		ActiveHashKeyID:            activeHashKeyID,
-		HashKeys:                   hashKeys,
-		HashKey:                    hashKey,
-		QueueDriver:                env("QUEUE_DRIVER", "servicebus"),
-		ServiceBusNamespace:        os.Getenv("SERVICEBUS_NAMESPACE"),
-		ServiceBusQueueName:        env("SERVICEBUS_QUEUE_NAME", "notifications-email"),
-		ServiceBusConnectionString: os.Getenv("SERVICEBUS_CONNECTION_STRING"),
-		SMTPEmailsPerMinute:        smtpMinute, SMTPEmailsPerHour: smtpHour, SMTPReservePerMinute: smtpReserveMinute, SMTPReservePerHour: smtpReserveHour,
+		InboxEnabled:                 inboxEnabled,
+		InboxOperationsVisibilityURL: os.Getenv("NOTIFICATION_INBOX_OPERATIONS_VISIBILITY_URL"),
+		InboxWebsiteVisibilityURL:    os.Getenv("NOTIFICATION_INBOX_WEBSITE_VISIBILITY_URL"),
+		DaprAPIToken:                 os.Getenv("DAPR_API_TOKEN"),
+		Environment:                  env("ENVIRONMENT", EnvironmentDevelopment),
+		Port:                         env("PORT", "8081"),
+		DatabaseURL:                  os.Getenv("DATABASE_URL"),
+		DBMaxOpenConns:               dbMaxOpenConns,
+		DBMaxIdleConns:               dbMaxIdleConns,
+		DBConnMaxLifetime:            dbConnMaxLifetime,
+		AllowedCallers:               parseCallers(os.Getenv("NOTIFICATION_ALLOWED_CALLERS")),
+		AllowDevCallerHeader:         allowDevCallerHeader,
+		ActiveEncryptionKeyID:        activeEncryptionKeyID,
+		EncryptionKeys:               encryptionKeys,
+		DataEncryptionKey:            dataEncryptionKey,
+		ActiveHashKeyID:              activeHashKeyID,
+		HashKeys:                     hashKeys,
+		HashKey:                      hashKey,
+		QueueDriver:                  env("QUEUE_DRIVER", "servicebus"),
+		ServiceBusNamespace:          os.Getenv("SERVICEBUS_NAMESPACE"),
+		ServiceBusQueueName:          env("SERVICEBUS_QUEUE_NAME", "notifications-email"),
+		ServiceBusConnectionString:   os.Getenv("SERVICEBUS_CONNECTION_STRING"),
+		SMTPEmailsPerMinute:          smtpMinute, SMTPEmailsPerHour: smtpHour, SMTPReservePerMinute: smtpReserveMinute, SMTPReservePerHour: smtpReserveHour,
 		SMTPAddr:              os.Getenv("SMTP_ADDR"),
 		SMTPUsername:          os.Getenv("SMTP_USERNAME"),
 		SMTPPassword:          os.Getenv("SMTP_PASSWORD"),
@@ -197,6 +210,15 @@ func (c Config) Validate(mode string) error {
 	case "migrate":
 		return nil
 	case "api":
+		if c.InboxEnabled {
+			for _, endpoint := range []struct{ value, suffix string }{{c.InboxOperationsVisibilityURL, "/priv/operations/inbox-visibility"}, {c.InboxWebsiteVisibilityURL, "/priv/website/inbox-visibility"}} {
+				u, err := url.Parse(endpoint.value)
+				if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !strings.HasSuffix(u.Path, endpoint.suffix) {
+					return fmt.Errorf("enabled inbox requires configured exact private visibility owner endpoints")
+				}
+			}
+		}
+
 		if err := c.validateEncryptionAndServiceBus(); err != nil {
 			return err
 		}

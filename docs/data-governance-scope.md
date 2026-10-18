@@ -38,7 +38,7 @@ These boundaries are characterized by `TestRunOnceUsesRequiredRetentionWindowsAn
 
 ## Account cleanup behavior
 
-Account cleanup is separate from age-based retention. The private Account caller supplies the user identifier, idempotency key and verified canonical email. Cleanup userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash. Unattributed historical rows are not inferred from payload or generic resource text and are surfaced as `legacy_unattributed_notifications`. Erasure waits for claimed provider calls, clears target and payload ciphertext plus direct subject hashes, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent deterministic lookup return no rows. Legacy DSR export and action routes are retired. Legacy DSR notification templates and temporary inventory tools are retired after the reviewed data cleanup.
+Account cleanup is separate from age-based retention. The private Account caller supplies the user identifier, idempotency key and verified canonical email. For existing Email/Push, Cleanup userId is canonicalized and queried only through retained-key subject HMACs; current email remains a fallback only for rows without subject_hash. Unattributed historical rows are not inferred from payload or generic resource text and are surfaced as `legacy_unattributed_notifications`. Erasure waits for claimed provider calls, clears target and payload ciphertext plus direct subject hashes, replaces `target_hash` with a fixed tombstone, sets `payload_purged_at`, preserves message/delivery receipt metadata, and makes subsequent deterministic lookup return no rows. Legacy DSR export and action routes are retired. Legacy DSR notification templates and temporary inventory tools are retired after the reviewed data cleanup.
 
 Completed Account cleanup also retains a bounded idempotency tombstone: the caller key, a domain-separated SHA-256 reference to the canonical Account UUID, result counts/status/reason codes, and timestamps. It retains neither the UUID nor email. This prevents a completed destructive operation from being replayed for another subject or the deleted account from being silently recreated; its retention period remains `pending_legal` and no unsupported cleanup is claimed.
 
@@ -54,3 +54,22 @@ Behavioral references:
 - Web Push target plaintext is normalized JSON with exactly `endpoint`, `keys.p256dh`, and `keys.auth`.
 - Encrypted payload plaintext contains `locale` separately from `fields`. Current registry fields are: Account verification `verifyUrl` (including email-correction token fragments); email-correction admin review `reviewUrl` and security/completion notices `actionUrl`; password reset `resetUrl`; OAuth link confirmation `confirmUrl` and `provider`; OAuth onboarding `code` and `provider`; newsletter `subject`, `body`, `actionUrl`, `unsubscribeUrl`, and `oneClickUnsubscribeUrl`; Web Push `title`, `body`, `clickBehavior`, and `actionUrl`.
 - `template_id`, `template_version`, `channel`, `target_type`, `resource_type`, and `resource_id` are retained message metadata, not encrypted payload fields.
+
+## Independent in-app inbox
+
+`notification_inbox` directly attributes references, event time, fixed expiry and
+read state to canonical `recipient_account_id`. It stores no title, name, Email,
+URL or owner projection. Reads fetch authorized safe projections each time.
+The existing retention worker deletes expired references in bounded batches in
+a separate transaction after provider-retention work; original expiry is 90 days
+from `occurred_at`, and replay cannot extend it. `inbox_recipient_state` retains
+only the committed sequence until account cleanup; sequence reset while signed
+snapshots remain valid would incorrectly consume later inserts.
+
+Account cleanup uses its existing subject advisory lock, deletes inbox and
+recipient state in the same transaction, and retains the existing irreversible
+cleanup subject reference. Producers acquire that same lock and check the fence
+before inserting, including delayed replay. The existing Email/Push HMAC lookup
+and delivery suppression remain unchanged. The inbox Store export helper is
+subject-scoped, contains retained references/read state only, and returns no
+business-owner projection. It is internal; no retired DSR endpoint is restored.

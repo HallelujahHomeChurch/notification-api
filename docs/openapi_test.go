@@ -16,11 +16,16 @@ var requiredOperations = map[string]struct {
 	visibility string
 	callers    []string
 }{
-	"GET /health":                         {visibility: "operations"},
-	"GET /ready":                          {visibility: "operations"},
-	"POST /priv/notifications/send":       {visibility: "private", callers: []string{"account-api", "engagement-api"}},
-	"GET /priv/notifications/{messageId}": {visibility: "private", callers: []string{"account-api", "engagement-api"}},
-	"POST /priv/account-cleanup":          {visibility: "private", callers: []string{"account-api"}},
+	"GET /api/notifications/me":            {visibility: "public", callers: []string{"api-gateway"}},
+	"GET /api/notifications/me/summary":    {visibility: "public", callers: []string{"api-gateway"}},
+	"POST /api/notifications/me/{id}/read": {visibility: "public", callers: []string{"api-gateway"}},
+	"POST /api/notifications/me/read-all":  {visibility: "public", callers: []string{"api-gateway"}},
+	"POST /priv/notifications/inbox/batch": {visibility: "private", callers: []string{"operations-api", "engagement-api"}},
+	"GET /health":                          {visibility: "operations"},
+	"GET /ready":                           {visibility: "operations"},
+	"POST /priv/notifications/send":        {visibility: "private", callers: []string{"account-api", "engagement-api"}},
+	"GET /priv/notifications/{messageId}":  {visibility: "private", callers: []string{"account-api", "engagement-api"}},
+	"POST /priv/account-cleanup":           {visibility: "private", callers: []string{"account-api"}},
 }
 
 type operationMetadata struct {
@@ -46,7 +51,7 @@ func TestOpenAPITagDefinitionsMatchOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"Operations", "Private"}
+	want := []string{"Operations", "Private", "Public"}
 	if got := topLevelTagNames(string(document)); !reflect.DeepEqual(got, want) {
 		t.Fatalf("top-level tags = %v, want %v", got, want)
 	}

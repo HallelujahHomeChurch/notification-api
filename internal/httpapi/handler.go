@@ -12,6 +12,7 @@ import (
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/HallelujahHomeChurch/notification-api/internal/inbox"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
 	"github.com/google/uuid"
 )
@@ -77,7 +78,7 @@ func New(service notificationService, db pinger, allowedCallers []string, allowD
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "NTF_NOT_FOUND")
 	})
-	return h.withRequestID(mux)
+	return WithInbox(h.withRequestID(mux), nil)
 }
 
 func (h *handler) cleanupAccount(w http.ResponseWriter, r *http.Request) {
@@ -290,4 +291,15 @@ func callerFromContext(ctx context.Context) string {
 func requestIDFromContext(ctx context.Context) string {
 	requestID, _ := ctx.Value(requestIDKey).(string)
 	return requestID
+}
+
+// WithInbox registers a separate gateway adapter without widening existing private authorization.
+func WithInbox(fallback http.Handler, service *inbox.Service) http.Handler {
+	mux := http.NewServeMux()
+	handler := inbox.NewHandler(service)
+	for _, path := range []string{"/api/notifications/me", "/api/notifications/me/summary", "/api/notifications/me/read-all", "/api/notifications/me/{id}/read", "/priv/notifications/inbox/batch"} {
+		mux.Handle(path, handler)
+	}
+	mux.Handle("/", fallback)
+	return mux
 }

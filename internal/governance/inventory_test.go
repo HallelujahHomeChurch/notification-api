@@ -53,6 +53,8 @@ func TestDataGovernanceManifest(t *testing.T) {
 	}
 	require.ElementsMatch(t, []string{
 		"notification.account-cleanup-operations",
+		"notification.inbox",
+		"notification.inbox-recipient-state",
 		"notification.message-sensitive",
 		"notification.message-metadata",
 		"notification.delivery-receipts",
@@ -62,6 +64,8 @@ func TestDataGovernanceManifest(t *testing.T) {
 	}, mapKeys(datasets))
 
 	exactPhysicalFields := map[string][]string{
+		"notification.inbox":                      {"id", "recipient_account_id", "recipient_sequence", "producer", "event_type", "logical_notification_key", "resource", "event_version", "occurred_at", "created_at", "expires_at", "read_at"},
+		"notification.inbox-recipient-state":      {"recipient_account_id", "committed_sequence"},
 		"notification.account-cleanup-operations": {"idempotency_key", "subject_ref", "result", "created_at", "updated_at"},
 		"notification.email-attempts":             {"delivery_id", "attempt", "bulk", "started_at", "finished_at", "outcome", "stage", "smtp_code", "enhanced_code"},
 		"notification.message-sensitive":          {"target_ciphertext", "payload_ciphertext"},
