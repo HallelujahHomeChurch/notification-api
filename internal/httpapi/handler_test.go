@@ -384,3 +384,23 @@ func TestLegacyDSRRoutesAreNotFound(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusIncludesFailClosedRetrySafety(t *testing.T) {
+	for _, safe := range []bool{false, true} {
+		svc := &fakeService{get: func(context.Context, string, string) (service.Result, error) {
+			return service.Result{MessageID: "message", Status: contracts.MessageStatusDeadLettered, SafeToRetry: safe}, nil
+		}}
+		h := New(svc, &fakePinger{}, []string{"engagement-api"}, false)
+		req := httptest.NewRequest(http.MethodGet, "/priv/notifications/message", nil)
+		req.Header.Set("Dapr-Caller-App-Id", "engagement-api")
+		response := serve(h, req)
+		var body struct {
+			Data struct {
+				Safe *bool `json:"safeToRetry"`
+			}
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusOK || body.Data.Safe == nil || *body.Data.Safe != safe {
+			t.Fatalf("status contract: %s err=%v", response.Body, err)
+		}
+	}
+}

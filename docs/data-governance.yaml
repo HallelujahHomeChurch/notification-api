@@ -43,6 +43,7 @@ datasets:
     subject_keys: [{"kind":"user_id","field":"subject_hash_key_id + subject_hash","evidence":[{"path":"internal/service/service.go","symbol":"Service.Send"},{"path":"internal/accountcleanup/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"hash_key_id + target_hash","evidence":[{"path":"internal/httpapi/handler.go","symbol":"handler.authorizeCaller"},{"path":"internal/accountcleanup/service.go","symbol":"candidateHashes"}]}]
     data_classes: ["identity","security","activity"]
     fields:
+      - {"name":"email_history_complete","purpose":"Fence legacy or incomplete Email acceptance history from replay.","necessity":"required","data_classes":["security","activity"]}
       - {"name":"id","purpose":"Identify the notification message and parent delivery chain.","necessity":"required","data_classes":["activity"]}
       - {"name":"caller_app_id","purpose":"Record the trusted service caller that created the notification.","necessity":"required","data_classes":["security","activity"]}
       - {"name":"idempotency_key","purpose":"Deduplicate a caller-scoped notification intent.","necessity":"required","data_classes":["security","activity"]}
@@ -79,6 +80,7 @@ datasets:
     subject_keys: [{"kind":"user_id","field":"message_id -> notification_messages(subject_hash_key_id,subject_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/accountcleanup/service.go","symbol":"candidateHashes"}]}]
     data_classes: ["identity","security","activity"]
     fields:
+      - {"name":"failure_count","purpose":"Count general failures independently from SMTP quota deferrals.","necessity":"required","data_classes":["activity"]}
       - {"name":"id","purpose":"Identify the delivery attempt chain.","necessity":"required","data_classes":["activity"]}
       - {"name":"message_id","purpose":"Join receipt state to the parent notification message.","necessity":"required","data_classes":["identity","activity"]}
       - {"name":"channel","purpose":"Record email or Web Push delivery.","necessity":"required","data_classes":["activity"]}
@@ -153,3 +155,16 @@ datasets:
     legal_basis: {"status":"pending_legal","reference":null}
     retention: {"status":"pending_legal","rule":null,"action":"none"}
     cleanup: {"mode":"none","implementation":[],"evidence":[]}
+
+  - id: notification.email-attempts
+    owner: "notification-api"
+    purpose: "Preserve sanitized SMTP acceptance evidence and shared quota reservations without copying target or content."
+    necessity: "required"
+    storage: {"kind":"postgres","resource":"notification_email_attempts","sources":[{"path":"internal/migrations/sql/006_email_delivery_safety.sql","symbol":"notification_email_attempts"},{"path":"internal/worker/email_policy.go","symbol":"emailPolicy.begin"},{"path":"internal/worker/email_policy.go","symbol":"emailPolicy.finish"}]}
+    subject_keys: [{"kind":"user_id","field":"delivery_id -> notification_deliveries.message_id -> notification_messages(subject_hash_key_id,subject_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"delivery_id -> notification_deliveries.message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/httpapi/handler.go","symbol":"handler.authorizeCaller"},{"path":"internal/accountcleanup/service.go","symbol":"candidateHashes"}]}]
+    data_classes: ["security","activity"]
+    fields: [{"name":"delivery_id","purpose":"Join to the existing delivery retention chain.","necessity":"required","data_classes":["activity"]},{"name":"attempt","purpose":"Identify the fenced worker claim.","necessity":"required","data_classes":["activity"]},{"name":"bulk","purpose":"Reserve transactional SMTP capacity separately from campaigns.","necessity":"required","data_classes":["activity"]},{"name":"started_at","purpose":"Record the quota reservation or deferred claim time.","necessity":"required","data_classes":["activity"]},{"name":"finished_at","purpose":"Record outcome persistence time.","necessity":"required","data_classes":["activity"]},{"name":"outcome","purpose":"Retain started, deferred, accepted, rejected or unknown outcome.","necessity":"required","data_classes":["activity"]},{"name":"stage","purpose":"Record an allowlisted SMTP protocol stage.","necessity":"required","data_classes":["activity"]},{"name":"smtp_code","purpose":"Record only a numeric SMTP response code.","necessity":"required","data_classes":["activity"]},{"name":"enhanced_code","purpose":"Record only a validated enhanced SMTP code.","necessity":"required","data_classes":["activity"]}]
+    attribution: {"mode":"verified_lookup","explanation":"Attribution follows the existing parent delivery and retained-key message subject lookup; no recipient or payload copy is created."}
+    legal_basis: {"status":"pending_legal","reference":null}
+    retention: {"status":"enforced","rule":{"trigger":"age_since","field":"notification_messages.terminal_at","source":{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"},"duration_source":{"path":"internal/retention/worker.go","symbol":"metadataRetention"},"predicate":"parent terminal_at <= now-730d","description":"Existing parent message retention deletes deliveries and attempt rows through ON DELETE CASCADE."},"action":"delete"}
+    cleanup: {"mode":"existing_worker","implementation":[{"path":"internal/retention/worker.go","symbol":"postgresRepository.retain"}],"evidence":[{"kind":"go_test","path":"internal/worker/email_policy_integration_test.go","test_name":"TestEmailHistorySafetyFailsClosedAndRetainsUnknown"},{"kind":"go_test","path":"internal/retention/worker_integration_test.go","test_name":"TestPostgresRetentionTombstonesThenDeletesWithoutLosingReceiptMetadata"}]}

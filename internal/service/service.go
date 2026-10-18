@@ -57,6 +57,7 @@ type Result struct {
 	TemplateVersion int
 	Replayed        bool
 	FailureCode     string
+	SafeToRetry     bool
 }
 
 type repository interface {
@@ -350,5 +351,6 @@ func resultFromMessage(message store.Message, replayed bool) Result {
 		TemplateVersion: message.TemplateVersion,
 		Replayed:        replayed,
 		FailureCode:     message.FailureCode,
+		SafeToRetry:     message.SafeToRetry,
 	}
 }

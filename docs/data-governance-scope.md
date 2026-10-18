@@ -17,6 +17,11 @@ This inventory describes existing metadata and behavior only. It exports no data
 
 ## Operational schema exclusions
 
+- `notification_email_budget.id` — Provider singleton key, not an Account subject.
+- `notification_email_budget.next_send_at` — Shared SMTP pacing time, not an Account event.
+- `notification_email_budget.cooldown_until` — Shared provider cooldown, not an Account event.
+- `notification_email_budget.throttle_count` — Provider-wide failure counter without a recipient join.
+
 - `schema_migrations.version` — Migration filename, not an Account subject.
 - `schema_migrations.checksum` — Migration content checksum, not an Account subject.
 - `schema_migrations.applied_at` — Schema deployment time, not an Account event.
@@ -24,7 +29,7 @@ This inventory describes existing metadata and behavior only. It exports no data
 ## Existing age-based retention
 
 - At `terminal_at <= now-7d`, the existing worker clears only `target_ciphertext` and `payload_ciphertext` and sets `payload_purged_at`; message metadata, delivery receipts and outbox state remain.
-- At `terminal_at <= now-730d`, the worker deletes the parent message. PostgreSQL cascades that deletion to its delivery and outbox rows.
+- At `terminal_at <= now-730d`, the worker deletes the parent message. PostgreSQL cascades that deletion to its delivery, Email attempt and outbox rows.
 - `notification_rate_limits` rows are deleted only when `expires_at <= now`; active buckets are preserved.
 - `expires_at` on a notification message bounds provider-delivery eligibility. It is not the message-row retention trigger.
 - Concurrency uses bounded batches and `FOR UPDATE SKIP LOCKED`. Repeated runs preserve ineligible rows and return zero work after eligible rows are handled.

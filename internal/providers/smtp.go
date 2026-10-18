@@ -122,7 +122,12 @@ func (s *SMTP) Send(ctx context.Context, payload DeliveryPayload) (ProviderRecei
 		return ProviderReceipt{}, s.failed(classify(ctx, err), "message", contextCause(ctx, err))
 	}
 	if err := writer.Close(); err != nil {
-		return ProviderReceipt{}, s.failed(ErrorAcceptanceUnknown, "data", contextCause(ctx, err))
+		kind := ErrorAcceptanceUnknown
+		var reply *textproto.Error
+		if errors.As(err, &reply) {
+			kind = classify(ctx, err)
+		}
+		return ProviderReceipt{}, s.failed(kind, "data", contextCause(ctx, err))
 	}
 
 	_ = client.Quit()
@@ -180,11 +185,20 @@ func smtpHost(config SMTPConfig) (string, error) {
 
 func (s *SMTP) failed(kind ErrorKind, operation string, cause error) error {
 	providerErr := &ProviderError{Kind: kind, Operation: operation, cause: cause}
+	var reply *textproto.Error
+	if errors.As(cause, &reply) {
+		providerErr.SMTPCode = reply.Code
+		fields := strings.Fields(reply.Msg)
+		if len(fields) > 0 && validEnhancedCode(fields[0]) {
+			providerErr.EnhancedCode = fields[0]
+		}
+	}
 	if s.config.Logger != nil {
 		s.config.Logger.Printf(
-			"event=notification_provider_failure provider=smtp kind=%s operation=%s",
+			"event=notification_provider_failure provider=smtp kind=%s operation=%s smtp_code=%d enhanced_code=%s",
 			kind,
 			operation,
+			providerErr.SMTPCode, providerErr.EnhancedCode,
 		)
 	}
 	return providerErr
@@ -227,6 +241,10 @@ func classify(ctx context.Context, err error) ErrorKind {
 	var smtpErr *textproto.Error
 	if errors.As(err, &smtpErr) {
 		if smtpErr.Code >= 400 && smtpErr.Code < 500 {
+			text := strings.ToLower(smtpErr.Msg)
+			if smtpErr.Code == 421 || strings.Contains(text, "throttl") || strings.Contains(text, "too many") || strings.Contains(text, "rate limit") {
+				return ErrorRateLimited
+			}
 			return ErrorTemporary
 		}
 		if smtpErr.Code >= 500 && smtpErr.Code < 600 {
@@ -358,4 +376,22 @@ func messageHeaders(from string, payload DeliveryPayload, extra ...string) []str
 		}
 	}
 	return append(headers, append(extra, "")...)
+}
+
+func validEnhancedCode(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 || len(parts[0]) != 1 || !strings.Contains("245", parts[0]) {
+		return false
+	}
+	for _, p := range parts[1:] {
+		if len(p) < 1 || len(p) > 3 {
+			return false
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }

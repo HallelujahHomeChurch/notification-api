@@ -637,3 +637,13 @@ and using that digest; the queue was `Active` with no active messages.
 Do not begin the production `account-api` cutover until every blocking item is
 completed and recorded. The explicitly deferred shared-vault cleanup above is
 non-blocking until its separately approved retention window ends.
+
+## SMTP quota and acceptance safety rollout
+
+This change requires a separately approved normal release. Deploy the additive migration, API and worker producer before an Engagement consumer that checks `safeToRetry`; never enable the new retry consumer first unless conservative refusal of legacy Email retries is intended. Capture the old revision and ensure no legacy worker revision remains active before claiming complete attempt evidence. Mixed writers/legacy messages remain unproven; rollback does not remove attempt history or authorize replay. No historical failed email is automatically requeued.
+
+The shared budget is for this Notification database's SMTP provider. Other clients in the same ACS subscription can consume the same external quota. Confirm the actual minute/hour quotas before raising defaults; current hourly quota was read as 100 on 2026-10-18. Reserve settings protect transactional capacity from campaign sends. A quota wait creates a scheduled outbox retry and does not consume the general-error budget. Known SMTP throttling establishes a shared exponential cooldown with jitter; original expiry still bounds retries.
+
+Before a campaign replay, reconcile the original Internet Message-ID with provider acceptance. `safeToRetry=false` or missing is never permission to resend. This includes legacy history, DATA transport uncertainty and abandoned/incomplete attempt starts. Do not use the generic SQL DLQ replay above for campaign messages: a terminal failed Engagement recipient will fail final eligibility. Use an approved safe recipient allow-list through Engagement, retaining consent, publication, expiry and entitlement checks. Reopening a generation changes the Internet Message-ID; that header does not guarantee deduplication. A provider support reconciliation does not by itself modify legacy safety flags. Any manually reviewed recovery requires a separate bounded preview/approval.
+
+Per-attempt metadata is in `notification_email_attempts`: delivery/attempt IDs, timestamps, bulk classification, outcome, stage, SMTP/enhanced numeric codes. `started` is conservatively uncertain until a durable outcome exists. No raw response, target or payload belongs in logs/evidence.

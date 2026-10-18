@@ -40,6 +40,8 @@ type ProviderError struct {
 	Kind              ErrorKind
 	Operation         string
 	RetryAfter        time.Duration
+	SMTPCode          int
+	EnhancedCode      string
 	HTTPStatus        int
 	ProviderRequestID string
 	ProviderFamily    string

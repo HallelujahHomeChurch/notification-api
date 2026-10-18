@@ -372,6 +372,9 @@ components:
               format: uuid
             status:
               $ref: '#/components/schemas/MessageStatus'
+            safeToRetry:
+              type: boolean
+              description: Affirmative proof that a terminal unexpired retained Email has complete attempt history with definitive rejection and no accepted, unknown or incomplete send. False for legacy history. Consumers must treat a missing field as false; this does not authorize replay without current consent and source eligibility.
             failureCode:
               type: string
               description: Stable, non-sensitive failure category for terminal delivery failures.

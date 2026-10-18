@@ -205,8 +205,9 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]any{
-		"messageId": result.MessageID,
-		"status":    result.Status,
+		"messageId":   result.MessageID,
+		"status":      result.Status,
+		"safeToRetry": result.SafeToRetry,
 	}
 	if result.FailureCode != "" {
 		data["failureCode"] = result.FailureCode

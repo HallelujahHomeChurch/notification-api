@@ -40,6 +40,7 @@ type claim struct {
 	TemplateVersion        int
 	Channel                string
 	Attempt                int
+	FailureCount           int
 	EncryptionKeyID        string
 	TargetCiphertext       []byte
 	PayloadCiphertext      []byte
@@ -73,6 +74,7 @@ type postgresStore struct {
 }
 
 type Worker struct {
+	email           *emailPolicy
 	repository      repository
 	providers       map[string]providers.Provider
 	keys            map[string][]byte
@@ -182,6 +184,11 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		}
 	}()
 
+	if claimed.Channel == "email" && w.email != nil {
+		if err := w.email.observe(ctx, claimed); err != nil {
+			return err
+		}
+	}
 	payload, err := w.render(claimed)
 	if err != nil {
 		if errors.Is(err, notificationcrypto.ErrKeyNotConfigured) {
@@ -205,7 +212,7 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 			finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 			defer finish()
 			if eligibilityErr != nil {
-				if claimed.Attempt < maxAttempts {
+				if claimed.FailureCount+1 < maxAttempts {
 					if err := w.repository.markRetry(finishCtx, claimed, "eligibility_unavailable", w.retryDelay(claimed.Attempt), w.newID()); err != nil {
 						return errors.Join(eligibilityErr, err)
 					}
@@ -225,6 +232,37 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		}
 	}
 
+	if claimed.Channel == "email" && w.email != nil {
+		delay, gateErr := w.email.begin(ctx, claimed)
+		if errors.Is(gateErr, errEmailAlreadyAccepted) {
+			receipt, err := w.email.acceptedReceipt(ctx, claimed)
+			if err != nil {
+				return err
+			}
+			if err = w.repository.markSent(ctx, claimed, receipt); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.Complete(ctx)
+		}
+		if errors.Is(gateErr, errEmailAcceptanceUnknown) {
+			if err := w.repository.markFailed(ctx, claimed, "acceptance_unknown"); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.DeadLetter(ctx, "acceptance_unknown")
+		}
+		if gateErr != nil {
+			return gateErr
+		}
+		if delay > 0 {
+			if err := w.repository.markRetry(ctx, claimed, "rate_limited", delay, w.newID()); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.Complete(ctx)
+		}
+	}
 	providerCtx, cancel := context.WithTimeout(ctx, sendTimeout)
 	provider, ok := w.providers[claimed.Channel]
 	if !ok {
@@ -233,6 +271,14 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	}
 	receipt, providerErr := provider.Send(providerCtx, payload)
 	cancel()
+	if claimed.Channel == "email" && w.email != nil {
+		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+		recordErr := w.email.finish(finishCtx, claimed, providerErr)
+		finish()
+		if recordErr != nil {
+			return fmt.Errorf("persist email attempt: %w", recordErr)
+		}
+	}
 	if providerErr == nil {
 		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
 		defer finish()
@@ -247,7 +293,18 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	}
 
 	kind, retryable, retryAfter := classifyProviderError(providerErr)
-	if retryable && claimed.Attempt < maxAttempts {
+	if claimed.Channel == "email" && campaignEmail(claimed) && kind == providers.ErrorAcceptanceUnknown {
+		if err := w.repository.markFailed(ctx, claimed, "acceptance_unknown"); err != nil {
+			return err
+		}
+		leaseHeld = false
+		return message.DeadLetter(ctx, "acceptance_unknown")
+	}
+	canRetry := claimed.FailureCount+1 < maxAttempts
+	if claimed.Channel == "email" && kind == providers.ErrorRateLimited {
+		canRetry = true
+	}
+	if retryable && canRetry {
 		if retryAfter <= 0 {
 			retryAfter = w.retryDelay(claimed.Attempt)
 		}
@@ -416,6 +473,20 @@ func (s postgresStore) claimFenced(
 		return claimResult{}, nil, err
 	}
 
+	recovered, err := restoreAcceptedEmail(ctx, tx, deliveryID)
+	if err != nil {
+		_ = tx.Rollback()
+		_ = release()
+		return claimResult{}, nil, err
+	}
+	if recovered {
+		if err := tx.Commit(); err != nil {
+			_ = release()
+			return claimResult{}, nil, err
+		}
+		_ = release()
+		return claimResult{Status: statusSent}, nil, nil
+	}
 	expired, err := expireDelivery(ctx, tx, deliveryID)
 	if err != nil {
 		_ = tx.Rollback()
@@ -454,7 +525,7 @@ func (s postgresStore) claimFenced(
 		FROM candidate, notification_messages AS message
 		WHERE delivery.id=candidate.id AND message.id=delivery.message_id
 			RETURNING delivery.id, message.id, message.template_id, message.template_version,
-			          delivery.channel, delivery.attempt_count,
+			          delivery.channel, delivery.attempt_count, delivery.failure_count,
 			          message.encryption_key_id, message.target_ciphertext, message.payload_ciphertext,
 			          COALESCE(message.eligibility_campaign_id::text,''), COALESCE(message.eligibility_recipient_id::text,''), message.caller_app_id, message.idempotency_key`,
 		deliveryID,
@@ -466,6 +537,7 @@ func (s postgresStore) claimFenced(
 		&claimed.TemplateVersion,
 		&claimed.Channel,
 		&claimed.Attempt,
+		&claimed.FailureCount,
 		&claimed.EncryptionKeyID,
 		&claimed.TargetCiphertext,
 		&claimed.PayloadCiphertext,
@@ -654,7 +726,8 @@ func (s postgresStore) markRetry(
 			SET status='queued',
 			    next_attempt_at=clock_timestamp()+($3::bigint*interval '1 microsecond'),
 			    last_error_code=$4,
-			    lease_expires_at=NULL,
+       failure_count=failure_count+CASE WHEN channel='email' AND $4='rate_limited' THEN 0 ELSE 1 END,
+       lease_expires_at=NULL,
 			    updated_at=clock_timestamp()
 			WHERE id=$1 AND status='sending' AND attempt_count=$2
 			RETURNING next_attempt_at`,
@@ -714,7 +787,8 @@ func (s postgresStore) markTerminal(
 			UPDATE notification_deliveries
 			SET status=$3,
 			    last_error_code=$4,
-			    lease_expires_at=NULL,
+       failure_count=failure_count+CASE WHEN channel='email' AND $4='rate_limited' THEN 0 ELSE 1 END,
+       lease_expires_at=NULL,
 			    updated_at=clock_timestamp()
 			WHERE id=$1 AND status='sending' AND attempt_count=$2`,
 			claimed.DeliveryID,

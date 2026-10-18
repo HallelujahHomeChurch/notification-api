@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math/big"
@@ -109,6 +110,39 @@ func TestSMTPAcceptsDeliveryOverSTARTTLS(t *testing.T) {
 		t.Fatalf("success log = %q", output.String())
 	}
 	assertSMTPData(t, server, payload)
+}
+
+func TestSMTPFinalDataRejectionIsDefinitive(t *testing.T) {
+	for _, tc := range []struct {
+		code int
+		want ErrorKind
+	}{{451, ErrorTemporary}, {550, ErrorPermanent}} {
+		t.Run(fmt.Sprint(tc.code), func(t *testing.T) {
+			server := newSMTPServer(t, smtpServerOptions{startTLS: true, finalCode: tc.code})
+			_, err := NewSMTP(SMTPConfig{Addr: server.addr, From: "noreply@alive.org.tw", Timeout: time.Second, TLSConfig: server.clientTLS}).Send(context.Background(), validEmail())
+			assertProviderError(t, err, tc.want)
+			var pe *ProviderError
+			if !errors.As(err, &pe) || pe.SMTPCode != tc.code {
+				t.Fatalf("SMTP code not retained: %v", err)
+			}
+			if server.accepted() {
+				t.Fatal("rejected message marked accepted")
+			}
+		})
+	}
+}
+
+func TestSMTPThrottleHasSanitizedCodes(t *testing.T) {
+	server := newSMTPServer(t, smtpServerOptions{startTLS: true, recipientCode: 451, responseMessage: "4.7.0 Too many requests secret@example.test"})
+	_, err := NewSMTP(SMTPConfig{Addr: server.addr, From: "noreply@alive.org.tw", Timeout: time.Second, TLSConfig: server.clientTLS}).Send(context.Background(), validEmail())
+	assertProviderError(t, err, ErrorRateLimited)
+	var pe *ProviderError
+	if !errors.As(err, &pe) || pe.SMTPCode != 451 || pe.EnhancedCode != "4.7.0" {
+		t.Fatalf("missing protocol codes: %#v", pe)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatal("raw response exposed")
+	}
 }
 
 func TestSMTPClassifiesLostFinalResponseAsAcceptanceUnknown(t *testing.T) {
@@ -404,6 +438,7 @@ type smtpServerOptions struct {
 	responseMessage    string
 	hangBeforeGreeting bool
 	dropAfterData      bool
+	finalCode          int
 }
 
 type smtpServer struct {
@@ -545,8 +580,14 @@ func (s *smtpServer) serve(options smtpServerOptions, serverTLS *tlsConfig) {
 				s.markAccepted()
 				return
 			}
-			writeSMTP(writer, 250, "queued")
-			s.markAccepted()
+			code := options.finalCode
+			if code == 0 {
+				code = 250
+			}
+			writeSMTP(writer, code, "final response")
+			if code == 250 {
+				s.markAccepted()
+			}
 		case command == "QUIT":
 			writeSMTP(writer, 221, "bye")
 			return
