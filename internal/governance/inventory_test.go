@@ -18,6 +18,12 @@ import (
 )
 
 var excludedColumns = map[string]map[string]string{
+	"notification_email_budget": {
+		"id":             "Provider singleton key, not an Account subject.",
+		"next_send_at":   "Shared SMTP pacing time, not an Account event.",
+		"cooldown_until": "Shared provider cooldown, not an Account event.",
+		"throttle_count": "Provider-wide failure counter without a recipient join.",
+	},
 	"schema_migrations": {
 		"version":    "Migration filename, not an Account subject.",
 		"checksum":   "Migration content checksum, not an Account subject.",
@@ -50,22 +56,24 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"notification.message-sensitive",
 		"notification.message-metadata",
 		"notification.delivery-receipts",
+		"notification.email-attempts",
 		"notification.outbox",
 		"notification.rate-limit-buckets",
 	}, mapKeys(datasets))
 
 	exactPhysicalFields := map[string][]string{
 		"notification.account-cleanup-operations": {"idempotency_key", "subject_ref", "result", "created_at", "updated_at"},
+		"notification.email-attempts":             {"delivery_id", "attempt", "bulk", "started_at", "finished_at", "outcome", "stage", "smtp_code", "enhanced_code"},
 		"notification.message-sensitive":          {"target_ciphertext", "payload_ciphertext"},
 		"notification.message-metadata": {
 			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",
 			"channel", "target_type", "target_hash", "resource_type", "resource_id", "eligibility_campaign_id", "eligibility_recipient_id", "status", "created_at",
-			"updated_at", "terminal_at", "payload_purged_at", "encryption_key_id", "hash_key_id", "expires_at", "subject_hash", "subject_hash_key_id",
+			"updated_at", "terminal_at", "payload_purged_at", "encryption_key_id", "hash_key_id", "expires_at", "subject_hash", "subject_hash_key_id", "email_history_complete",
 		},
 		"notification.delivery-receipts": {
 			"id", "message_id", "channel", "endpoint_ref", "provider", "status", "attempt_count",
 			"next_attempt_at", "lease_expires_at", "sent_at", "provider_message_id", "last_error_code",
-			"created_at", "updated_at",
+			"created_at", "updated_at", "failure_count",
 		},
 		"notification.outbox": {
 			"id", "delivery_id", "status", "attempt_count", "next_attempt_at", "lease_expires_at",

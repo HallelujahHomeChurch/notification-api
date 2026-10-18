@@ -40,6 +40,10 @@ type Config struct {
 	ServiceBusNamespace        string
 	ServiceBusQueueName        string
 	ServiceBusConnectionString string
+	SMTPEmailsPerMinute        int
+	SMTPEmailsPerHour          int
+	SMTPReservePerMinute       int
+	SMTPReservePerHour         int
 	SMTPAddr                   string
 	SMTPUsername               string
 	SMTPPassword               string
@@ -75,6 +79,25 @@ func Load() (Config, error) {
 	}
 	if shutdownTimeoutSeconds <= 0 {
 		return Config{}, fmt.Errorf("SHUTDOWN_TIMEOUT_SECONDS must be positive")
+	}
+	smtpMinute, err := intEnv("SMTP_EMAILS_PER_MINUTE", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	smtpHour, err := intEnv("SMTP_EMAILS_PER_HOUR", 100)
+	if err != nil {
+		return Config{}, err
+	}
+	smtpReserveMinute, err := intEnv("SMTP_TRANSACTIONAL_RESERVE_PER_MINUTE", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	smtpReserveHour, err := intEnv("SMTP_TRANSACTIONAL_RESERVE_PER_HOUR", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	if smtpMinute <= 0 || smtpHour <= 0 || smtpReserveMinute < 0 || smtpReserveHour < 0 || smtpReserveMinute >= smtpMinute || smtpReserveHour >= smtpHour {
+		return Config{}, fmt.Errorf("SMTP quotas must be positive and reserves smaller than quotas")
 	}
 	dbMaxOpenConns, err := intEnv("DB_MAX_OPEN_CONNS", defaultDBMaxOpenConns)
 	if err != nil {
@@ -128,17 +151,18 @@ func Load() (Config, error) {
 		ServiceBusNamespace:        os.Getenv("SERVICEBUS_NAMESPACE"),
 		ServiceBusQueueName:        env("SERVICEBUS_QUEUE_NAME", "notifications-email"),
 		ServiceBusConnectionString: os.Getenv("SERVICEBUS_CONNECTION_STRING"),
-		SMTPAddr:                   os.Getenv("SMTP_ADDR"),
-		SMTPUsername:               os.Getenv("SMTP_USERNAME"),
-		SMTPPassword:               os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:                   os.Getenv("SMTP_FROM"),
-		SMTPFromName:               env("SMTP_FROM_NAME", "哈利路亞家教會"),
-		VAPIDPublicKey:             os.Getenv("VAPID_PUBLIC_KEY"),
-		VAPIDPrivateKey:            os.Getenv("VAPID_PRIVATE_KEY"),
-		VAPIDSubject:               os.Getenv("VAPID_SUBJECT"),
-		NotificationsDisabled:      notificationsDisabled,
-		TemplateDailyLimit:         templateDailyLimit,
-		ShutdownTimeout:            time.Duration(shutdownTimeoutSeconds) * time.Second,
+		SMTPEmailsPerMinute:        smtpMinute, SMTPEmailsPerHour: smtpHour, SMTPReservePerMinute: smtpReserveMinute, SMTPReservePerHour: smtpReserveHour,
+		SMTPAddr:              os.Getenv("SMTP_ADDR"),
+		SMTPUsername:          os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:          os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:              os.Getenv("SMTP_FROM"),
+		SMTPFromName:          env("SMTP_FROM_NAME", "哈利路亞家教會"),
+		VAPIDPublicKey:        os.Getenv("VAPID_PUBLIC_KEY"),
+		VAPIDPrivateKey:       os.Getenv("VAPID_PRIVATE_KEY"),
+		VAPIDSubject:          os.Getenv("VAPID_SUBJECT"),
+		NotificationsDisabled: notificationsDisabled,
+		TemplateDailyLimit:    templateDailyLimit,
+		ShutdownTimeout:       time.Duration(shutdownTimeoutSeconds) * time.Second,
 	}
 
 	if err := cfg.validateLoaded(); err != nil {

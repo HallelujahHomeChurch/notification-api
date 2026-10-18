@@ -24,6 +24,7 @@ type Message struct {
 	TemplateVersion int
 	Status          contracts.MessageStatus
 	FailureCode     string
+	SafeToRetry     bool
 }
 
 type RateLimit struct {
@@ -274,10 +275,10 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 				id, caller_app_id, idempotency_key, request_hash, template_id, template_version,
 				channel, target_type, target_hash, target_ciphertext, payload_ciphertext,
 				resource_type, resource_id, eligibility_campaign_id, eligibility_recipient_id, encryption_key_id, hash_key_id,
-				subject_hash, subject_hash_key_id, expires_at, status
+				subject_hash, subject_hash_key_id, expires_at, status, email_history_complete
 			) VALUES (
 				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-				LEAST(clock_timestamp()+($20::bigint*interval '1 microsecond'),$21::timestamptz),'queued'
+				LEAST(clock_timestamp()+($20::bigint*interval '1 microsecond'),$21::timestamptz),'queued',true
 			)`,
 		params.MessageID, params.Caller, params.IdempotencyKey, params.RequestHash,
 		params.TemplateID, params.TemplateVersion, params.Channel, params.TargetType,
@@ -334,7 +335,11 @@ func (s *Store) Get(ctx context.Context, caller, messageID string) (Message, err
 	err := s.db.QueryRowContext(ctx, `
 			SELECT m.id, m.caller_app_id, m.request_hash, m.hash_key_id, m.template_version, m.status,
 				COALESCE((SELECT d.last_error_code FROM notification_deliveries d
-					WHERE d.message_id=m.id ORDER BY d.updated_at DESC LIMIT 1), '')
+					WHERE d.message_id=m.id ORDER BY d.updated_at DESC LIMIT 1), ''),
+    m.channel='email' AND m.email_history_complete AND m.status IN ('failed','dead_lettered') AND m.expires_at>clock_timestamp() AND m.payload_purged_at IS NULL AND octet_length(m.target_ciphertext)>0 AND octet_length(m.payload_ciphertext)>0
+    AND NOT EXISTS(SELECT 1 FROM notification_deliveries d WHERE d.message_id=m.id AND (d.status NOT IN ('failed','dead_lettered') OR d.attempt_count<>(SELECT count(*) FROM notification_email_attempts a WHERE a.delivery_id=d.id)))
+    AND EXISTS(SELECT 1 FROM notification_email_attempts a JOIN notification_deliveries d ON d.id=a.delivery_id WHERE d.message_id=m.id AND a.outcome='rejected')
+    AND NOT EXISTS(SELECT 1 FROM notification_email_attempts a JOIN notification_deliveries d ON d.id=a.delivery_id WHERE d.message_id=m.id AND a.outcome IN ('started','unknown','accepted'))
 			FROM notification_messages m
 			WHERE m.id=$1 AND m.caller_app_id=$2`,
 		messageID, caller,
@@ -346,6 +351,7 @@ func (s *Store) Get(ctx context.Context, caller, messageID string) (Message, err
 		&message.TemplateVersion,
 		&message.Status,
 		&message.FailureCode,
+		&message.SafeToRetry,
 	)
 	return message, err
 }

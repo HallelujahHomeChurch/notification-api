@@ -622,8 +622,8 @@ func insertWorkerDelivery(
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO notification_deliveries (
-			id,message_id,channel,provider,status,attempt_count,lease_expires_at
-		) VALUES ($1,$2,'email','smtp',$3,$4,$5)`,
+			id,message_id,channel,provider,status,attempt_count,lease_expires_at,failure_count
+		) VALUES ($1,$2,'email','smtp',$3,$4,$5,$4)`,
 		deliveryID, messageID, status, attempt, leaseExpiresAt,
 	); err != nil {
 		t.Fatalf("insert delivery fixture: %v", err)

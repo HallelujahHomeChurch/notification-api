@@ -490,3 +490,15 @@ func clearConfigEnv(t *testing.T) {
 		t.Setenv(key, "")
 	}
 }
+
+func TestSMTPBudgetConfigurationValidation(t *testing.T) {
+	t.Setenv("SMTP_EMAILS_PER_HOUR", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("zero SMTP quota accepted")
+	}
+	t.Setenv("SMTP_EMAILS_PER_HOUR", "100")
+	t.Setenv("SMTP_TRANSACTIONAL_RESERVE_PER_HOUR", "100")
+	if _, err := Load(); err == nil {
+		t.Fatal("reserve consuming the whole quota accepted")
+	}
+}

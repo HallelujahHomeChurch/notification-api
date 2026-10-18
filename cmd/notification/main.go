@@ -243,7 +243,7 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 	}
 	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
 		"email": providers.NewSMTP(smtpConfig), "web_push": providers.NewWebPush(webPushConfig),
-	}, cfg.EncryptionKeys).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
+	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
 
 	return workerComponents{
 		http: httpProcess(cfg.Port, workerHealthHandler(db), cfg.ShutdownTimeout),

@@ -142,3 +142,11 @@ Persisted audit records remain independent of this setting.
 
 Provider success/failure events use their existing dedicated logger at every
 application level: the live provider failure ratio still requires both counts.
+
+## SMTP quotas and acceptance safety
+
+All production SMTP workers reserve a shared PostgreSQL quota slot before sending. Defaults are 20 attempts/minute and the verified ACS quota of 100 attempts/hour, with 5/minute and 20/hour reserved for non-campaign messages. `SMTP_EMAILS_PER_MINUTE`, `SMTP_EMAILS_PER_HOUR`, `SMTP_TRANSACTIONAL_RESERVE_PER_MINUTE`, and `SMTP_TRANSACTIONAL_RESERVE_PER_HOUR` override these validated values; minute defaults are conservative and are not a claim about the actual ACS minute quota. Windows count provider starts, including rejected and unknown attempts, conservatively. Capacity unavailable and provider-wide cooldowns defer through the existing outbox, without consuming the five-general-failure budget or blocking Web Push. Original message expiry remains authoritative.
+
+Each Email claim records sanitized attempt outcomes; no target, content or raw SMTP response is copied. Campaign sends stop on unknown/incomplete acceptance for reconciliation; account messages retain the existing at-least-once retry policy. Accepted-attempt evidence recovers a failed receipt write without sending again. Attempt rows cascade with the parent delivery under existing 730-day message retention.
+
+The existing caller-scoped status GET adds `safeToRetry`. Only complete, retained, unexpired, definitively rejected Email history can return true; legacy, accepted, ambiguous or incomplete history returns false. Missing fields must be treated as false by consumers. No historical failures are replayed by this migration or worker change.

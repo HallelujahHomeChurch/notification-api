@@ -426,6 +426,7 @@ func deliveryRepository(t *testing.T, events *[]string, attempt int) *fakeReposi
 				TemplateVersion:   1,
 				Channel:           "email",
 				Attempt:           attempt,
+				FailureCount:      attempt - 1,
 				EncryptionKeyID:   "legacy-v1",
 				TargetCiphertext:  target,
 				PayloadCiphertext: payload,
@@ -623,5 +624,18 @@ func TestRetiredDSRTemplatesNeverReachProvider(t *testing.T) {
 				t.Fatalf("provider calls=%d dead-letter=%d", provider.calls, message.deadLettered)
 			}
 		})
+	}
+}
+
+func TestEmailThrottleWaitDoesNotExhaustGeneralFailureBudget(t *testing.T) {
+	repository := deliveryRepository(t, nil, 50)
+	repository.claimResult.Claim.FailureCount = 4
+	provider := &fakeProvider{err: &providers.ProviderError{Kind: providers.ErrorRateLimited, RetryAfter: time.Hour}}
+	message := &fakeMessage{id: "delivery-1"}
+	if err := newWorker(repository, provider, testKey).Process(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	if repository.retryCode != "rate_limited" || repository.retryDelay != time.Hour || message.deadLettered != 0 {
+		t.Fatalf("quota wait exhausted failures: %#v", repository)
 	}
 }
