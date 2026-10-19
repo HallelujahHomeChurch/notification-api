@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/HallelujahHomeChurch/notification-api/internal/inbox"
 	"io"
 	"net/url"
 	"os"
@@ -23,6 +24,7 @@ const (
 )
 
 type Config struct {
+	InboxCallers                 inbox.CallerConfig
 	InboxEnabled                 bool
 	InboxOperationsVisibilityURL string
 	InboxWebsiteVisibilityURL    string
@@ -143,6 +145,7 @@ func Load() (Config, error) {
 	}
 	cfg := Config{
 		InboxEnabled:                 inboxEnabled,
+		InboxCallers:                 inbox.CallerConfig{OperationsAppID: env("OPERATIONS_APP_ID", "operations-api"), EngagementAppID: env("ENGAGEMENT_APP_ID", "engagement-api"), GatewayAppID: env("GATEWAY_APP_ID", "api-gateway")},
 		InboxOperationsVisibilityURL: os.Getenv("NOTIFICATION_INBOX_OPERATIONS_VISIBILITY_URL"),
 		InboxWebsiteVisibilityURL:    os.Getenv("NOTIFICATION_INBOX_WEBSITE_VISIBILITY_URL"),
 		DaprAPIToken:                 os.Getenv("DAPR_API_TOKEN"),
@@ -211,6 +214,9 @@ func (c Config) Validate(mode string) error {
 		return nil
 	case "api":
 		if c.InboxEnabled {
+			if err := c.InboxCallers.Validate(); err != nil {
+				return err
+			}
 			for _, endpoint := range []struct{ value, suffix string }{{c.InboxOperationsVisibilityURL, "/priv/operations/inbox-visibility"}, {c.InboxWebsiteVisibilityURL, "/priv/website/inbox-visibility"}} {
 				u, err := url.Parse(endpoint.value)
 				if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !strings.HasSuffix(u.Path, endpoint.suffix) {

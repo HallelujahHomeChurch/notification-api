@@ -168,8 +168,12 @@ to visibility calls. URLs must point to the authenticated local sidecar, which
 injects the Notification caller identity at the owner; direct unauthenticated
 business-service URLs are not supported deployment configurations.
 
-The inbox producer accepts only exact `operations-api` and `engagement-api`
-Dapr identities and returns indexed `accepted`, `duplicate`, `expired`, or
+Select exact producer transport IDs with `OPERATIONS_APP_ID` and `ENGAGEMENT_APP_ID`
+(defaults `operations-api` / `engagement-api`; test selects both `-test` IDs).
+Only that selected environment is accepted. `GATEWAY_APP_ID` defaults to
+`api-gateway` and may explicitly stay shared in test. Transport producer IDs map
+to canonical `operations-api` / `engagement-api` labels before domain validation
+and storage. The inbox producer accepts only these exact Dapr identities and returns indexed `accepted`, `duplicate`, `expired`, or
 `cleaned` outcomes after transaction commit. Only the first two represent a
 durable reminder; the last two are terminal skips. Original events expire after
 90 days. Owner titles and typed actions are validated on every read and are never

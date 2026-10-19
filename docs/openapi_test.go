@@ -424,3 +424,15 @@ func requireContains(t *testing.T, document, want string) {
 		t.Errorf("OpenAPI block missing %q", want)
 	}
 }
+
+func TestInboxSelectedEnvironmentContract(t *testing.T) {
+	raw, e := os.ReadFile("openapi.yaml")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, required := range []string{"OPERATIONS_APP_ID / ENGAGEMENT_APP_ID", "canonical producer labels", "GATEWAY_APP_ID"} {
+		if !strings.Contains(string(raw), required) {
+			t.Fatalf("missing caller contract %q", required)
+		}
+	}
+}

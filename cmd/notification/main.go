@@ -199,7 +199,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 	)
 	if cfg.InboxEnabled {
 		checker := inbox.NewVisibilityClient(cfg.InboxOperationsVisibilityURL, cfg.InboxWebsiteVisibilityURL, cfg.DaprAPIToken)
-		handler = httpapi.WithInbox(handler, inbox.NewService(inbox.NewStore(db), checker, cfg.ActiveHashKeyID, cfg.HashKeys))
+		handler = httpapi.WithInbox(handler, inbox.NewService(inbox.NewStore(db), checker, cfg.ActiveHashKeyID, cfg.HashKeys), cfg.InboxCallers)
 	}
 	dispatcher := outbox.New(db, publisher)
 	retentionWorker := retention.New(db)

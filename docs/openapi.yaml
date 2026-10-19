@@ -468,7 +468,7 @@ paths:
       operationId: acceptInboxBatch
       summary: acceptInboxBatch
       description: >-
-        Exact service producer identity; at most 100 items and 64 KiB. Mixed expired or cleaned recipients return terminal indexed outcomes.
+        Exact configured OPERATIONS_APP_ID / ENGAGEMENT_APP_ID transport identity from one environment only (canonical defaults or both -test); mapped to canonical producer labels before validation/storage. Human Inbox routes select exact GATEWAY_APP_ID (default api-gateway, may remain shared in test). Duplicate caller/token headers fail closed; at most 100 items and 64 KiB. Mixed expired or cleaned recipients return terminal indexed outcomes.
         Inbox is disabled by default until both visibility owner contracts are configured.
         All responses are no-store. Dependency failures return unavailable without a false zero or partial count.
       security:

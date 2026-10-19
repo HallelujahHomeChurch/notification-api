@@ -294,9 +294,9 @@ func requestIDFromContext(ctx context.Context) string {
 }
 
 // WithInbox registers a separate gateway adapter without widening existing private authorization.
-func WithInbox(fallback http.Handler, service *inbox.Service) http.Handler {
+func WithInbox(fallback http.Handler, service *inbox.Service, callers ...inbox.CallerConfig) http.Handler {
 	mux := http.NewServeMux()
-	handler := inbox.NewHandler(service)
+	handler := inbox.NewHandler(service, callers...)
 	for _, path := range []string{"/api/notifications/me", "/api/notifications/me/summary", "/api/notifications/me/read-all", "/api/notifications/me/{id}/read", "/priv/notifications/inbox/batch"} {
 		mux.Handle(path, handler)
 	}

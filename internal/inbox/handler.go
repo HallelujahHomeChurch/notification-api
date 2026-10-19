@@ -11,7 +11,11 @@ import (
 )
 
 // NewHandler uses Dapr-authenticated caller identity only; development proxy headers are not accepted.
-func NewHandler(service *Service) http.Handler {
+func NewHandler(service *Service, configured ...CallerConfig) http.Handler {
+	callers := CallerConfig{}.defaults()
+	if len(configured) > 0 {
+		callers = configured[0].defaults()
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		requestID := r.Header.Get("X-HHC-Request-ID")
@@ -40,25 +44,36 @@ func NewHandler(service *Service) http.Handler {
 				respond(503, nil, "NTF_INBOX_UNAVAILABLE")
 			}
 		}
-		callers := r.Header.Values("Dapr-Caller-App-Id")
-		if len(callers) == 0 {
+		identities := r.Header.Values("Dapr-Caller-App-Id")
+		if len(identities) == 0 {
 			respond(401, nil, "NTF_UNAUTHORIZED")
 			return
 		}
-		if len(callers) != 1 {
+		if len(identities) != 1 {
 			respond(403, nil, "NTF_FORBIDDEN")
 			return
 		}
-		caller := callers[0]
+		caller := identities[0]
+		if callers.Validate() != nil || len(r.Header.Values("dapr-api-token")) > 1 {
+			respond(403, nil, "NTF_FORBIDDEN")
+			return
+		}
+		producer := ""
 		private := r.URL.Path == "/priv/notifications/inbox/batch"
 		actor := ""
 		if private {
-			if caller != "operations-api" && caller != "engagement-api" {
+			switch caller {
+			case callers.OperationsAppID:
+				producer = "operations-api"
+			case callers.EngagementAppID:
+				producer = "engagement-api"
+			}
+			if producer == "" {
 				respond(403, nil, "NTF_FORBIDDEN")
 				return
 			}
 		} else {
-			if caller != "api-gateway" {
+			if caller != callers.GatewayAppID {
 				respond(403, nil, "NTF_FORBIDDEN")
 				return
 			}
@@ -107,7 +122,7 @@ func NewHandler(service *Service) http.Handler {
 			if !decode(&request) {
 				return
 			}
-			result, err := service.AcceptBatch(r.Context(), caller, request.Items)
+			result, err := service.AcceptBatch(r.Context(), producer, request.Items)
 			if err != nil {
 				fail(err)
 				return
