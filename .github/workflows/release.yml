@@ -627,6 +627,11 @@ jobs:
             return 1
           }
 
+          worker_revision_mode="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" --name "${WORKER_APP_NAME}" \
+            --query 'properties.configuration.activeRevisionsMode' --output tsv --only-show-errors)"
+          [[ "${worker_revision_mode}" == "Single" ]] || { echo "Worker reader rollout requires Single revision mode" >&2; exit 1; }
+
           az containerapp update \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${WORKER_APP_NAME}" \

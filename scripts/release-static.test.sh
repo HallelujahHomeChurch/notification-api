@@ -124,6 +124,7 @@ assert_contains "${workflow}" 'Succeeded' "migration success is not enforced"
 assert_contains "${workflow}" 'deployRuntime=true' "runtime deployment is missing"
 assert_contains "${workflow}" '(?s)id: deploy_runtime.*?az containerapp update.*?wait_for_revision "\$\{WORKER_APP_NAME\}".*?az containerapp replica list.*?WORKER_READER_READY=true.*?az deployment group create.*?wait_for_revision "\$\{API_APP_NAME\}"' "worker reader must be ready and previous worker drained before API emits new template versions"
 assert_contains "${workflow}" 'if \[\[ "\$\{WORKER_READER_READY:-false\}" != "true" \]\]' "rollback must retain a ready reader for already persisted template versions"
+assert_contains "${workflow}" '(?s)worker_revision_mode.*?properties\.configuration\.activeRevisionsMode.*?worker_revision_mode.*?Single' "reader drain must require single revision mode"
 
 assert_contains "${workflow}" 'notification-api' "API readiness check is missing"
 assert_contains "${workflow}" 'notification-worker' "worker readiness check is missing"
