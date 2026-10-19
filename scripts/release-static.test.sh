@@ -9,9 +9,13 @@ bicep="${repo_root}/infra/main.bicep"
 worker_runtime="$(sed -n '/^resource worker /,/^resource migrate /p' "${bicep}")"
 secret_bicep="${repo_root}/infra/secret-scope.bicep"
 api_scale="$(awk '/^resource api / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' "${bicep}")"
-for expected in 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '70'"; do
+for expected in 'minReplicas: 1' 'maxReplicas: 3'; do
   printf '%s\n' "$api_scale" | grep -Fq "$expected"
 done
+if printf '%s\n' "$api_scale" | grep -Fq "name: 'cpu-scaler'"; then
+  echo 'downsize-only batch must not add an API CPU scaler' >&2
+  exit 1
+fi
 alerts_bicep="${repo_root}/infra/alerts.bicep"
 production_release="${repo_root}/infra/production-release.env"
 secret_preflight="${repo_root}/scripts/verify-secret-scope.sh"

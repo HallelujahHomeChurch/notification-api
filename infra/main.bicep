@@ -270,19 +270,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         pollingInterval: 30
         cooldownPeriod: 300
         minReplicas: 1
-        maxReplicas: 8
-        rules: [
-          {
-            name: 'cpu-scaler'
-            custom: {
-              type: 'cpu'
-              metadata: {
-                type: 'Utilization'
-                value: '70'
-              }
-            }
-          }
-        ]
+        maxReplicas: 3
       }
     }
   }
