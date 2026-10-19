@@ -375,7 +375,7 @@ func TestRenderCurrentOnboardingCodeHasBrandedHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"哈利路亚家教会", "123456", "10 分钟"} {
+	for _, want := range []string{"哈利路亚家教会", "123456", "30 分钟"} {
 		if !strings.Contains(email.HTMLBody, want) {
 			t.Fatalf("HTML body missing %q", want)
 		}
