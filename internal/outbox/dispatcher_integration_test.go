@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -265,4 +266,36 @@ func insertOutboxFixture(t *testing.T, db *sql.DB, status string, leaseExpiresAt
 		t.Fatalf("commit outbox fixture: %v", err)
 	}
 	return outboxID
+}
+
+func TestPostgresOutboxDelayMeasuresDueTimeNotCreation(t *testing.T) {
+	for _, state := range []string{"pending", "publishing"} {
+		for _, overdue := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/overdue=%v", state, overdue), func(t *testing.T) {
+				db := integrationDatabase(t)
+				deadline := time.Now().Add(-time.Second)
+				if overdue {
+					deadline = time.Now().Add(-10 * time.Minute)
+				}
+				var lease *time.Time
+				if state == "publishing" {
+					lease = &deadline
+				}
+				id := insertOutboxFixture(t, db, state, lease)
+				if _, err := db.Exec(`UPDATE notification_outbox SET created_at=clock_timestamp()-interval '2 hours',next_attempt_at=$2 WHERE id=$1`, id, deadline); err != nil {
+					t.Fatal(err)
+				}
+				got, ok, err := (postgresStore{db: db}).claimNext(context.Background(), leaseDuration)
+				if err != nil || !ok {
+					t.Fatalf("claim ok=%v error=%v", ok, err)
+				}
+				if overdue && (got.AgeSeconds < 590 || got.AgeSeconds > 620) {
+					t.Fatalf("overdue age=%d", got.AgeSeconds)
+				}
+				if !overdue && got.AgeSeconds > 20 {
+					t.Fatalf("scheduled wait counted as delay: %d seconds", got.AgeSeconds)
+				}
+			})
+		}
+	}
 }

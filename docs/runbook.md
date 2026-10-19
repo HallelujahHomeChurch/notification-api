@@ -465,6 +465,9 @@ a two-second timeout. Both API and worker expose these paths on port `8081`.
 Service Bus and SMTP clients are initialized before the HTTP process starts;
 readiness intentionally does not send email.
 
+`notification_outbox_delayed age_seconds` measures overdue time since the scheduled
+`next_attempt_at` or expired publishing lease, excluding intentional retry waits.
+
 ## Initial alert thresholds
 
 These are starting thresholds, not code-enforced SLOs. Re-baseline after live
