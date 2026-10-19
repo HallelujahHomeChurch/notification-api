@@ -567,7 +567,7 @@ jobs:
             exit 1
           fi
 
-          for attempt in {1..60}; do
+          for attempt in {1..120}; do
             status="$(az containerapp job execution list \
               --resource-group "${RESOURCE_GROUP}" \
               --name "${MIGRATION_JOB_NAME}" \
@@ -584,7 +584,7 @@ jobs:
                 exit 1
                 ;;
             esac
-            echo "Waiting for migration execution ${execution_name}: ${status:-Pending} (${attempt}/60)"
+            echo "Waiting for migration execution ${execution_name}: ${status:-Pending} (${attempt}/120)"
             sleep 10
           done
 

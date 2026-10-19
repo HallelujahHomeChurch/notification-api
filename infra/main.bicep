@@ -405,7 +405,8 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = {
     workloadProfileName: 'Consumption'
     configuration: {
       triggerType: 'Manual'
-      replicaTimeout: 300
+      // ACA startup and completion reporting share this deadline with migration execution.
+      replicaTimeout: 900
       replicaRetryLimit: 1
       manualTriggerConfig: {
         parallelism: 1
