@@ -365,7 +365,11 @@ delivery:
 
 - email verification: 24 hours;
 - password reset: 1 hour;
-- OAuth account-link confirmation: 15 minutes.
+- OAuth account-link confirmation: 15 minutes;
+- OAuth onboarding code v4: 30 minutes, capped by the caller's original absolute
+  `expiresAt`. When `payload.expiresAt` is supplied it must match that deadline;
+  email content displays the absolute UTC timestamp. Older callers may omit it
+  and retain the 30-minute wording. Historical template versions remain immutable.
 
 The migration backfills existing rows from their original `created_at` and
 keeps a conservative 15-minute database default for rows written by a previous
@@ -487,7 +491,8 @@ actionable worker signal.
 Also alert on a non-`Active` queue outside an approved maintenance window and
 on an API/worker latest revision that is not the latest ready revision.
 
-The API enforces recipient limits of one message per 15 minutes and five per
+The API enforces recipient limits per caller/template/target of one message per
+15-minute fixed window (3 minutes for `account.oauth-onboarding-code`) and five per
 24 hours, plus `NOTIFICATION_TEMPLATE_DAILY_LIMIT` per caller/template/day
 (default `1000`). Tune the template-wide limit from observed legitimate volume;
 do not remove it to accommodate a burst.

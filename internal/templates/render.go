@@ -89,6 +89,24 @@ func RenderEmail(definition Definition, locale, to string, payload map[string]st
 		return renderOAuthOnboardingCodeEmail(locale, to, validated["code"], validated["provider"]), nil
 	case canonical.ID == "account.oauth-onboarding-code" && canonical.Version == 3:
 		return renderOAuthOnboardingCodeEmailV3(locale, to, validated["code"], validated["provider"]), nil
+	case canonical.ID == "account.oauth-onboarding-code" && canonical.Version == 4:
+		expiry := "The code expires in 30 minutes."
+		if locale == "zh-Hant" {
+			expiry = "驗證碼將於 30 分鐘後失效。"
+		}
+		if locale == "zh-Hans" {
+			expiry = "验证码将在 30 分钟后失效。"
+		}
+		if deadline := validated["expiresAt"]; deadline != "" {
+			expiry = "The code expires at " + deadline + "."
+			if locale == "zh-Hant" {
+				expiry = "驗證碼有效至 " + deadline + "。"
+			}
+			if locale == "zh-Hans" {
+				expiry = "验证码有效至 " + deadline + "。"
+			}
+		}
+		return renderOAuthOnboardingCodeEmailWithExpiry(locale, to, validated["code"], validated["provider"], expiry), nil
 	case canonical.ID == "engagement.newsletter" && canonical.Version == 1:
 		return renderNewsletterEmail(locale, to, validated), nil
 	case canonical.ID == "engagement.newsletter" && canonical.Version == 2:
@@ -276,20 +294,31 @@ func renderOAuthLinkConfirmationEmail(locale, to, confirmURL, provider string) E
 }
 
 func renderOAuthOnboardingCodeEmail(locale, to, code, provider string) Email {
+	expiry := "The code expires in 10 minutes."
+	if locale == "zh-Hant" {
+		expiry = "驗證碼將於 10 分鐘後失效。"
+	}
+	if locale == "zh-Hans" {
+		expiry = "验证码将在 10 分钟后失效。"
+	}
+	return renderOAuthOnboardingCodeEmailWithExpiry(locale, to, code, provider, expiry)
+}
+
+func renderOAuthOnboardingCodeEmailWithExpiry(locale, to, code, provider, expiry string) Email {
 	providerName := map[string]string{"google": "Google", "line": "LINE", "microsoft": "Microsoft"}[provider]
-	var subject, church, heading, message, expiry, footer string
+	var subject, church, heading, message, footer string
 	switch locale {
 	case "zh-Hant":
 		subject, church, heading = "驗證您的 HHC 帳戶 Email", "哈利路亞家教會", "輸入驗證碼"
-		message, expiry = "使用以下驗證碼完成 "+providerName+" 登入的 Email 驗證。", "驗證碼將於 10 分鐘後失效。"
+		message = "使用以下驗證碼完成 " + providerName + " 登入的 Email 驗證。"
 		footer = "請勿將驗證碼提供給他人。如果您沒有進行此操作，可以忽略這封信。"
 	case "zh-Hans":
 		subject, church, heading = "验证您的 HHC 帐户 Email", "哈利路亚家教会", "输入验证码"
-		message, expiry = "使用以下验证码完成 "+providerName+" 登录的 Email 验证。", "验证码将在 10 分钟后失效。"
+		message = "使用以下验证码完成 " + providerName + " 登录的 Email 验证。"
 		footer = "请勿将验证码提供给他人。如果您没有进行此操作，可以忽略这封邮件。"
 	default:
 		subject, church, heading = "Verify your HHC account email", "Hallelujah Home Church", "Enter verification code"
-		message, expiry = "Use this code to verify the email for your "+providerName+" sign-in.", "The code expires in 10 minutes."
+		message = "Use this code to verify the email for your " + providerName + " sign-in."
 		footer = "Do not share this code. If you did not make this request, you can ignore this email."
 	}
 	body := message + "\n\n" + code + "\n\n" + expiry + " " + footer + "\n"

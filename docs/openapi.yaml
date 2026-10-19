@@ -254,6 +254,13 @@ components:
           type: string
           description: >-
             Registered template identifier allowed for the authenticated caller.
+            account.oauth-onboarding-code v4 accepts code, provider, and optional
+            payload.expiresAt (RFC3339 absolute code deadline). When supplied it must
+            match the top-level expiresAt, and the email displays that absolute deadline.
+            Omission retains a 30-minute expiry message for older callers.
+            Delivery TTL is capped at 30 minutes; recipient admission is one per
+            3-minute fixed window and five per 24 hours. Other templates retain
+            their existing admission limits.
             Account-only email-correction v1 templates: account.email-correction-verify
             (verifyUrl, mandatory expiresAt, 30-minute delivery TTL),
             account.email-correction-security-notice (actionUrl),

@@ -189,6 +189,16 @@ func (s *Service) Send(
 		subjectHashKeyID = s.config.ActiveHashKeyID
 	}
 
+	rateLimits := s.config.RateLimits
+	if definition.ID == "account.oauth-onboarding-code" {
+		rateLimits = append([]store.RateLimit(nil), rateLimits...)
+		for i, limit := range rateLimits {
+			if !limit.TemplateWide && limit.Window == 15*time.Minute && limit.Maximum == 1 {
+				rateLimits[i].Window = 3 * time.Minute
+			}
+		}
+	}
+
 	created, err := s.repository.Create(ctx, store.CreateParams{
 		MessageID:         messageID,
 		DeliveryID:        uuid.NewString(),
@@ -214,7 +224,7 @@ func (s *Service) Send(
 		ResourceID:        request.Resource.ID,
 		EligibilityRef:    request.EligibilityRef,
 		Provider:          provider,
-		RateLimits:        s.config.RateLimits,
+		RateLimits:        rateLimits,
 		ExpiresAfter:      definition.TTL,
 		ExpiresAt:         request.ExpiresAt,
 	})
