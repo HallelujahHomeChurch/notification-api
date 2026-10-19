@@ -652,3 +652,16 @@ The shared budget is for this Notification database's SMTP provider. Other clien
 Before a campaign replay, reconcile the original Internet Message-ID with provider acceptance. `safeToRetry=false` or missing is never permission to resend. This includes legacy history, DATA transport uncertainty and abandoned/incomplete attempt starts. Do not use the generic SQL DLQ replay above for campaign messages: a terminal failed Engagement recipient will fail final eligibility. Use an approved safe recipient allow-list through Engagement, retaining consent, publication, expiry and entitlement checks. Reopening a generation changes the Internet Message-ID; that header does not guarantee deduplication. A provider support reconciliation does not by itself modify legacy safety flags. Any manually reviewed recovery requires a separate bounded preview/approval.
 
 Per-attempt metadata is in `notification_email_attempts`: delivery/attempt IDs, timestamps, bulk classification, outcome, stage, SMTP/enhanced numeric codes. `started` is conservatively uncertain until a durable outcome exists. No raw response, target or payload belongs in logs/evidence.
+
+### Template reader and writer release order
+
+The release workflow updates the worker image first, verifies its ready image,
+and waits for the previous worker replicas to drain before the API can persist
+new template versions. If the API rollout fails after the reader is ready,
+rollback restores the previous API and retains the compatible worker: it must
+still settle messages already persisted with the new version.
+
+Deploy Notification v4 support before Account supplies OAuth `payload.expiresAt`.
+For a later manual rollback, restore the older Account payload contract before
+rolling back Notification API. Keep a v4-capable worker until every v4 message is
+terminal; do not restore a worker that cannot render persisted versions.
