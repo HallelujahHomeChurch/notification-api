@@ -146,12 +146,10 @@ assert_contains "${bicep}" 'NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID' "active encry
 assert_contains "${bicep}" 'NOTIFICATION_ENCRYPTION_KEYS_JSON' "encryption keyring is missing"
 assert_contains "${bicep}" 'NOTIFICATION_ACTIVE_HASH_KEY_ID' "active hash key ID is missing"
 assert_contains "${bicep}" 'NOTIFICATION_HASH_KEYS_JSON' "hash keyring is missing"
-[[ "$(grep -Fc "cpu: json('0.5')" "${bicep}")" == "1" &&
-   "$(grep -Fc "memory: '1Gi'" "${bicep}")" == "1" &&
-   "$(grep -Fc "cpu: json('0.25')" "${bicep}")" == "2" &&
-   "$(grep -Fc "memory: '0.5Gi'" "${bicep}")" == "2" ]] ||
-  fail "API and migration must use 0.25 CPU / 0.5Gi; worker stays at 0.5 CPU / 1Gi"
-assert_contains "${bicep}" "(?s)resource worker .*?cpu: json\\('0.5'\\).*?memory: '1Gi'.*?maxReplicas: 5" "worker resources and queue scale must remain unchanged"
+[[ "$(grep -Fc "cpu: json('0.25')" "${bicep}")" == "3" &&
+   "$(grep -Fc "memory: '0.5Gi'" "${bicep}")" == "3" ]] ||
+  fail "API, worker and migration must use 0.25 CPU / 0.5Gi"
+assert_contains "${bicep}" "(?s)resource worker .*?cpu: json\\('0.25'\\).*?memory: '0.5Gi'.*?minReplicas: 1.*?maxReplicas: 5.*?type: 'azure-servicebus'" "worker must use 0.25 CPU / 0.5Gi while retaining warm queue scaling"
 [[ "$(grep -Fc '@minLength(71)' "${bicep}")" == "1" &&
    "$(grep -Fc '@maxLength(71)' "${bicep}")" == "1" &&
    "$(grep -Fc 'param imageDigest string' "${bicep}")" == "1" ]] ||
