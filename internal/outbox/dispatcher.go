@@ -177,7 +177,8 @@ func (s postgresStore) claimNext(ctx context.Context, lease time.Duration) (clai
 	err = tx.QueryRowContext(ctx, `
 		SELECT outbox.id, delivery.id, message.id,
 		       EXTRACT(EPOCH FROM GREATEST(
-		           clock_timestamp()-outbox.created_at,
+		           clock_timestamp()-CASE WHEN outbox.status='pending' THEN outbox.next_attempt_at
+                       ELSE COALESCE(outbox.lease_expires_at,outbox.created_at) END,
 		           interval '0 seconds'
 		       ))::bigint,
 		       message.expires_at <= clock_timestamp()
