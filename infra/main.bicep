@@ -247,8 +247,8 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'NOTIFICATIONS_DISABLED', value: toLower(string(notificationsDisabled)) }
           ])
           resources: {
-            cpu: json('0.5')
-            memory: '1Gi'
+            cpu: json('0.25')
+            memory: '0.5Gi'
           }
           probes: [
             {
@@ -270,7 +270,19 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         pollingInterval: 30
         cooldownPeriod: 300
         minReplicas: 1
-        maxReplicas: 3
+        maxReplicas: 8
+        rules: [
+          {
+            name: 'cpu-scaler'
+            custom: {
+              type: 'cpu'
+              metadata: {
+                type: 'Utilization'
+                value: '70'
+              }
+            }
+          }
+        ]
       }
     }
   }

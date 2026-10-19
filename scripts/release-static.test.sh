@@ -8,6 +8,10 @@ dockerfile="${repo_root}/Dockerfile"
 bicep="${repo_root}/infra/main.bicep"
 worker_runtime="$(sed -n '/^resource worker /,/^resource migrate /p' "${bicep}")"
 secret_bicep="${repo_root}/infra/secret-scope.bicep"
+api_scale="$(awk '/^resource api / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' "${bicep}")"
+for expected in 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '70'"; do
+  printf '%s\n' "$api_scale" | grep -Fq "$expected"
+done
 alerts_bicep="${repo_root}/infra/alerts.bicep"
 production_release="${repo_root}/infra/production-release.env"
 secret_preflight="${repo_root}/scripts/verify-secret-scope.sh"
@@ -142,11 +146,12 @@ assert_contains "${bicep}" 'NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID' "active encry
 assert_contains "${bicep}" 'NOTIFICATION_ENCRYPTION_KEYS_JSON' "encryption keyring is missing"
 assert_contains "${bicep}" 'NOTIFICATION_ACTIVE_HASH_KEY_ID' "active hash key ID is missing"
 assert_contains "${bicep}" 'NOTIFICATION_HASH_KEYS_JSON' "hash keyring is missing"
-[[ "$(grep -Fc "cpu: json('0.5')" "${bicep}")" == "2" &&
-   "$(grep -Fc "memory: '1Gi'" "${bicep}")" == "2" &&
-   "$(grep -Fc "cpu: json('0.25')" "${bicep}")" == "1" &&
-   "$(grep -Fc "memory: '0.5Gi'" "${bicep}")" == "1" ]] ||
-  fail "API and worker must remain at 0.5 CPU / 1Gi; migration at 0.25 CPU / 0.5Gi"
+[[ "$(grep -Fc "cpu: json('0.5')" "${bicep}")" == "1" &&
+   "$(grep -Fc "memory: '1Gi'" "${bicep}")" == "1" &&
+   "$(grep -Fc "cpu: json('0.25')" "${bicep}")" == "2" &&
+   "$(grep -Fc "memory: '0.5Gi'" "${bicep}")" == "2" ]] ||
+  fail "API and migration must use 0.25 CPU / 0.5Gi; worker stays at 0.5 CPU / 1Gi"
+assert_contains "${bicep}" "(?s)resource worker .*?cpu: json\\('0.5'\\).*?memory: '1Gi'.*?maxReplicas: 5" "worker resources and queue scale must remain unchanged"
 [[ "$(grep -Fc '@minLength(71)' "${bicep}")" == "1" &&
    "$(grep -Fc '@maxLength(71)' "${bicep}")" == "1" &&
    "$(grep -Fc 'param imageDigest string' "${bicep}")" == "1" ]] ||
