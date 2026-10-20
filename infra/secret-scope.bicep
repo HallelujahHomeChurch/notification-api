@@ -51,7 +51,7 @@ resource migrateIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
   name: migrateIdentityName
 }
 
-resource vault 'Microsoft.KeyVault/vaults@2024-11-01' = {
+resource vault 'Microsoft.KeyVault/vaults@2026-02-01' = {
   name: notificationVaultName
   location: location
   properties: {
@@ -79,7 +79,7 @@ resource vault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   }
 }
 
-resource databaseSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+resource databaseSecret 'Microsoft.KeyVault/vaults/secrets@2026-02-01' = {
   parent: vault
   name: 'notification-database-url'
   properties: {
@@ -87,7 +87,7 @@ resource databaseSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   }
 }
 
-resource encryptionSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+resource encryptionSecret 'Microsoft.KeyVault/vaults/secrets@2026-02-01' = {
   parent: vault
   name: 'notification-data-encryption-key'
   properties: {
@@ -95,7 +95,7 @@ resource encryptionSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   }
 }
 
-resource hashSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+resource hashSecret 'Microsoft.KeyVault/vaults/secrets@2026-02-01' = {
   parent: vault
   name: 'notification-hash-key'
   properties: {
@@ -103,7 +103,7 @@ resource hashSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   }
 }
 
-resource encryptionKeysSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+resource encryptionKeysSecret 'Microsoft.KeyVault/vaults/secrets@2026-02-01' = {
   parent: vault
   name: 'notification-encryption-keys-json'
   properties: {
@@ -111,7 +111,7 @@ resource encryptionKeysSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   }
 }
 
-resource hashKeysSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+resource hashKeysSecret 'Microsoft.KeyVault/vaults/secrets@2026-02-01' = {
   parent: vault
   name: 'notification-hash-keys-json'
   properties: {
@@ -119,7 +119,7 @@ resource hashKeysSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   }
 }
 
-resource smtpUsernameSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+resource smtpUsernameSecret 'Microsoft.KeyVault/vaults/secrets@2026-02-01' = {
   parent: vault
   name: 'notification-smtp-username'
   properties: {
@@ -127,7 +127,7 @@ resource smtpUsernameSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   }
 }
 
-resource smtpPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+resource smtpPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2026-02-01' = {
   parent: vault
   name: 'notification-smtp-password'
   properties: {
@@ -135,7 +135,7 @@ resource smtpPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   }
 }
 
-resource vapidPrivateKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+resource vapidPrivateKeySecret 'Microsoft.KeyVault/vaults/secrets@2026-02-01' = {
   parent: vault
   name: 'notification-vapid-private-key'
   properties: {
