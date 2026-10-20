@@ -28,6 +28,7 @@ func TestGovernanceKnownTemplatePayloadFieldsMatchRegistry(t *testing.T) {
 		"account.oauth-onboarding-code/1/email":            {"code", "provider"},
 		"account.oauth-onboarding-code/2/email":            {"code", "provider"},
 		"account.oauth-onboarding-code/3/email":            {"code", "provider"},
+		"account.oauth-onboarding-code/4/email":            {"code", "provider", "expiresAt"},
 		"engagement.newsletter/1/email":                    {"subject", "body", "actionUrl", "unsubscribeUrl"},
 		"engagement.newsletter/2/email":                    {"subject", "body", "actionUrl", "unsubscribeUrl", "oneClickUnsubscribeUrl"},
 		"engagement.newsletter/3/email":                    {"subject", "body", "actionUrl", "unsubscribeUrl", "oneClickUnsubscribeUrl"},
@@ -62,7 +63,7 @@ func TestResolveAccountTemplates(t *testing.T) {
 		"account.verify-email":            24 * time.Hour,
 		"account.reset-password":          time.Hour,
 		"account.oauth-link-confirmation": 15 * time.Minute,
-		"account.oauth-onboarding-code":   15 * time.Minute,
+		"account.oauth-onboarding-code":   30 * time.Minute,
 	}
 	for templateID, ttl := range ttls {
 		definition, err := Resolve(templateID, "email")
@@ -70,6 +71,9 @@ func TestResolveAccountTemplates(t *testing.T) {
 			t.Fatalf("Resolve(%q, email) error = %v", templateID, err)
 		}
 		wantVersion := 2
+		if templateID == "account.oauth-onboarding-code" {
+			wantVersion = 4
+		}
 		if definition.Version != wantVersion {
 			t.Fatalf("Resolve(%q, email).Version = %d, want %d", templateID, definition.Version, wantVersion)
 		}
@@ -97,8 +101,12 @@ func TestJapaneseAndKoreanTemplateVersionsRemainDormantUntilConsumersSelectThem(
 			if err != nil {
 				t.Fatal(err)
 			}
-			if current.Version != 2 {
-				t.Fatalf("Resolve(%q).Version = %d, want historical version 2 until a consumer selects v3", templateID, current.Version)
+			wantVersion := 2
+			if templateID == "account.oauth-onboarding-code" {
+				wantVersion = 4
+			}
+			if current.Version != wantVersion {
+				t.Fatalf("Resolve(%q).Version = %d, want %d", templateID, current.Version, wantVersion)
 			}
 			future, err := ResolveVersion(templateID, 3, channel)
 			if err != nil {

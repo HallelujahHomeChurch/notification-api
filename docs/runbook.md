@@ -365,7 +365,11 @@ delivery:
 
 - email verification: 24 hours;
 - password reset: 1 hour;
-- OAuth account-link confirmation: 15 minutes.
+- OAuth account-link confirmation: 15 minutes;
+- OAuth onboarding code v4: 30 minutes, capped by the caller's original absolute
+  `expiresAt`. When `payload.expiresAt` is supplied it must match that deadline;
+  email content displays the absolute UTC timestamp. Older callers may omit it
+  and retain the 30-minute wording. Historical template versions remain immutable.
 
 The migration backfills existing rows from their original `created_at` and
 keeps a conservative 15-minute database default for rows written by a previous
@@ -490,7 +494,8 @@ actionable worker signal.
 Also alert on a non-`Active` queue outside an approved maintenance window and
 on an API/worker latest revision that is not the latest ready revision.
 
-The API enforces recipient limits of one message per 15 minutes and five per
+The API enforces recipient limits per caller/template/target of one message per
+15-minute fixed window (3 minutes for `account.oauth-onboarding-code`) and five per
 24 hours, plus `NOTIFICATION_TEMPLATE_DAILY_LIMIT` per caller/template/day
 (default `1000`). Tune the template-wide limit from observed legitimate volume;
 do not remove it to accommodate a burst.
@@ -650,3 +655,16 @@ The shared budget is for this Notification database's SMTP provider. Other clien
 Before a campaign replay, reconcile the original Internet Message-ID with provider acceptance. `safeToRetry=false` or missing is never permission to resend. This includes legacy history, DATA transport uncertainty and abandoned/incomplete attempt starts. Do not use the generic SQL DLQ replay above for campaign messages: a terminal failed Engagement recipient will fail final eligibility. Use an approved safe recipient allow-list through Engagement, retaining consent, publication, expiry and entitlement checks. Reopening a generation changes the Internet Message-ID; that header does not guarantee deduplication. A provider support reconciliation does not by itself modify legacy safety flags. Any manually reviewed recovery requires a separate bounded preview/approval.
 
 Per-attempt metadata is in `notification_email_attempts`: delivery/attempt IDs, timestamps, bulk classification, outcome, stage, SMTP/enhanced numeric codes. `started` is conservatively uncertain until a durable outcome exists. No raw response, target or payload belongs in logs/evidence.
+
+### Template reader and writer release order
+
+The release workflow updates the worker image first, verifies its ready image,
+and waits for the previous worker replicas to drain before the API can persist
+new template versions. If the API rollout fails after the reader is ready,
+rollback restores the previous API and retains the compatible worker: it must
+still settle messages already persisted with the new version.
+
+Deploy Notification v4 support before Account supplies OAuth `payload.expiresAt`.
+For a later manual rollback, restore the older Account payload contract before
+rolling back Notification API. Keep a v4-capable worker until every v4 message is
+terminal; do not restore a worker that cannot render persisted versions.

@@ -165,6 +165,12 @@ var definitions = map[string]map[int]Definition{
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"),
 			TTL:             15 * time.Minute,
 		},
+		4: {
+			ID: "account.oauth-onboarding-code", Version: 4, Channel: "email",
+			AllowedCallers: set("account-api"), RequiredFields: set("code", "provider"),
+			AllowedFields:   set("code", "provider", "expiresAt"),
+			SupportedLocale: set("zh-Hant", "zh-Hans", "en"), TTL: 30 * time.Minute,
+		},
 	},
 	"engagement.newsletter": {
 		1: {
@@ -241,7 +247,7 @@ var currentVersions = map[string]int{
 	"account.verify-email":            2,
 	"account.reset-password":          2,
 	"account.oauth-link-confirmation": 2,
-	"account.oauth-onboarding-code":   2,
+	"account.oauth-onboarding-code":   4,
 	"engagement.newsletter":           2,
 	"engagement.web-push":             2,
 }
@@ -294,6 +300,14 @@ func Validate(definition Definition, caller string, request contracts.SendReques
 			}
 		}
 	}
+	if canonical.ID == "account.oauth-onboarding-code" && canonical.Version == 4 {
+		if value, ok := request.Payload["expiresAt"]; ok {
+			deadline, err := time.Parse(time.RFC3339Nano, value)
+			if err != nil || deadline.IsZero() || request.ExpiresAt == nil || !deadline.Equal(*request.ExpiresAt) {
+				return nil, fmt.Errorf("%w: code expiry must match delivery expiresAt", ErrInvalidPayload)
+			}
+		}
+	}
 	return validatePayload(canonical, request.Payload)
 }
 
@@ -302,6 +316,14 @@ func validatePayload(definition Definition, payload map[string]string) (map[stri
 	for key, value := range payload {
 		if !definition.AllowedFields[key] {
 			return nil, fmt.Errorf("%w: unexpected field %q", ErrInvalidPayload, key)
+		}
+		if key == "expiresAt" {
+			deadline, err := time.Parse(time.RFC3339Nano, value)
+			if err != nil || deadline.IsZero() {
+				return nil, fmt.Errorf("%w: invalid code expiry", ErrInvalidPayload)
+			}
+			validated[key] = deadline.UTC().Format(time.RFC3339Nano)
+			continue
 		}
 		if key == "provider" {
 			if value != "google" && value != "line" && value != "microsoft" {

@@ -591,33 +591,8 @@ jobs:
           echo "Migration execution ${execution_name} did not succeed before timeout" >&2
           exit 1
 
-      - name: Deploy API and worker
+      - name: Deploy worker reader before API writer
         id: deploy_runtime
-        shell: bash
-        run: |
-          az deployment group create \
-            --name "notification-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --resource-group "${RESOURCE_GROUP}" \
-            --template-file infra/main.bicep \
-            --parameters \
-              imageDigest="${IMAGE_DIGEST}" \
-              notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
-              deployRuntime=true \
-              provisionPermissions=false \
-              smtpAddr="${SMTP_ADDR}" \
-              smtpFrom="${SMTP_FROM}" \
-              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
-              vapidPublicKey="${VAPID_PUBLIC_KEY}" \
-              vapidSubject="${VAPID_SUBJECT}" \
-              notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
-              notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
-              activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
-              activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
-            --only-show-errors \
-            --output none
-
-      - name: Wait for API and worker revisions
-        id: wait_runtime
         shell: bash
         run: |
           image_ref="${IMAGE_REF}"
@@ -651,6 +626,52 @@ jobs:
             echo "${app_name} did not become ready with ${image_ref}" >&2
             return 1
           }
+
+          worker_revision_mode="$(az containerapp show \
+            --resource-group "${RESOURCE_GROUP}" --name "${WORKER_APP_NAME}" \
+            --query 'properties.configuration.activeRevisionsMode' --output tsv --only-show-errors)"
+          [[ "${worker_revision_mode}" == "Single" ]] || { echo "Worker reader rollout requires Single revision mode" >&2; exit 1; }
+
+          az containerapp update \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${WORKER_APP_NAME}" \
+            --image "${IMAGE_REF}" \
+            --only-show-errors --output none
+          wait_for_revision "${WORKER_APP_NAME}"
+          for attempt in {1..60}; do
+            old_replicas="$(az containerapp replica list \
+              --resource-group "${RESOURCE_GROUP}" \
+              --name "${WORKER_APP_NAME}" \
+              --revision "${PREVIOUS_WORKER_REVISION}" \
+              --query 'length(@)' --output tsv --only-show-errors)"
+            if [[ "${PREVIOUS_WORKER_IMAGE}" == "${IMAGE_REF}" || "${old_replicas}" == "0" ]]; then
+              break
+            fi
+            [[ "${attempt}" != "60" ]] || { echo "Previous worker has not drained" >&2; exit 1; }
+            sleep 10
+          done
+          echo "WORKER_READER_READY=true" >> "${GITHUB_ENV}"
+
+          az deployment group create \
+            --name "notification-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --template-file infra/main.bicep \
+            --parameters \
+              imageDigest="${IMAGE_DIGEST}" \
+              notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
+              deployRuntime=true \
+              provisionPermissions=false \
+              smtpAddr="${SMTP_ADDR}" \
+              smtpFrom="${SMTP_FROM}" \
+              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
+              vapidPublicKey="${VAPID_PUBLIC_KEY}" \
+              vapidSubject="${VAPID_SUBJECT}" \
+              notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
+              notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
+              activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
+              activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
+            --only-show-errors \
+            --output none
 
           wait_for_revision "${API_APP_NAME}"
           wait_for_revision "${WORKER_APP_NAME}"
@@ -755,7 +776,11 @@ jobs:
 
           rollback_status=0
           rollback "${API_APP_NAME}" "${PREVIOUS_API_REVISION}" "${PREVIOUS_API_IMAGE}" || rollback_status=1
-          rollback "${WORKER_APP_NAME}" "${PREVIOUS_WORKER_REVISION}" "${PREVIOUS_WORKER_IMAGE}" || rollback_status=1
+          if [[ "${WORKER_READER_READY:-false}" != "true" ]]; then
+            rollback "${WORKER_APP_NAME}" "${PREVIOUS_WORKER_REVISION}" "${PREVIOUS_WORKER_IMAGE}" || rollback_status=1
+          else
+            echo "Keeping compatible worker reader to settle persisted template versions"
+          fi
           exit "${rollback_status}"
 
   publish_openapi:
