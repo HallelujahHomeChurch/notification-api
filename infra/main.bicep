@@ -65,11 +65,11 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing =
   name: containerRegistryName
 }
 
-resource vault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
+resource vault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: notificationVaultName
 }
 
-resource legacyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
+resource legacyVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: legacyVaultName
 }
 
