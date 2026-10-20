@@ -10,6 +10,16 @@
 - Never deploy an unmerged local commit or replace the CI/CD path with an ad hoc production command.
 - If deployment fails, preserve the last healthy revision, report the failure, and use the repository rollback path.
 
+## Architecture and local verification
+
+- Private durable provider-delivery service for Account and Engagement. Owns idempotent notification intents, outbox/queue/retention and email/Web Push delivery; it does not own campaign audiences or account credentials.
+- `cmd/notification` selects migrate/api/worker; API and worker are separate processes. `internal/{httpapi,service,store,outbox}` admit/persist intents; `internal/{queue,worker,providers,templates}` consume and deliver. `cmd/diagnose-notification` is a separate diagnostic tool, not normal startup.
+- Read [README.md](README.md), [docs/openapi.yaml](docs/openapi.yaml), [docs/runbook.md](docs/runbook.md), [go.mod](go.mod), `internal/config` and [.github/workflows/ci.yml](.github/workflows/ci.yml). Use exported task-local configuration and `go run ./cmd/notification migrate`, then api/worker. PostgreSQL and Service Bus are mandatory; the local emulator uses SERVICEBUS_CONNECTION_STRING. Worker additionally needs SMTP/VAPID; there is no log-only delivery fallback.
+- Run `go test ./...`, `go test -tags=integration ./... -count=1` and `go vet ./...` with the CI's disposable TEST_DATABASE_URL and other test dependencies. CI also validates contracts/security/image. Provider/emulator readiness and real send acceptance are separate verification states.
+- Preserve exact callers, idempotency, stable Message-ID, quota and ambiguous-acceptance handling. Never infer exactly-once SMTP, replay historical failures or enable production cutover from a local test.
+
+The commands above are source-defined entrypoints, not a record of successful execution. Report installation, local tests, Linux startup, CI and live acceptance separately.
+
 ## Multi-repository Codex tasks
 
 - First read the checked-out `hhc-planning/AGENTS.md` and
