@@ -106,7 +106,13 @@ func (a app) run(ctx context.Context, args []string) error {
 		return runProcesses(ctx, cfg.ShutdownTimeout, components.close,
 			components.http, components.consumer)
 	default:
-		return a.migrate(ctx, cfg)
+		migrationCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		started := time.Now()
+		slog.Info("notification_migrations_started")
+		err := a.migrate(migrationCtx, cfg)
+		slog.Info("notification_migrations_finished", "success", err == nil, "duration_ms", time.Since(started).Milliseconds())
+		return err
 	}
 }
 

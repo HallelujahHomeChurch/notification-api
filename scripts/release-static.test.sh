@@ -9,13 +9,9 @@ bicep="${repo_root}/infra/main.bicep"
 worker_runtime="$(sed -n '/^resource worker /,/^resource migrate /p' "${bicep}")"
 secret_bicep="${repo_root}/infra/secret-scope.bicep"
 api_scale="$(awk '/^resource api / { in_api = 1; next } in_api && /^resource / { exit } in_api { print }' "${bicep}")"
-for expected in 'minReplicas: 1' 'maxReplicas: 3'; do
+for expected in 'minReplicas: 1' 'maxReplicas: 8' "name: 'cpu-scaler'" "type: 'cpu'" "type: 'Utilization'" "value: '70'"; do
   printf '%s\n' "$api_scale" | grep -Fq "$expected"
 done
-if printf '%s\n' "$api_scale" | grep -Fq "name: 'cpu-scaler'"; then
-  echo 'downsize-only batch must not add an API CPU scaler' >&2
-  exit 1
-fi
 alerts_bicep="${repo_root}/infra/alerts.bicep"
 production_release="${repo_root}/infra/production-release.env"
 secret_preflight="${repo_root}/scripts/verify-secret-scope.sh"
@@ -121,6 +117,13 @@ assert_contains "${workflow}" 'provisionPermissions=false' "CI must not provisio
 assert_contains "${workflow}" 'deployRuntime=false' "migration-only deployment is missing"
 assert_contains "${workflow}" 'az containerapp job start' "migration job is not started"
 assert_contains "${workflow}" 'Succeeded' "migration success is not enforced"
+# Include ACA cold start and completion reporting in the migration deadline.
+migration_timeout="$(sed -n '/^resource migrate /,$p' "${bicep}" | sed -n 's/.*replicaTimeout: \([0-9]*\).*/\1/p')"
+[[ "${migration_timeout}" -ge 600 ]] || fail "migration deadline must allow the observed five-minute cold start plus completion reporting"
+migration_wait="$(sed -n '/      - name: Run migrations/,/      - name: Deploy worker reader/p' "${workflow}")"
+migration_polls="$(sed -n 's/.*for attempt in {1\.\.\([0-9]*\)};.*/\1/p' <<< "${migration_wait}")"
+migration_poll_seconds="$(sed -n 's/.*sleep \([0-9]*\)/\1/p' <<< "${migration_wait}")"
+[[ $((migration_polls * migration_poll_seconds)) -ge $((migration_timeout + 120)) ]] || fail "migration polling must outlast the replica deadline and completion reporting"
 assert_contains "${workflow}" 'deployRuntime=true' "runtime deployment is missing"
 assert_contains "${workflow}" '(?s)id: deploy_runtime.*?az containerapp update.*?wait_for_revision "\$\{WORKER_APP_NAME\}".*?az containerapp replica list.*?WORKER_READER_READY=true.*?az deployment group create.*?wait_for_revision "\$\{API_APP_NAME\}"' "worker reader must be ready and previous worker drained before API emits new template versions"
 assert_contains "${workflow}" 'if \[\[ "\$\{WORKER_READER_READY:-false\}" != "true" \]\]' "rollback must retain a ready reader for already persisted template versions"

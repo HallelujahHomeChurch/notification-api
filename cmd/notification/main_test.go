@@ -91,7 +91,11 @@ func TestRunMigrateRunsOnceAndExits(t *testing.T) {
 	calls := 0
 	application := app{
 		loadConfig: testConfig,
-		migrate: func(context.Context, config.Config) error {
+		migrate: func(ctx context.Context, _ config.Config) error {
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 5*time.Minute {
+				t.Fatal("migration execution must have a five-minute deadline independent of ACA startup")
+			}
 			calls++
 			return nil
 		},

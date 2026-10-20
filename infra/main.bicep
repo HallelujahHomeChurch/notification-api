@@ -270,7 +270,19 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         pollingInterval: 30
         cooldownPeriod: 300
         minReplicas: 1
-        maxReplicas: 3
+        maxReplicas: 8
+        rules: [
+          {
+            name: 'cpu-scaler'
+            custom: {
+              type: 'cpu'
+              metadata: {
+                type: 'Utilization'
+                value: '70'
+              }
+            }
+          }
+        ]
       }
     }
   }
@@ -405,7 +417,8 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = {
     workloadProfileName: 'Consumption'
     configuration: {
       triggerType: 'Manual'
-      replicaTimeout: 300
+      // ACA startup and completion reporting share this deadline with migration execution.
+      replicaTimeout: 900
       replicaRetryLimit: 1
       manualTriggerConfig: {
         parallelism: 1

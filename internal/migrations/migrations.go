@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"time"
 )
 
 //go:embed sql/*.sql
@@ -24,7 +25,12 @@ func Run(ctx context.Context, db *sql.DB) error {
 	if _, err := connection.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('hhc_notification_api_migrations'))`); err != nil {
 		return err
 	}
-	defer connection.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext('hhc_notification_api_migrations'))`)
+	defer func() {
+		// Attempt unlock after cancellation without letting cleanup outlive the job budget.
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = connection.ExecContext(unlockCtx, `SELECT pg_advisory_unlock(hashtext('hhc_notification_api_migrations'))`)
+	}()
 	if _, err := connection.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, checksum text NOT NULL DEFAULT '', applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
