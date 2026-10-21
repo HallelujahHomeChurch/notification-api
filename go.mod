@@ -1,6 +1,6 @@
 module github.com/HallelujahHomeChurch/notification-api
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0
