@@ -146,7 +146,7 @@ assert_contains "${workflow}" '/usr/bin/wget' "gateway readiness probe must use 
 assert_contains "${workflow}" "grep -Eq 'HTTP/1" "Dapr probe must validate HTTP 200"
 assert_contains "${workflow}" "grep -Eq '\"status\"" "Dapr probe must validate the response body"
 
-assert_contains "${dockerfile}" '^FROM golang:1\.26\.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS builder$' "Go base image must use the approved multi-arch digest"
+assert_contains "${dockerfile}" '^FROM golang:1\.26\.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder$' "Go base image must use the approved multi-arch digest"
 assert_contains "${dockerfile}" '^FROM gcr\.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35$' "runtime base image must use the approved multi-arch digest"
 
 assert_contains "${bicep}" 'param provisionPermissions bool = true' "provisionPermissions must default to true"
