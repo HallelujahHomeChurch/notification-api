@@ -33,3 +33,8 @@ The commands above are source-defined entrypoints, not a record of successful ex
 - Pure human documentation uses lightweight validation. Source, workflow, runtime
   configuration, executable skills and mixed changes retain full verification.
   Record read-only inspection, test execution, CI and live acceptance separately.
+
+If no sibling planning checkout exists, use the [single-repository fallback](https://github.com/HallelujahHomeChurch/hhc-planning/blob/73ee1af2a1ff828d72421a73626f45ff4ce04a6f/docs/cloud-environments.md#single-repository-checkout)
+to read the same entry documents through authorized GitHub access at the task’s
+immutable planning revision. Record that revision; report the exact inaccessible
+target/error without expanding permissions or copying private text here.
