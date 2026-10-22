@@ -6,11 +6,13 @@ info:
     Private Dapr-invoked notification API. Callers create notification intents;
     notification-api owns durable provider delivery and status. Campaign and
     consent state remain owned by engagement-api. Email delivery is at-least-once.
-    This API is not browser-callable, and catalog access grants no API authorization.
+    Provider delivery routes are private. Inbox human routes are available only through the WWW Gateway adapter; catalog access grants no API authorization.
 servers:
   - url: /v1.0/invoke/notification-api/method
     description: Dapr sidecar invocation base available to authorized service callers only.
 tags:
+  - name: Public
+    description: WWW human inbox routes, invoked only by the authenticated Gateway.
   - name: Private
     description: Service-to-service operations invoked through Dapr.
   - name: Operations
@@ -207,6 +209,322 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/InternalErrorResponse' }
+  /api/notifications/me:
+    get:
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      operationId: listMyNotifications
+      summary: listMyNotifications
+      description: >-
+        Exact api-gateway Dapr identity and matching canonical X-HHC-User-ID/X-HHC-Principal-ID with X-HHC-Principal-Type=user. Gateway owns WWW host and CSRF policy.
+        Inbox is disabled by default until both visibility owner contracts are configured.
+        All responses are no-store. Dependency failures return unavailable without a false zero or partial count.
+      security:
+        - daprCaller: []
+      parameters:
+        - {"name": "locale", "in": "query", "description": "Display locale only; owners choose a currently authorized published edition or safe permitted fallback. Bound into the page cursor.", "schema": {"type": "string", "enum": ["zh-Hant", "zh-Hans", "en", "ja", "ko"], "default": "zh-Hant"}}
+        - {"name": "filter", "in": "query", "schema": {"type": "string", "enum": ["all", "unread"], "default": "all"}}
+        - {"name": "cursor", "in": "query", "schema": {"type": "string", "maxLength": 4096}, "description": "Signed actor/filter-bound cursor; pages scan at most 500 candidates and may be short or empty with a continuation."}
+        - {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}
+      responses:
+        '200':
+          description: Current authorized inbox result.
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxPageResponse'
+        '401':
+          description: Missing or invalid human identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '403':
+          description: Caller or principal is forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '404':
+          description: Owned item is inaccessible or absent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '409':
+          description: Logical identity conflicts with another type or resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '422':
+          description: Invalid schema, token, filter or limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '503':
+          description: Inbox is disabled or authoritative visibility/count is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+  /api/notifications/me/summary:
+    get:
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      operationId: summarizeMyNotifications
+      summary: summarizeMyNotifications
+      description: >-
+        Exact api-gateway Dapr identity and matching canonical X-HHC-User-ID/X-HHC-Principal-ID with X-HHC-Principal-Type=user. Gateway owns WWW host and CSRF policy.
+        Inbox is disabled by default until both visibility owner contracts are configured.
+        All responses are no-store. Dependency failures return unavailable without a false zero or partial count.
+      security:
+        - daprCaller: []
+      parameters:
+        - {"name": "locale", "in": "query", "description": "Display locale only; owners choose a currently authorized published edition or safe permitted fallback. Bound into the page cursor.", "schema": {"type": "string", "enum": ["zh-Hant", "zh-Hans", "en", "ja", "ko"], "default": "zh-Hant"}}
+      responses:
+        '200':
+          description: Current authorized inbox result.
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxSummaryResponse'
+        '401':
+          description: Missing or invalid human identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '403':
+          description: Caller or principal is forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '404':
+          description: Owned item is inaccessible or absent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '409':
+          description: Logical identity conflicts with another type or resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '422':
+          description: Invalid schema, token, filter or limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '503':
+          description: Inbox is disabled or authoritative visibility/count is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+  /api/notifications/me/{id}/read:
+    post:
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      operationId: readMyNotification
+      summary: readMyNotification
+      description: >-
+        Exact api-gateway Dapr identity and matching canonical X-HHC-User-ID/X-HHC-Principal-ID with X-HHC-Principal-Type=user. Gateway owns WWW host and CSRF policy.
+        Inbox is disabled by default until both visibility owner contracts are configured.
+        All responses are no-store. Dependency failures return unavailable without a false zero or partial count.
+      security:
+        - daprCaller: []
+      parameters:
+        - {"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}
+      responses:
+        '200':
+          description: Current authorized inbox result.
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxReadResponse'
+        '401':
+          description: Missing or invalid human identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '403':
+          description: Caller or principal is forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '404':
+          description: Owned item is inaccessible or absent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '409':
+          description: Logical identity conflicts with another type or resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '422':
+          description: Invalid schema, token, filter or limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '503':
+          description: Inbox is disabled or authoritative visibility/count is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+  /api/notifications/me/read-all:
+    post:
+      tags: [Public]
+      x-hhc-visibility: public
+      x-hhc-callers: [api-gateway]
+      operationId: readAllMyNotifications
+      summary: readAllMyNotifications
+      description: >-
+        Exact api-gateway Dapr identity and matching canonical X-HHC-User-ID/X-HHC-Principal-ID with X-HHC-Principal-Type=user. Gateway owns WWW host and CSRF policy.
+        Inbox is disabled by default until both visibility owner contracts are configured.
+        All responses are no-store. Dependency failures return unavailable without a false zero or partial count.
+      security:
+        - daprCaller: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboxReadAll'
+      responses:
+        '200':
+          description: Current authorized inbox result.
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxReadResponse'
+        '401':
+          description: Missing or invalid human identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '403':
+          description: Caller or principal is forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '404':
+          description: Owned item is inaccessible or absent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '409':
+          description: Logical identity conflicts with another type or resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '422':
+          description: Invalid schema, token, filter or limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '503':
+          description: Inbox is disabled or authoritative visibility/count is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+  /priv/notifications/inbox/batch:
+    post:
+      tags: [Private]
+      x-hhc-visibility: private
+      x-hhc-callers: [operations-api, engagement-api]
+      operationId: acceptInboxBatch
+      summary: acceptInboxBatch
+      description: >-
+        Exact configured OPERATIONS_APP_ID / ENGAGEMENT_APP_ID transport identity from one environment only (canonical defaults or both -test); mapped to canonical producer labels before validation/storage. Human Inbox routes select exact GATEWAY_APP_ID (default api-gateway, may remain shared in test). Duplicate caller/token headers fail closed; at most 100 items and 64 KiB. Mixed expired or cleaned recipients return terminal indexed outcomes.
+        Inbox is disabled by default until both visibility owner contracts are configured.
+        All responses are no-store. Dependency failures return unavailable without a false zero or partial count.
+      security:
+        - daprCaller: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboxBatch'
+      responses:
+        '202':
+          description: Durable acceptance. Expired or cleaned outcomes are terminal skips.
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxAcceptanceResponse'
+        '401':
+          description: Missing or invalid human identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '403':
+          description: Caller or principal is forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '404':
+          description: Owned item is inaccessible or absent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '409':
+          description: Logical identity conflicts with another type or resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '422':
+          description: Invalid schema, token, filter or limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
+        '503':
+          description: Inbox is disabled or authoritative visibility/count is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboxErrorResponse'
 components:
   securitySchemes:
     daprCaller:
@@ -507,3 +825,21 @@ components:
             error:
               properties:
                 code: { const: NTF_INTERNAL }
+    InboxResource: {"oneOf":[{"type":"object","additionalProperties":false,"required":["type","id","unitId"],"properties":{"type":{"const":"org_join_request"},"id":{"type":"string","format":"uuid"},"unitId":{"type":"string","format":"uuid"}}},{"type":"object","additionalProperties":false,"required":["type","id"],"properties":{"type":{"const":"recording"},"id":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,128}$"}}},{"type":"object","additionalProperties":false,"required":["type","id","series"],"properties":{"type":{"const":"bulletin"},"id":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,128}$"},"series":{"enum":["general","children"]}}}]}
+    InboxWrite: {"type":"object","additionalProperties":false,"required":["recipientAccountId","type","logicalKey","resource","eventVersion","occurredAt"],"properties":{"recipientAccountId":{"type":"string","format":"uuid"},"type":{"enum":["org_join.requested","org_join.approved","org_join.rejected","org_join.cancelled","recording.published","bulletin.published"]},"logicalKey":{"type":"string","minLength":1,"maxLength":200},"resource":{"$ref":"#/components/schemas/InboxResource"},"eventVersion":{"type":"integer","format":"int64","minimum":1},"occurredAt":{"type":"string","format":"date-time"}}}
+    InboxBatch: {"type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{"type":"array","minItems":1,"maxItems":100,"items":{"$ref":"#/components/schemas/InboxWrite"}}}}
+    InboxAction: {"oneOf":[{"type":"object","additionalProperties":false,"required":["type","resource"],"properties":{"type":{"enum":["join_request_review","join_request_result"]},"resource":{"type":"object","additionalProperties":false,"required":["type","id","unitId"],"properties":{"type":{"const":"org_join_request"},"id":{"type":"string","format":"uuid"},"unitId":{"type":"string","format":"uuid"}}}}},{"type":"object","additionalProperties":false,"required":["type","resource"],"properties":{"type":{"const":"recording"},"resource":{"type":"object","additionalProperties":false,"required":["type","id"],"properties":{"type":{"const":"recording"},"id":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,128}$"}}}}},{"type":"object","additionalProperties":false,"required":["type","resource","locale"],"properties":{"type":{"const":"bulletin"},"resource":{"type":"object","additionalProperties":false,"required":["type","id","series"],"properties":{"type":{"const":"bulletin"},"id":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,128}$"},"series":{"enum":["general","children"]}}},"locale":{"enum":["zh-Hant","zh-Hans","en","ja","ko"]}}}]}
+    InboxProjection: {"type":"object","additionalProperties":false,"required":["titleKey","messageKey","parameters"],"properties":{"titleKey":{"type":"string","pattern":"^[a-zA-Z][a-zA-Z0-9_.-]{0,127}$"},"messageKey":{"type":"string","pattern":"^[a-zA-Z][a-zA-Z0-9_.-]{0,127}$"},"parameters":{"type":["object","null"],"maxProperties":10,"additionalProperties":{"type":"string","maxLength":500}},"action":{"$ref":"#/components/schemas/InboxAction"}}}
+    InboxItem: {"type":"object","additionalProperties":false,"required":["id","type","resource","occurredAt","projection"],"properties":{"id":{"type":"string","format":"uuid"},"type":{"type":"string"},"resource":{"$ref":"#/components/schemas/InboxResource"},"occurredAt":{"type":"string","format":"date-time"},"readAt":{"type":"string","format":"date-time"},"projection":{"$ref":"#/components/schemas/InboxProjection"}}}
+    InboxPage: {"type":"object","additionalProperties":false,"required":["items","readSnapshotToken","asOf"],"properties":{"items":{"type":"array","maxItems":50,"items":{"$ref":"#/components/schemas/InboxItem"}},"nextCursor":{"type":"string"},"readSnapshotToken":{"type":"string"},"asOf":{"type":"string","format":"date-time"}}}
+    InboxSummary: {"type":"object","additionalProperties":false,"required":["items","unreadCount","readSnapshotToken","asOf"],"properties":{"items":{"type":"array","maxItems":5,"items":{"$ref":"#/components/schemas/InboxItem"}},"unreadCount":{"type":"integer","format":"int64","minimum":0,"description":"Exact currently visible unread count, not capped at 100."},"readSnapshotToken":{"type":"string"},"asOf":{"type":"string","format":"date-time"}}}
+    InboxReadAll: {"type":"object","additionalProperties":false,"required":["snapshotToken"],"properties":{"snapshotToken":{"type":"string","maxLength":4096,"description":"Actor-bound signed committed sequence; expires 15 minutes after issuance."}}}
+    InboxRead: {"type":"object","additionalProperties":false,"required":["read"],"properties":{"read":{"const":true}}}
+    InboxAcceptance: {"type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["index","status"],"properties":{"index":{"type":"integer","minimum":0,"maximum":99},"status":{"enum":["accepted","duplicate","expired","cleaned"]},"id":{"type":"string","format":"uuid"}}}}}}
+    InboxVisibilityRequest: {"type":"object","additionalProperties":false,"required":["actorId","locale","items"],"properties":{"actorId":{"type":"string","format":"uuid"},"items":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["id","resource"],"properties":{"id":{"type":"string","format":"uuid"},"resource":{"$ref":"#/components/schemas/InboxResource"}}}},"locale":{"type":"string","enum":["zh-Hant","zh-Hans","en","ja","ko"]}}}
+    InboxVisibilityResponse: {"type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{"type":"array","maxItems":100,"items":{"type":"object","additionalProperties":false,"required":["id","visible"],"properties":{"id":{"type":"string","format":"uuid"},"visible":{"type":"boolean"},"projection":{"$ref":"#/components/schemas/InboxProjection"}}}}}}
+    InboxPageResponse: {"type":"object","additionalProperties":false,"required":["data","meta","error"],"properties":{"data":{"$ref":"#/components/schemas/InboxPage"},"meta":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"type":"string"}}},"error":{"type":"null"}}}
+    InboxSummaryResponse: {"type":"object","additionalProperties":false,"required":["data","meta","error"],"properties":{"data":{"$ref":"#/components/schemas/InboxSummary"},"meta":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"type":"string"}}},"error":{"type":"null"}}}
+    InboxAcceptanceResponse: {"type":"object","additionalProperties":false,"required":["data","meta","error"],"properties":{"data":{"$ref":"#/components/schemas/InboxAcceptance"},"meta":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"type":"string"}}},"error":{"type":"null"}}}
+    InboxReadResponse: {"type":"object","additionalProperties":false,"required":["data","meta","error"],"properties":{"data":{"$ref":"#/components/schemas/InboxRead"},"meta":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"type":"string"}}},"error":{"type":"null"}}}
+    InboxErrorResponse: {"type":"object","additionalProperties":false,"required":["data","meta","error"],"properties":{"data":{"type":"null"},"meta":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"type":"string"}}},"error":{"type":"object","additionalProperties":false,"required":["code"],"properties":{"code":{"type":"string"}}}}}

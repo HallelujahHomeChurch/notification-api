@@ -18,6 +18,7 @@ type Result struct {
 	Tombstoned         int
 	MessagesDeleted    int
 	RateBucketsDeleted int
+	InboxDeleted       int
 }
 
 type repository interface {
@@ -56,7 +57,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if result.Tombstoned+result.MessagesDeleted+result.RateBucketsDeleted > 0 {
+		if result.Tombstoned+result.MessagesDeleted+result.RateBucketsDeleted+result.InboxDeleted > 0 {
 			continue
 		}
 		timer := time.NewTimer(w.interval)
@@ -145,7 +146,17 @@ func (r postgresRepository) retain(
 	if err := tx.Commit(); err != nil {
 		return Result{}, fmt.Errorf("commit retention batch: %w", err)
 	}
+	// Inbox retention runs in a separate transaction from provider delivery retention.
+	inboxDeleted, err := r.db.ExecContext(ctx, `WITH expired AS (SELECT id FROM notification_inbox WHERE expires_at<=clock_timestamp() ORDER BY expires_at,id FOR UPDATE SKIP LOCKED LIMIT $1) DELETE FROM notification_inbox n USING expired WHERE n.id=expired.id`, batchSize)
+	if err != nil {
+		return Result{}, fmt.Errorf("delete inbox references: %w", err)
+	}
+	inboxCount, err := inboxDeleted.RowsAffected()
+	if err != nil {
+		return Result{}, err
+	}
 	return Result{
+		InboxDeleted:       int(inboxCount),
 		Tombstoned:         tombstoned,
 		MessagesDeleted:    deleted,
 		RateBucketsDeleted: rateBucketsDeleted,

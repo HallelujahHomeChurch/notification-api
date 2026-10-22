@@ -150,3 +150,43 @@ All production SMTP workers reserve a shared PostgreSQL quota slot before sendin
 Each Email claim records sanitized attempt outcomes; no target, content or raw SMTP response is copied. Campaign sends stop on unknown/incomplete acceptance for reconciliation; account messages retain the existing at-least-once retry policy. Accepted-attempt evidence recovers a failed receipt write without sending again. Attempt rows cascade with the parent delivery under existing 730-day message retention.
 
 The existing caller-scoped status GET adds `safeToRetry`. Only complete, retained, unexpired, definitively rejected Email history can return true; legacy, accepted, ambiguous or incomplete history returns false. Missing fields must be treated as false by consumers. No historical failures are replayed by this migration or worker change.
+
+## In-app inbox
+
+Inbox is independent of Email/Web Push, and disabled by default. Enable only after
+both business owners implement the bounded visibility contract and the WWW
+Gateway permits the exact human routes in `docs/openapi.yaml`:
+
+- `NOTIFICATION_INBOX_ENABLED=true`
+- `NOTIFICATION_INBOX_OPERATIONS_VISIBILITY_URL`: Dapr invocation URL ending in `/priv/operations/inbox-visibility`
+- `NOTIFICATION_INBOX_WEBSITE_VISIBILITY_URL`: Dapr invocation URL ending in `/priv/website/inbox-visibility`
+
+The existing hash-key ring signs purpose-separated actor-bound cursors and
+15-minute read snapshots. No additional secret is required. If the local Dapr
+sidecar uses API-token authentication, its existing `DAPR_API_TOKEN` is attached
+to visibility calls. URLs must point to the authenticated local sidecar, which
+injects the Notification caller identity at the owner; direct unauthenticated
+business-service URLs are not supported deployment configurations.
+
+Select exact producer transport IDs with `OPERATIONS_APP_ID` and `ENGAGEMENT_APP_ID`
+(defaults `operations-api` / `engagement-api`; test selects both `-test` IDs).
+Only that selected environment is accepted. `GATEWAY_APP_ID` defaults to
+`api-gateway` and may explicitly stay shared in test. Transport producer IDs map
+to canonical `operations-api` / `engagement-api` labels before domain validation
+and storage. The inbox producer accepts only these exact Dapr identities and returns indexed `accepted`, `duplicate`, `expired`, or
+`cleaned` outcomes after transaction commit. Only the first two represent a
+durable reminder; the last two are terminal skips. Original events expire after
+90 days. Owner titles and typed actions are validated on every read and are never
+stored. Pages scan at most 500 candidates; follow `nextCursor` even for a short or
+empty page. Exact summary counts have a separate deadline and fail unavailable
+if incomplete; full-page reads do not require a successful count.
+
+Private owner visibility payloads are `{actorId,locale,items:[{id,resource}]}` (max 100),
+and responses `{items:[{id,visible,projection?}]}`; existing `data` envelopes are
+unwrapped. Owners must return exactly one decision for every input. Projection
+and action schemas are recorded in OpenAPI. All inbox responses use the existing
+`{data,meta:{requestId},error}` envelope and `Cache-Control: no-store`.
+
+List and summary accept optional `locale` from the five product locales, default
+`zh-Hant`. Locale affects presentation only and never grants edition access; it
+is carried to the business owner and bound into pagination cursors.

@@ -19,6 +19,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/eligibilityclient"
 	"github.com/HallelujahHomeChurch/notification-api/internal/httpapi"
+	"github.com/HallelujahHomeChurch/notification-api/internal/inbox"
 	"github.com/HallelujahHomeChurch/notification-api/internal/logging"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/outbox"
@@ -202,6 +203,10 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		cfg.AllowDevCallerHeader,
 		accountcleanup.New(db, cfg.HashKeys),
 	)
+	if cfg.InboxEnabled {
+		checker := inbox.NewVisibilityClient(cfg.InboxOperationsVisibilityURL, cfg.InboxWebsiteVisibilityURL, cfg.DaprAPIToken)
+		handler = httpapi.WithInbox(handler, inbox.NewService(inbox.NewStore(db), checker, cfg.ActiveHashKeyID, cfg.HashKeys), cfg.InboxCallers)
+	}
 	dispatcher := outbox.New(db, publisher)
 	retentionWorker := retention.New(db)
 

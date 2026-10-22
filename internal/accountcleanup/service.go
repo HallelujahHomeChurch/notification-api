@@ -94,6 +94,18 @@ func (s *Service) eraseIdempotent(ctx context.Context, userID, email, idempotenc
 			return result, tx.Commit()
 		}
 	}
+	// The existing subject advisory lock fences inbox producers in the same transaction.
+	inboxResult, err := tx.ExecContext(ctx, `DELETE FROM notification_inbox WHERE recipient_account_id=$1`, userID)
+	if err != nil {
+		return AccountCleanupResult{}, err
+	}
+	inboxAffected, err := inboxResult.RowsAffected()
+	if err != nil {
+		return AccountCleanupResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM inbox_recipient_state WHERE recipient_account_id=$1`, userID); err != nil {
+		return AccountCleanupResult{}, err
+	}
 	if err := lockDeliveries(ctx, tx, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes); err != nil {
 		return AccountCleanupResult{}, err
 	}
@@ -126,7 +138,7 @@ func (s *Service) eraseIdempotent(ctx context.Context, userID, email, idempotenc
 	if unattributedLegacy != 0 {
 		reasons = append(reasons, "legacy_unattributed_notifications")
 	}
-	cleanupResult := AccountCleanupResult{Owner: owner, Status: status, RecordCount: affected, RemainingCount: remaining, ReasonCodes: reasons}
+	cleanupResult := AccountCleanupResult{Owner: owner, Status: status, RecordCount: affected + inboxAffected, RemainingCount: remaining, ReasonCodes: reasons}
 	if idempotencyKey != "" && cleanupResult.Status == "completed" {
 		encoded, err := json.Marshal(cleanupResult)
 		if err != nil {
