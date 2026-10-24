@@ -15,6 +15,7 @@ import (
 
 var ErrInvalidEvent = errors.New("invalid SES feedback event")
 var ErrUnmatchedEvent = errors.New("unmatched SES feedback event")
+var ErrDeliveryInFlight = errors.New("SES delivery is in flight")
 
 type Config struct{ QueueURL, DLQURL, TopicARN, AccountID, Region, Sender, ConfigurationSet string }
 

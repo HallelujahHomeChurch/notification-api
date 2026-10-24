@@ -118,6 +118,11 @@ func TestConsumerDeletesOnlyCommittedEventsAndDoesNotLogPII(t *testing.T) {
 	if strings.Contains(log.String(), "member@example.test") || strings.Contains(log.String(), "secret-token") {
 		t.Fatal("provider data logged")
 	}
+	log.Reset()
+	c.store = handleFunc(func(context.Context, Event) error { return ErrDeliveryInFlight })
+	if err := c.Poll(context.Background()); err != nil || q.deleted != 0 || strings.Contains(log.String(), "ses_feedback_persist_failed") {
+		t.Fatal("normal in-flight feedback must retry quietly without deletion")
+	}
 	c.store = handleFunc(func(context.Context, Event) error { return nil })
 	if err := c.Poll(context.Background()); err != nil || q.deleted != 1 {
 		t.Fatal("committed event not deleted")

@@ -75,7 +75,9 @@ func (c *Consumer) Poll(ctx context.Context) error {
 		err = c.store.Handle(persistCtx, event)
 		cancel()
 		if err != nil {
-			slog.Error("ses_feedback_persist_failed")
+			if !errors.Is(err, ErrDeliveryInFlight) {
+				slog.Error("ses_feedback_persist_failed")
+			}
 			continue
 		}
 		// Delete only after durable processing; a lost delete response is safe to replay.

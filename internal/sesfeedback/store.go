@@ -31,7 +31,7 @@ func (s Store) Handle(ctx context.Context, e Event) error {
 		return err
 	}
 	if !locked {
-		return errors.New("SES delivery is in flight")
+		return ErrDeliveryInFlight
 	}
 	// Serialize the suppression decision with the sender's admission gate, never its network call.
 	if _, err = tx.ExecContext(ctx, `SELECT id FROM notification_email_budget WHERE id=true FOR UPDATE`); err != nil {
