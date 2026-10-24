@@ -160,7 +160,6 @@ resource isolatedEmailQueues 'Microsoft.ServiceBus/namespaces/queues@2024-01-01'
   name: name
   properties: deliveryQueueProperties
 }]
-}
 
 resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'notification-api-identity'

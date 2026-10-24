@@ -523,6 +523,28 @@ func TestIsolatedQueuesAndSESQuotaConfiguration(t *testing.T) {
 	}
 }
 
+func TestIsolatedWorkerRequiresPoolCapacityForAllLanes(t *testing.T) {
+	clearConfigEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.DatabaseURL = "postgres://localhost/notification_test"
+	cfg.DataEncryptionKey = make([]byte, 32)
+	cfg.ServiceBusNamespace = "test.servicebus.windows.net"
+	cfg.SMTPAddr, cfg.SMTPFrom = "localhost:2525", "sender@example.test"
+	cfg.VAPIDPublicKey, cfg.VAPIDPrivateKey, cfg.VAPIDSubject = "public", "private", "mailto:ops@example.test"
+	cfg.IsolatedDeliveryQueues = true
+	cfg.DBMaxOpenConns = 4
+	if err := cfg.Validate("worker"); err == nil || !strings.Contains(err.Error(), "DB_MAX_OPEN_CONNS") {
+		t.Fatalf("undersized isolated pool accepted: %v", err)
+	}
+	cfg.DBMaxOpenConns = 5
+	if err := cfg.Validate("worker"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSMTPBudgetConfigurationValidation(t *testing.T) {
 	t.Setenv("SMTP_EMAILS_PER_HOUR", "0")
 	if _, err := Load(); err == nil {

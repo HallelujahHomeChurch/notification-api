@@ -16,6 +16,41 @@ import (
 
 var testKey = bytes.Repeat([]byte{1}, 32)
 
+type deadlineProvider struct {
+	deadline time.Time
+	t        *testing.T
+}
+
+func (p deadlineProvider) Send(ctx context.Context, _ providers.DeliveryPayload) (providers.ProviderReceipt, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok || !deadline.Equal(p.deadline) {
+		p.t.Errorf("provider deadline=%s, want message expiry %s", deadline, p.deadline)
+	}
+	return providers.ProviderReceipt{Provider: "smtp"}, nil
+}
+
+func TestProviderDeadlineDoesNotExtendMessageExpiry(t *testing.T) {
+	repository := deliveryRepository(t, nil, 1)
+	expiry := time.Now().Add(5 * time.Second)
+	repository.claimResult.Claim.ExpiresAt = expiry
+	if err := newWorker(repository, deadlineProvider{expiry, t}, testKey).Process(context.Background(), &fakeMessage{id: "delivery-1"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpiredClaimNeverReachesProvider(t *testing.T) {
+	repository := deliveryRepository(t, nil, 1)
+	repository.claimResult.Claim.ExpiresAt = time.Now().Add(-time.Second)
+	provider := &fakeProvider{receipt: providers.ProviderReceipt{Provider: "smtp"}}
+	message := &fakeMessage{id: "delivery-1"}
+	if err := newWorker(repository, provider, testKey).Process(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 0 || message.deadLettered != 1 {
+		t.Fatalf("expired delivery sent: calls=%d deadletter=%d", provider.calls, message.deadLettered)
+	}
+}
+
 func TestWorkerDecryptsQueuedMessageWithRetainedKey(t *testing.T) {
 	repository := deliveryRepository(t, nil, 1)
 	repository.claimResult.Claim.EncryptionKeyID = "v1"
