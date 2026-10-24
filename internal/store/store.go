@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -174,7 +175,9 @@ func ValidateKeyReferences(
 		SELECT 'hash', subject_hash_key_id
 		FROM notification_messages
 		WHERE subject_hash_key_id IS NOT NULL
-		GROUP BY subject_hash_key_id`)
+		GROUP BY subject_hash_key_id
+		UNION SELECT 'hash',hash_key_id FROM notification_email_suppressions
+		UNION SELECT 'hash',jsonb_object_keys(target_hashes) FROM notification_messages`)
 	if err != nil {
 		return fmt.Errorf("read notification key references: %w", err)
 	}
@@ -275,17 +278,17 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 				id, caller_app_id, idempotency_key, request_hash, template_id, template_version,
 				channel, target_type, target_hash, target_ciphertext, payload_ciphertext,
 				resource_type, resource_id, eligibility_campaign_id, eligibility_recipient_id, encryption_key_id, hash_key_id,
-				subject_hash, subject_hash_key_id, expires_at, status, email_history_complete
+				subject_hash, subject_hash_key_id, expires_at, status, email_history_complete,target_hashes
 			) VALUES (
 				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-				LEAST(clock_timestamp()+($20::bigint*interval '1 microsecond'),$21::timestamptz),'queued',true
+				LEAST(clock_timestamp()+($20::bigint*interval '1 microsecond'),$21::timestamptz),'queued',true,$22::jsonb
 			)`,
 		params.MessageID, params.Caller, params.IdempotencyKey, params.RequestHash,
 		params.TemplateID, params.TemplateVersion, params.Channel, params.TargetType,
 		params.TargetHash, params.TargetCiphertext, params.PayloadCiphertext,
 		params.ResourceType, params.ResourceID, eligibilityCampaignID(params.EligibilityRef), eligibilityRecipientID(params.EligibilityRef), params.EncryptionKeyID, params.HashKeyID,
 		nullString(params.SubjectHash), nullString(params.SubjectHashKeyID),
-		params.ExpiresAfter.Microseconds(), params.ExpiresAt,
+		params.ExpiresAfter.Microseconds(), params.ExpiresAt, encodeTargetHashes(params.Channel, params.TargetHashes),
 	); err != nil {
 		if isUniqueViolation(err) {
 			_ = tx.Rollback()
@@ -479,4 +482,12 @@ func rateBucketKey(
 func isUniqueViolation(err error) bool {
 	var postgresError *pgconn.PgError
 	return errors.As(err, &postgresError) && postgresError.Code == "23505"
+}
+
+func encodeTargetHashes(channel string, hashes map[string]string) string {
+	if channel != "email" {
+		return "{}"
+	}
+	data, _ := json.Marshal(hashes)
+	return string(data)
 }

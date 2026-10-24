@@ -10,6 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
+	"github.com/HallelujahHomeChurch/notification-api/internal/sesfeedback"
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 )
 
 const (
@@ -22,6 +26,11 @@ const (
 )
 
 type Config struct {
+	SESFeedbackQueueURL        string
+	SESFeedbackTopicARN        string
+	SESFeedbackDLQURL          string
+	EmailProvider              string
+	SES                        providers.SESConfig
 	Environment                string
 	Port                       string
 	DatabaseURL                string
@@ -133,6 +142,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
+		EmailProvider:              env("EMAIL_PROVIDER", "smtp"),
+		SESFeedbackDLQURL:          os.Getenv("SES_FEEDBACK_DLQ_URL"),
+		SESFeedbackQueueURL:        os.Getenv("SES_FEEDBACK_QUEUE_URL"),
+		SESFeedbackTopicARN:        os.Getenv("SES_FEEDBACK_TOPIC_ARN"),
+		SES:                        providers.SESConfig{Region: os.Getenv("SES_REGION"), RoleARN: os.Getenv("SES_ROLE_ARN"), ManagedIdentityClientID: os.Getenv("AZURE_CLIENT_ID"), TokenScope: os.Getenv("SES_ENTRA_TOKEN_SCOPE"), From: os.Getenv("SES_FROM"), FromName: env("SMTP_FROM_NAME", "哈利路亞家教會"), ConfigurationSet: os.Getenv("SES_CONFIGURATION_SET")},
 		Environment:                env("ENVIRONMENT", EnvironmentDevelopment),
 		Port:                       env("PORT", "8081"),
 		DatabaseURL:                os.Getenv("DATABASE_URL"),
@@ -172,6 +186,9 @@ func Load() (Config, error) {
 }
 
 func (c Config) validateLoaded() error {
+	if c.EmailProvider != "" && c.EmailProvider != "smtp" && c.EmailProvider != "ses" {
+		return fmt.Errorf("EMAIL_PROVIDER must be smtp or ses")
+	}
 	if c.Environment != EnvironmentDevelopment && c.Environment != EnvironmentProduction {
 		return fmt.Errorf("ENVIRONMENT must be development or production")
 	}
@@ -211,8 +228,29 @@ func (c Config) Validate(mode string) error {
 		if err := c.validateEncryptionAndServiceBus(); err != nil {
 			return err
 		}
-		if c.SMTPAddr == "" || c.SMTPFrom == "" {
-			return fmt.Errorf("SMTP_ADDR and SMTP_FROM are required")
+		switch c.EmailProvider {
+		case "", "smtp":
+			if c.SMTPAddr == "" || c.SMTPFrom == "" {
+				return fmt.Errorf("SMTP_ADDR and SMTP_FROM are required")
+			}
+		case "ses":
+			if err := providers.ValidateSESConfig(c.SES); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("EMAIL_PROVIDER must be smtp or ses")
+		}
+		if c.SESFeedbackQueueURL != "" || c.SESFeedbackTopicARN != "" || c.SESFeedbackDLQURL != "" {
+			if err := providers.ValidateSESConfig(c.SES); err != nil {
+				return err
+			}
+			feedback, err := c.FeedbackConfig()
+			if err != nil {
+				return err
+			}
+			if err := feedback.Validate(); err != nil {
+				return err
+			}
 		}
 		if c.VAPIDPublicKey == "" || c.VAPIDPrivateKey == "" || c.VAPIDSubject == "" {
 			return fmt.Errorf("VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT are required")
@@ -430,4 +468,12 @@ func parseJSONKeyMap(name, raw string) (map[string]string, error) {
 		return nil, fmt.Errorf("%s must contain one JSON object: %w", name, err)
 	}
 	return values, nil
+}
+
+func (c Config) FeedbackConfig() (sesfeedback.Config, error) {
+	role, err := arn.Parse(c.SES.RoleARN)
+	if err != nil {
+		return sesfeedback.Config{}, err
+	}
+	return sesfeedback.Config{QueueURL: c.SESFeedbackQueueURL, DLQURL: c.SESFeedbackDLQURL, TopicARN: c.SESFeedbackTopicARN, AccountID: role.AccountID, Region: c.SES.Region, Sender: c.SES.From, ConfigurationSet: c.SES.ConfigurationSet}, nil
 }

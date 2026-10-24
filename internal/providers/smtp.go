@@ -37,6 +37,8 @@ type SMTP struct {
 	writeMessage func(io.Writer, string, string, DeliveryPayload) error
 }
 
+func (*SMTP) Family() string { return "smtp" }
+
 func NewSMTP(config SMTPConfig) *SMTP {
 	if config.Timeout <= 0 {
 		config.Timeout = defaultSMTPTimeout
@@ -147,19 +149,23 @@ func (s *SMTP) validate(payload DeliveryPayload) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return host, validateEmailPayload(payload)
+}
+
+func validateEmailPayload(payload DeliveryPayload) error {
 	if !plainAddress(payload.Recipient) {
-		return "", errors.New("invalid email address")
+		return errors.New("invalid email address")
 	}
 	if strings.ContainsAny(payload.Subject, "\r\n") {
-		return "", errors.New("invalid subject")
+		return errors.New("invalid subject")
 	}
 	if strings.ContainsAny(payload.ListUnsubscribe, "\r\n") {
-		return "", errors.New("invalid unsubscribe header")
+		return errors.New("invalid unsubscribe header")
 	}
 	if !validMessageID(payload.MessageID) {
-		return "", errors.New("invalid message ID")
+		return errors.New("invalid message ID")
 	}
-	return host, nil
+	return nil
 }
 
 func smtpHost(config SMTPConfig) (string, error) {

@@ -41,6 +41,7 @@ func (e *RateLimitError) Unwrap() error {
 }
 
 type Config struct {
+	EmailProvider         string
 	ActiveEncryptionKeyID string
 	EncryptionKeys        map[string][]byte
 	ActiveHashKeyID       string
@@ -199,6 +200,9 @@ func (s *Service) Send(
 		}
 	}
 
+	if definition.Channel == "email" && s.config.EmailProvider != "" {
+		provider = s.config.EmailProvider
+	}
 	created, err := s.repository.Create(ctx, store.CreateParams{
 		MessageID:         messageID,
 		DeliveryID:        uuid.NewString(),

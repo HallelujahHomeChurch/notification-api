@@ -18,6 +18,7 @@ const (
 )
 
 type DeliveryPayload struct {
+	DeliveryID          string
 	Recipient           string
 	Title               string
 	Subject             string
