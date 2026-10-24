@@ -118,6 +118,7 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       SES_FEEDBACK_CONFIG: ${{ vars.SES_FEEDBACK_CONFIG || 'null' }}
+      ISOLATED_DELIVERY_QUEUES: ${{ vars.NOTIFICATION_ISOLATED_QUEUES || 'false' }}
       SMTP_ADDR: ${{ vars.SMTP_ADDR }}
       SMTP_FROM: ${{ vars.SMTP_FROM }}
       SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
@@ -305,6 +306,7 @@ jobs:
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
               sesFeedback="${SES_FEEDBACK_CONFIG}" \
+              isolatedDeliveryQueues="${ISOLATED_DELIVERY_QUEUES}" \
               activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
               activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
             --no-pretty-print \
@@ -344,6 +346,7 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       SES_FEEDBACK_CONFIG: ${{ vars.SES_FEEDBACK_CONFIG || 'null' }}
+      ISOLATED_DELIVERY_QUEUES: ${{ vars.NOTIFICATION_ISOLATED_QUEUES || 'false' }}
       SMTP_ADDR: ${{ vars.SMTP_ADDR }}
       SMTP_FROM: ${{ vars.SMTP_FROM }}
       SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
@@ -517,6 +520,7 @@ jobs:
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
               sesFeedback="${SES_FEEDBACK_CONFIG}" \
+              isolatedDeliveryQueues="${ISOLATED_DELIVERY_QUEUES}" \
               activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
               activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
             --no-pretty-print \
@@ -553,6 +557,7 @@ jobs:
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
               sesFeedback="${SES_FEEDBACK_CONFIG}" \
+              isolatedDeliveryQueues="${ISOLATED_DELIVERY_QUEUES}" \
               activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
               activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
             --only-show-errors \
@@ -674,6 +679,7 @@ jobs:
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
               notificationsDisabled="${NOTIFICATIONS_DISABLED}" \
               sesFeedback="${SES_FEEDBACK_CONFIG}" \
+              isolatedDeliveryQueues="${ISOLATED_DELIVERY_QUEUES}" \
               activeEncryptionKeyID="${ACTIVE_ENCRYPTION_KEY_ID}" \
               activeHashKeyID="${ACTIVE_HASH_KEY_ID}" \
             --only-show-errors \

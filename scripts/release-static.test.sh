@@ -452,3 +452,11 @@ echo "release static test ok"
 grep -Fq "param sesFeedback SesFeedbackConfig?" "${bicep}" || fail "feedback must be optional for existing deployments"
 grep -Fq "{ name: 'EMAIL_PROVIDER', value: 'smtp' }" "${bicep}" || fail "feedback listener must preserve SMTP"
 assert_not_contains "${bicep}" "name: 'EMAIL_PROVIDER', value: 'ses'" "listener activation must not select SES sending"
+
+# The opt-in must reach both processes and every normal release phase.
+grep -Fq 'param isolatedDeliveryQueues bool = false' "${bicep}" || fail 'queue isolation must default off'
+grep -Fq "{ name: 'NOTIFICATION_ISOLATED_QUEUES', value: string(isolatedDeliveryQueues) }" "${bicep}" || fail 'shared isolation runtime setting is missing'
+grep -Fq 'resource isolatedEmailQueues' "${bicep}" || fail 'isolated queue resources are missing'
+grep -Fq 'in workerQueueNames:' "${bicep}" || fail 'all delivery queues must participate in worker scaling'
+[[ "$(grep -Fc 'isolatedDeliveryQueues="${ISOLATED_DELIVERY_QUEUES}"' "${workflow}")" == '4' ]] || fail 'all release plans and deployments must pass the same isolation setting'
+[[ "$(grep -Fc 'ISOLATED_DELIVERY_QUEUES: ${{ vars.NOTIFICATION_ISOLATED_QUEUES' "${workflow}")" == '2' ]] || fail 'plan and deploy must share the reviewed isolation variable'

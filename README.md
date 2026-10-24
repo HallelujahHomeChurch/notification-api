@@ -210,6 +210,55 @@ The resource PR and runtime configuration must be reviewed and released before
 these controls can be described as operational. This change does not enable SES,
 change pacing or implement the deferred login-security features.
 
+### Isolated delivery lanes (opt-in, not activated)
+
+`NOTIFICATION_ISOLATED_QUEUES=false` preserves the current single queue. With
+the setting enabled on both API and worker, each lane has its own outbox
+dispatcher and sequential consumer within the existing processes:
+
+| Lane | Queue name | Persisted classification |
+| --- | --- | --- |
+| Transactional email | `${SERVICEBUS_QUEUE_NAME}-transactional` | Email with a non-Engagement template |
+| Campaign email | `${SERVICEBUS_QUEUE_NAME}-bulk` | Email with an `engagement.*` template |
+| Web Push | `${SERVICEBUS_QUEUE_NAME}` | `web_push` channel |
+
+The existing caller/template allowlist determines classification; callers cannot
+request priority. A blocked campaign publisher or provider does not occupy the
+transactional or Web Push consumer. Workers require the existing five-connection
+DB pool minimum when using three lanes. This is a minimum for these consumers,
+not a production connection-budget or scale acceptance result.
+
+SMTP retains its existing minute/hour settings. SES uses separate rolling-second
+and rolling-24-hour limits: `SES_EMAILS_PER_SECOND=1`, `SES_EMAILS_PER_DAY=200`,
+`SES_TRANSACTIONAL_RESERVE_PER_SECOND=0`, and
+`SES_TRANSACTIONAL_RESERVE_PER_DAY=20` by default. Shared PostgreSQL reservations
+count rejected and unknown attempts conservatively and prevent campaigns from
+using the transactional reserve. SES attempt counts exclude SMTP attempts;
+provider cooldown remains conservative during rollback. Exhausted windows defer
+durably; a consumer can wait at most one second for short SES pacing. Expiry is
+rechecked after rendering/eligibility and bounds the provider deadline.
+
+The fake-provider acceptance profile uses 5/second and 6,000/day, reserving
+1/second and 1,000/day for transactions. This permits at most 5,000 campaign
+attempts/day. These are test/planning settings, not approved SES quotas or live
+performance. Before cutover, choose limits within the actual account/region
+headroom, including other senders; this ledger cannot observe their usage.
+
+Local acceptance uses a disposable PostgreSQL database, fake brokers and fake
+providers. It exercises a 1,000-recipient batch with every 100 submissions within
+60 seconds, an account-code submission within five seconds during the batch,
+blocked-publisher isolation, rolling reservations, expiry, 429 retries, duplicate
+delivery and conservative SMTP rollback. It does not send email or validate the
+real Service Bus/provider/inbox path. Run it with the repository integration
+suite and a loopback `TEST_DATABASE_URL`.
+
+Bicep's `isolatedDeliveryQueues` parameter defaults to false. When explicitly
+enabled later, it declares the two additional queues, passes the common runtime
+setting and scales on all three queues. The release workflow passes the reviewed
+`NOTIFICATION_ISOLATED_QUEUES` repository variable consistently to planning and
+deployment; this change does not set that variable. See the
+[activation and rollback gates](docs/runbook.md#isolated-delivery-activation-and-rollback).
+
 The migration Job now references `notification-migrate-database-url`, role `notification_migrate` (cap1).
 API and persistent-worker credentials stay separate. This configuration is a
 pending dependency: provision the capped login/secret and its narrow identity
