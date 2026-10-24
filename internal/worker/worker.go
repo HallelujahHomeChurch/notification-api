@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -456,10 +457,14 @@ func (s postgresStore) claimFenced(
 		releaseCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 		defer cancel()
 		_, unlockErr := conn.ExecContext(releaseCtx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey)
+		if unlockErr != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
 		return errors.Join(unlockErr, conn.Close())
 	}
 	var locked bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, lockKey).Scan(&locked); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		_ = conn.Close()
 		return claimResult{}, nil, err
 	}
@@ -578,7 +583,7 @@ func (s postgresStore) claimFenced(
 	}
 
 	var status string
-	err = s.db.QueryRowContext(ctx, `
+	err = conn.QueryRowContext(ctx, `
 		SELECT status
 		FROM notification_deliveries
 		WHERE id=$1`,
