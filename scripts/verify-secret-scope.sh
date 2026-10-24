@@ -70,6 +70,7 @@ verify_assignments() {
 
 for secret in \
   notification-database-url \
+  notification-migrate-database-url \
   notification-data-encryption-key \
   notification-hash-key \
   notification-encryption-keys-json \
@@ -95,6 +96,7 @@ verify_assignments "$worker_principal" \
   "${vault_id}/secrets/notification-smtp-password|${role_id}" \
   "${vault_id}/secrets/notification-vapid-private-key|${role_id}"
 verify_assignments "$migrate_principal" \
-  "${vault_id}/secrets/notification-database-url|${role_id}"
+  "${vault_id}/secrets/notification-database-url|${role_id}" \
+  "${vault_id}/secrets/notification-migrate-database-url|${role_id}"
 
 echo "notification secret scope is ready"

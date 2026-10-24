@@ -209,3 +209,10 @@ feedback ledger. See [feedback operations](docs/runbook.md#ses-feedback-operatio
 The resource PR and runtime configuration must be reviewed and released before
 these controls can be described as operational. This change does not enable SES,
 change pacing or implement the deferred login-security features.
+
+The migration Job now references `notification-migrate-database-url`, role `notification_migrate` (cap1).
+API and persistent-worker credentials stay separate. This configuration is a
+pending dependency: provision the capped login/secret and its narrow identity
+read permission with Job admission paused before release. No credentials or
+role assignments were created here; see azure-infra PR144 for the operator
+preview and inventory verification.

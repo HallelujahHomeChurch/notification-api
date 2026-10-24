@@ -65,7 +65,7 @@ case "$1 $2" in
 		secrets=(notification-database-url notification-data-encryption-key notification-encryption-keys-json notification-smtp-username notification-smtp-password notification-vapid-private-key)
         ;;
       migrate)
-        secrets=(notification-database-url)
+        secrets=(notification-database-url notification-migrate-database-url)
         ;;
     esac
     jq -nc --arg vault "$vault" --arg role "$role" --argjson extra "${MOCK_EXTRA_ROLE:-false}" \

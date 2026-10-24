@@ -56,6 +56,7 @@ var acrPullRole = subscriptionResourceId('Microsoft.Authorization/roleDefinition
 var serviceBusSenderRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
 var serviceBusReceiverRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
 var databaseSecretUrl = '${vault.properties.vaultUri}secrets/notification-database-url'
+var migrationDatabaseSecretUrl = '${vault.properties.vaultUri}secrets/notification-migrate-database-url'
 var encryptionSecretUrl = '${vault.properties.vaultUri}secrets/notification-data-encryption-key'
 var hashSecretUrl = '${vault.properties.vaultUri}secrets/notification-hash-key'
 var encryptionKeysSecretUrl = '${vault.properties.vaultUri}secrets/notification-encryption-keys-json'
@@ -457,7 +458,7 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = {
       ]
       secrets: [
         { name: 'database-url', keyVaultUrl: legacyDatabaseSecretUrl, identity: migrateIdentity.id }
-        { name: 'database-url-v2', keyVaultUrl: databaseSecretUrl, identity: migrateIdentity.id }
+        { name: 'database-url-v2', keyVaultUrl: migrationDatabaseSecretUrl, identity: migrateIdentity.id }
       ]
     }
     template: {
