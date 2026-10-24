@@ -182,10 +182,16 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		_ = db.Close()
 		return apiComponents{}, fmt.Errorf("validate notification hash keys: %w", err)
 	}
-	publisher, err := queue.NewServiceBus(serviceBusConfig(cfg))
-	if err != nil {
-		_ = db.Close()
-		return apiComponents{}, fmt.Errorf("create publisher: %w", err)
+	closers := []closeFunc{func(context.Context) error { return db.Close() }}
+	var dispatchers []process
+	for _, lane := range serviceBusQueues(cfg) {
+		publisher, err := queue.NewServiceBus(lane.config)
+		if err != nil {
+			_ = closeResources(ctx, closers)
+			return apiComponents{}, fmt.Errorf("create %s publisher: %w", lane.lane, err)
+		}
+		closers = append(closers, publisher.Close)
+		dispatchers = append(dispatchers, outbox.NewForLane(db, publisher, lane.lane).Run)
 	}
 	repository := store.NewWithHashKeys(db, cfg.HashKeys)
 	notificationService := service.New(repository, service.Config{
@@ -208,15 +214,16 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		cfg.AllowDevCallerHeader,
 		accountcleanup.New(db, cfg.HashKeys),
 	)
-	dispatcher := outbox.New(db, publisher)
 	retentionWorker := retention.New(db)
 
 	return apiComponents{
-		http:      httpProcess(cfg.Port, handler, cfg.ShutdownTimeout),
-		outbox:    dispatcher.Run,
+		http: httpProcess(cfg.Port, handler, cfg.ShutdownTimeout),
+		outbox: func(ctx context.Context) error {
+			return runProcesses(ctx, cfg.ShutdownTimeout, nil, dispatchers...)
+		},
 		retention: retentionWorker.Run,
 		close: func(ctx context.Context) error {
-			return errors.Join(publisher.Close(ctx), db.Close())
+			return closeResources(ctx, closers)
 		},
 	}, nil
 }
@@ -258,45 +265,49 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		_ = db.Close()
 		return workerComponents{}, fmt.Errorf("validate notification encryption keys: %w", err)
 	}
-	consumer, err := queue.NewServiceBusConsumer(serviceBusConfig(cfg))
-	if err != nil {
-		_ = db.Close()
-		return workerComponents{}, fmt.Errorf("create consumer: %w", err)
+	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
+		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
+	}, cfg.EncryptionKeys).WithEmailLimits(db, deliveryEmailLimits(cfg)).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
+	closers := []closeFunc{func(context.Context) error { return db.Close() }}
+	var consumers []process
+	for _, lane := range serviceBusQueues(cfg) {
+		consumer, err := queue.NewServiceBusConsumer(lane.config)
+		if err != nil {
+			_ = closeResources(ctx, closers)
+			return workerComponents{}, fmt.Errorf("create %s consumer: %w", lane.lane, err)
+		}
+		closers = append(closers, consumer.Close)
+		consumers = append(consumers, func(ctx context.Context) error {
+			return consumer.Run(ctx, deliveryWorker.Process)
+		})
 	}
 	var feedbackProcess process
 	if cfg.SESFeedbackQueueURL != "" {
 		credentials, err := providers.NewFederatedCredentials(cfg.SES)
 		if err != nil {
-			_ = consumer.Close(ctx)
-			_ = db.Close()
+			_ = closeResources(ctx, closers)
 			return workerComponents{}, err
 		}
 		feedbackConfig, err := cfg.FeedbackConfig()
 		if err != nil {
-			_ = consumer.Close(ctx)
-			_ = db.Close()
+			_ = closeResources(ctx, closers)
 			return workerComponents{}, err
 		}
 		feedback, err := sesfeedback.New(feedbackConfig, credentials, sesfeedback.Store{DB: db})
 		if err != nil {
-			_ = consumer.Close(ctx)
-			_ = db.Close()
+			_ = closeResources(ctx, closers)
 			return workerComponents{}, err
 		}
 		feedbackProcess = feedback.Run
 	}
-	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
-		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
-	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
-
 	return workerComponents{
 		feedback: feedbackProcess,
 		http:     httpProcess(cfg.Port, workerHealthHandler(db), cfg.ShutdownTimeout),
 		consumer: func(ctx context.Context) error {
-			return consumer.Run(ctx, deliveryWorker.Process)
+			return runProcesses(ctx, cfg.ShutdownTimeout, nil, consumers...)
 		},
 		close: func(ctx context.Context) error {
-			return errors.Join(consumer.Close(ctx), db.Close())
+			return closeResources(ctx, closers)
 		},
 	}, nil
 }
@@ -333,6 +344,40 @@ func serviceBusConfig(cfg config.Config) queue.ServiceBusConfig {
 		ConnectionString: cfg.ServiceBusConnectionString,
 		QueueName:        cfg.ServiceBusQueueName,
 	}
+}
+
+type deliveryQueue struct {
+	lane   queue.Lane
+	config queue.ServiceBusConfig
+}
+
+func serviceBusQueues(cfg config.Config) []deliveryQueue {
+	base := serviceBusConfig(cfg)
+	lanes := []deliveryQueue{{queue.LaneAll, base}}
+	if cfg.IsolatedDeliveryQueues {
+		lanes[0].lane = queue.LaneWebPush
+		for _, lane := range []queue.Lane{queue.LaneTransactional, queue.LaneBulk} {
+			isolated := base
+			isolated.QueueName += "-" + string(lane)
+			lanes = append(lanes, deliveryQueue{lane, isolated})
+		}
+	}
+	return lanes
+}
+
+func deliveryEmailLimits(cfg config.Config) worker.EmailLimits {
+	if cfg.EmailProvider == "ses" {
+		return worker.EmailLimits{PerSecond: cfg.SESEmailsPerSecond, PerDay: cfg.SESEmailsPerDay, ReserveSecond: cfg.SESReservePerSecond, ReserveDay: cfg.SESReservePerDay}
+	}
+	return worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}
+}
+
+func closeResources(ctx context.Context, closers []closeFunc) error {
+	var err error
+	for i := len(closers) - 1; i >= 0; i-- {
+		err = errors.Join(err, closers[i](ctx))
+	}
+	return err
 }
 
 func httpProcess(port string, handler http.Handler, timeout time.Duration) process {

@@ -43,6 +43,7 @@ type claim struct {
 	Channel                string
 	Attempt                int
 	FailureCount           int
+	ExpiresAt              time.Time
 	EncryptionKeyID        string
 	TargetCiphertext       []byte
 	PayloadCiphertext      []byte
@@ -236,6 +237,24 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 
 	if claimed.Channel == "email" && w.email != nil {
 		delay, gateErr := w.email.begin(ctx, claimed)
+		// Short SES pacing stays in its isolated lane; exhausted windows still defer durably.
+		if gateErr == nil && w.email.limits.PerSecond > 0 && delay > 0 && delay <= time.Second {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			delay, gateErr = w.email.begin(ctx, claimed)
+		}
+		if errors.Is(gateErr, errEmailExpired) {
+			if err := w.repository.markDeadLettered(ctx, claimed, "expired"); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.DeadLetter(ctx, "expired")
+		}
 		if errors.Is(gateErr, errEmailSuppressed) {
 			if err := w.repository.markSuppressed(ctx, claimed, "technical_suppression"); err != nil {
 				return err
@@ -279,13 +298,24 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 			return message.Complete(ctx)
 		}
 	}
-	providerCtx, cancel := context.WithTimeout(ctx, sendTimeout)
+	deadline := time.Now().Add(sendTimeout)
+	if !claimed.ExpiresAt.IsZero() && claimed.ExpiresAt.Before(deadline) {
+		deadline = claimed.ExpiresAt
+	}
+	providerCtx, cancel := context.WithDeadline(ctx, deadline)
 	provider, ok := w.providers[claimed.Channel]
 	if !ok {
 		cancel()
 		return fmt.Errorf("provider for channel %q is not configured", claimed.Channel)
 	}
-	receipt, providerErr := provider.Send(providerCtx, payload)
+	var receipt providers.ProviderReceipt
+	providerErr := providerCtx.Err()
+	expiredBeforeSend := providerErr != nil && !claimed.ExpiresAt.IsZero() && !claimed.ExpiresAt.After(time.Now())
+	if providerErr == nil {
+		receipt, providerErr = provider.Send(providerCtx, payload)
+	} else {
+		providerErr = &providers.ProviderError{Kind: providers.ErrorPermanent, Operation: "deadline"}
+	}
 	cancel()
 	if claimed.Channel == "email" && w.email != nil {
 		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
@@ -306,6 +336,13 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if expiredBeforeSend {
+		if err := w.repository.markDeadLettered(ctx, claimed, "expired"); err != nil {
+			return err
+		}
+		leaseHeld = false
+		return message.DeadLetter(ctx, "expired")
 	}
 
 	kind, retryable, retryAfter := classifyProviderError(providerErr)
@@ -546,7 +583,7 @@ func (s postgresStore) claimFenced(
 		FROM candidate, notification_messages AS message
 		WHERE delivery.id=candidate.id AND message.id=delivery.message_id
 			RETURNING delivery.id, message.id, message.template_id, message.template_version,
-			          delivery.channel, delivery.attempt_count, delivery.failure_count,
+			          delivery.channel, delivery.attempt_count, delivery.failure_count, message.expires_at,
 			          message.encryption_key_id, message.target_ciphertext, message.payload_ciphertext,
 			          COALESCE(message.eligibility_campaign_id::text,''), COALESCE(message.eligibility_recipient_id::text,''), message.caller_app_id, message.idempotency_key`,
 		deliveryID,
@@ -559,6 +596,7 @@ func (s postgresStore) claimFenced(
 		&claimed.Channel,
 		&claimed.Attempt,
 		&claimed.FailureCount,
+		&claimed.ExpiresAt,
 		&claimed.EncryptionKeyID,
 		&claimed.TargetCiphertext,
 		&claimed.PayloadCiphertext,

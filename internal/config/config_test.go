@@ -477,6 +477,7 @@ func setProductionEnv(t *testing.T) {
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
+		"NOTIFICATION_ISOLATED_QUEUES", "SES_EMAILS_PER_SECOND", "SES_EMAILS_PER_DAY", "SES_TRANSACTIONAL_RESERVE_PER_SECOND", "SES_TRANSACTIONAL_RESERVE_PER_DAY",
 		"SES_FEEDBACK_DLQ_URL", "SES_FEEDBACK_QUEUE_URL", "SES_FEEDBACK_TOPIC_ARN", "EMAIL_PROVIDER", "SES_REGION", "SES_ROLE_ARN", "SES_ENTRA_TOKEN_SCOPE", "SES_CONFIGURATION_SET", "SES_FROM", "AZURE_CLIENT_ID",
 		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_ALLOWED_CALLERS",
 		"NOTIFICATION_ALLOW_DEV_CALLER_HEADER", "NOTIFICATION_DATA_ENCRYPTION_KEY", "NOTIFICATION_HASH_KEY",
@@ -489,6 +490,36 @@ func clearConfigEnv(t *testing.T) {
 		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME",
 	} {
 		t.Setenv(key, "")
+	}
+}
+
+func TestIsolatedQueuesAndSESQuotaConfiguration(t *testing.T) {
+	clearConfigEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.IsolatedDeliveryQueues || cfg.SESEmailsPerSecond != 1 || cfg.SESEmailsPerDay != 200 || cfg.SESReservePerDay != 20 {
+		t.Fatalf("safe defaults: %+v %v", cfg, err)
+	}
+	for key, value := range map[string]string{
+		"NOTIFICATION_ISOLATED_QUEUES": "true", "SES_EMAILS_PER_SECOND": "5", "SES_EMAILS_PER_DAY": "6000",
+		"SES_TRANSACTIONAL_RESERVE_PER_SECOND": "1", "SES_TRANSACTIONAL_RESERVE_PER_DAY": "1000",
+	} {
+		t.Setenv(key, value)
+	}
+	cfg, err = Load()
+	if err != nil || !cfg.IsolatedDeliveryQueues || cfg.SESEmailsPerSecond != 5 || cfg.SESEmailsPerDay != 6000 || cfg.SESReservePerSecond != 1 || cfg.SESReservePerDay != 1000 {
+		t.Fatalf("explicit limits: %+v %v", cfg, err)
+	}
+	for _, tc := range []struct{ key, value string }{
+		{"NOTIFICATION_ISOLATED_QUEUES", "invalid"}, {"SES_EMAILS_PER_SECOND", "0"},
+		{"SES_TRANSACTIONAL_RESERVE_PER_SECOND", "5"}, {"SES_EMAILS_PER_DAY", "-1"},
+		{"SES_TRANSACTIONAL_RESERVE_PER_DAY", "6000"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			t.Setenv(tc.key, tc.value)
+			if _, err := Load(); err == nil {
+				t.Fatal("invalid queue/budget setting accepted")
+			}
+		})
 	}
 }
 

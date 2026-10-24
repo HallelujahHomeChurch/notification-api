@@ -48,11 +48,16 @@ type Config struct {
 	QueueDriver                string
 	ServiceBusNamespace        string
 	ServiceBusQueueName        string
+	IsolatedDeliveryQueues     bool
 	ServiceBusConnectionString string
 	SMTPEmailsPerMinute        int
 	SMTPEmailsPerHour          int
 	SMTPReservePerMinute       int
 	SMTPReservePerHour         int
+	SESEmailsPerSecond         int
+	SESEmailsPerDay            int
+	SESReservePerSecond        int
+	SESReservePerDay           int
 	SMTPAddr                   string
 	SMTPUsername               string
 	SMTPPassword               string
@@ -67,6 +72,10 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	isolatedQueues, err := boolEnv("NOTIFICATION_ISOLATED_QUEUES", false)
+	if err != nil {
+		return Config{}, err
+	}
 	allowDevCallerHeader, err := boolEnv("NOTIFICATION_ALLOW_DEV_CALLER_HEADER", false)
 	if err != nil {
 		return Config{}, err
@@ -107,6 +116,25 @@ func Load() (Config, error) {
 	}
 	if smtpMinute <= 0 || smtpHour <= 0 || smtpReserveMinute < 0 || smtpReserveHour < 0 || smtpReserveMinute >= smtpMinute || smtpReserveHour >= smtpHour {
 		return Config{}, fmt.Errorf("SMTP quotas must be positive and reserves smaller than quotas")
+	}
+	sesSecond, err := intEnv("SES_EMAILS_PER_SECOND", 1)
+	if err != nil {
+		return Config{}, err
+	}
+	sesDay, err := intEnv("SES_EMAILS_PER_DAY", 200)
+	if err != nil {
+		return Config{}, err
+	}
+	sesReserveSecond, err := intEnv("SES_TRANSACTIONAL_RESERVE_PER_SECOND", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	sesReserveDay, err := intEnv("SES_TRANSACTIONAL_RESERVE_PER_DAY", 20)
+	if err != nil {
+		return Config{}, err
+	}
+	if sesSecond <= 0 || sesDay <= 0 || sesReserveSecond < 0 || sesReserveDay < 0 || sesReserveSecond >= sesSecond || sesReserveDay >= sesDay {
+		return Config{}, fmt.Errorf("SES quotas must be positive and reserves smaller than quotas")
 	}
 	dbMaxOpenConns, err := intEnv("DB_MAX_OPEN_CONNS", defaultDBMaxOpenConns)
 	if err != nil {
@@ -164,6 +192,11 @@ func Load() (Config, error) {
 		QueueDriver:                env("QUEUE_DRIVER", "servicebus"),
 		ServiceBusNamespace:        os.Getenv("SERVICEBUS_NAMESPACE"),
 		ServiceBusQueueName:        env("SERVICEBUS_QUEUE_NAME", "notifications-email"),
+		IsolatedDeliveryQueues:     isolatedQueues,
+		SESEmailsPerSecond:         sesSecond,
+		SESEmailsPerDay:            sesDay,
+		SESReservePerSecond:        sesReserveSecond,
+		SESReservePerDay:           sesReserveDay,
 		ServiceBusConnectionString: os.Getenv("SERVICEBUS_CONNECTION_STRING"),
 		SMTPEmailsPerMinute:        smtpMinute, SMTPEmailsPerHour: smtpHour, SMTPReservePerMinute: smtpReserveMinute, SMTPReservePerHour: smtpReserveHour,
 		SMTPAddr:              os.Getenv("SMTP_ADDR"),
@@ -227,6 +260,9 @@ func (c Config) Validate(mode string) error {
 	case "worker":
 		if err := c.validateEncryptionAndServiceBus(); err != nil {
 			return err
+		}
+		if c.IsolatedDeliveryQueues && c.DBMaxOpenConns < 5 {
+			return fmt.Errorf("isolated delivery requires DB_MAX_OPEN_CONNS >= 5 for three delivery fences and database operations")
 		}
 		switch c.EmailProvider {
 		case "", "smtp":
