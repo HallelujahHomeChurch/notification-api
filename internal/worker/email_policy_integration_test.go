@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/HallelujahHomeChurch/notification-api/internal/store"
 )
@@ -326,7 +327,12 @@ func TestSESReceiptSurvivesWorkerCrashAndRecovery(t *testing.T) {
 	if err != nil || recovered.Provider != receipt.Provider || recovered.ProviderMessageID != receipt.ProviderMessageID || !recovered.AcceptedAt.Equal(receipt.AcceptedAt) {
 		t.Fatalf("receipt recovery: %#v %v", recovered, err)
 	}
-	tx, err := db.Begin()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	tx, err := database.BeginSessionTransaction(context.Background(), conn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 )
 
@@ -225,7 +226,7 @@ func (p *emailPolicy) observe(ctx context.Context, c claim) error {
 }
 
 // Recover recorded acceptance before expiry, consent or payload checks; these cannot undo a completed send.
-func restoreAcceptedEmail(ctx context.Context, tx *sql.Tx, deliveryID string) (bool, error) {
+func restoreAcceptedEmail(ctx context.Context, tx *database.SessionTransaction, deliveryID string) (bool, error) {
 	var messageID string
 	var acceptedAt time.Time
 	var providerMessageID string

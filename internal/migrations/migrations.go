@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"encoding/hex"
 	"errors"
@@ -11,25 +12,30 @@ import (
 	"io/fs"
 	"sort"
 	"time"
+
+	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 )
 
 //go:embed sql/*.sql
 var files embed.FS
 
-func Run(ctx context.Context, db *sql.DB) error {
+func Run(ctx context.Context, db *sql.DB) (err error) {
 	connection, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer connection.Close()
 	if _, err := connection.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('hhc_notification_api_migrations'))`); err != nil {
+		_ = connection.Raw(func(any) error { return driver.ErrBadConn })
 		return err
 	}
 	defer func() {
-		// Attempt unlock after cancellation without letting cleanup outlive the job budget.
-		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		_, _ = connection.ExecContext(unlockCtx, `SELECT pg_advisory_unlock(hashtext('hhc_notification_api_migrations'))`)
+		if _, unlockErr := connection.ExecContext(cleanup, `SELECT pg_advisory_unlock(hashtext('hhc_notification_api_migrations'))`); unlockErr != nil {
+			err = errors.Join(err, fmt.Errorf("release migration lock: %w", unlockErr))
+			_ = connection.Raw(func(any) error { return driver.ErrBadConn })
+		}
 	}()
 	if _, err := connection.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, checksum text NOT NULL DEFAULT '', applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
@@ -63,7 +69,7 @@ func Run(ctx context.Context, db *sql.DB) error {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		tx, err := connection.BeginTx(ctx, nil)
+		tx, err := database.BeginSessionTransaction(ctx, connection)
 		if err != nil {
 			return err
 		}

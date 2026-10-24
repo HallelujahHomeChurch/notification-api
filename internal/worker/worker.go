@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
+	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/HallelujahHomeChurch/notification-api/internal/queue"
 	"github.com/HallelujahHomeChurch/notification-api/internal/templates"
@@ -471,10 +473,14 @@ func (s postgresStore) claimFenced(
 		releaseCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 		defer cancel()
 		_, unlockErr := conn.ExecContext(releaseCtx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, lockKey)
+		if unlockErr != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
 		return errors.Join(unlockErr, conn.Close())
 	}
 	var locked bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, lockKey).Scan(&locked); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		_ = conn.Close()
 		return claimResult{}, nil, err
 	}
@@ -482,7 +488,7 @@ func (s postgresStore) claimFenced(
 		_ = conn.Close()
 		return claimResult{}, nil, errors.New("delivery fence held")
 	}
-	tx, err := conn.BeginTx(ctx, nil)
+	tx, err := database.BeginSessionTransaction(ctx, conn)
 	if err != nil {
 		_ = release()
 		return claimResult{}, nil, err
@@ -593,7 +599,7 @@ func (s postgresStore) claimFenced(
 	}
 
 	var status string
-	err = s.db.QueryRowContext(ctx, `
+	err = conn.QueryRowContext(ctx, `
 		SELECT status
 		FROM notification_deliveries
 		WHERE id=$1`,
@@ -611,7 +617,7 @@ func (s postgresStore) claimFenced(
 	return claimResult{Status: status}, nil, nil
 }
 
-func expireDelivery(ctx context.Context, tx *sql.Tx, deliveryID string) (bool, error) {
+func expireDelivery(ctx context.Context, tx *database.SessionTransaction, deliveryID string) (bool, error) {
 	outboxRows, err := tx.QueryContext(ctx, `
 		SELECT id
 		FROM notification_outbox
