@@ -181,6 +181,13 @@ func TestAccountErasureClearsTechnicalBlocksAndLateFeedbackDoesNotRestoreThem(t 
 	db := testDatabase(t)
 	key := []byte("11111111111111111111111111111111")
 	email := "member@example.test"
+	userID := uuid.NewString()
+	priorHash := crypto.Hash(key, []byte("prior@example.test"))
+	prior := insertMessage(t, db, "v1", priorHash, "email", "sent", "")
+	setSubjectAttribution(t, db, prior, "v1", crypto.Hash(key, []byte("notification-account-subject:"+userID)))
+	if _, err := db.Exec(`INSERT INTO notification_email_suppressions(hash_key_id,target_hash,reason) VALUES('v1',$1,'hard_bounce')`, priorHash); err != nil {
+		t.Fatal(err)
+	}
 	hash := crypto.Hash(key, []byte(email))
 	id := insertMessage(t, db, "v1", hash, "email", "sent", "")
 	var delivery string
@@ -198,8 +205,8 @@ func TestAccountErasureClearsTechnicalBlocksAndLateFeedbackDoesNotRestoreThem(t 
 	if err := feedback.Handle(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
-	result, err := New(db, map[string][]byte{"v1": key}).CleanupAccount(context.Background(), AccountCleanupRequest{UserID: uuid.NewString(), Email: email, IdempotencyKey: "erase-feedback"})
-	if err != nil || result.Status != "completed" || result.RecordCount != 2 {
+	result, err := New(db, map[string][]byte{"v1": key}).CleanupAccount(context.Background(), AccountCleanupRequest{UserID: userID, Email: email, IdempotencyKey: "erase-feedback"})
+	if err != nil || result.Status != "completed" || result.RecordCount != 4 {
 		t.Fatalf("cleanup=%#v err=%v", result, err)
 	}
 	e.SNSMessageID = uuid.NewString()
