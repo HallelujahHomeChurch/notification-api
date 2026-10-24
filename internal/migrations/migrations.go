@@ -12,6 +12,8 @@ import (
 	"io/fs"
 	"sort"
 	"time"
+
+	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 )
 
 //go:embed sql/*.sql
@@ -67,7 +69,7 @@ func Run(ctx context.Context, db *sql.DB) (err error) {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		tx, err := connection.BeginTx(ctx, nil)
+		tx, err := database.BeginSessionTransaction(ctx, connection)
 		if err != nil {
 			return err
 		}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 )
 
@@ -177,7 +178,7 @@ func (p *emailPolicy) observe(ctx context.Context, c claim) error {
 }
 
 // Recover recorded acceptance before expiry, consent or payload checks; these cannot undo a completed send.
-func restoreAcceptedEmail(ctx context.Context, tx *sql.Tx, deliveryID string) (bool, error) {
+func restoreAcceptedEmail(ctx context.Context, tx *database.SessionTransaction, deliveryID string) (bool, error) {
 	var messageID string
 	var acceptedAt time.Time
 	err := tx.QueryRowContext(ctx, `SELECT d.message_id::text,a.finished_at FROM notification_deliveries d JOIN notification_email_attempts a ON a.delivery_id=d.id WHERE d.id=$1 AND (d.status IN ('queued','sending') OR (d.status='dead_lettered' AND d.last_error_code='expired')) AND a.outcome='accepted' ORDER BY a.attempt DESC LIMIT 1 FOR UPDATE OF d`, deliveryID).Scan(&messageID, &acceptedAt)
