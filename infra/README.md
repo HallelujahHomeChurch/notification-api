@@ -117,3 +117,20 @@ Every alert identifies the HHC platform owner, threshold/window, action group,
 and runbook. Worker scale-to-zero is expected; backlog age, not replica count,
 is the worker-absence signal. Provider queries match both the pre-cutover SMTP
 log format and the structured event format during rolling deployment.
+
+## SES feedback listener with SMTP sending
+
+The optional, typed `sesFeedback` release input configures only the existing
+worker's SNS/SQS listener. Its absence leaves the listener off. Set the
+non-secret repository variable `SES_FEEDBACK_CONFIG` to the reviewed JSON object
+with `region`, `roleArn`, `tokenScope`, `from`, `configurationSet`, `queueUrl`,
+`dlqUrl` and `topicArn`. Plan and deploy pass the same input through all what-if
+and deployment operations. The worker still receives `EMAIL_PROVIDER=smtp`;
+this input cannot enable SES sending. The API continues to use the SMTP default.
+
+The parent Azure platform Terraform root declares the same worker environment
+fields; it is not the runtime deployment path. Merge and apply the dedicated
+email-delivery infrastructure root first, read back the queue/topic/role and
+paused configuration set, then run the normal merged-main Notification release.
+Review the complete ARM what-if before deployment; preserve existing SMTP and
+Key Vault settings. Do not use a manual Container Apps environment patch.

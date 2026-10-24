@@ -470,3 +470,18 @@ func TestSendRejectsRetiredDSRTemplatesBeforePersistence(t *testing.T) {
 		})
 	}
 }
+
+func TestSendPinsConfiguredEmailProvider(t *testing.T) {
+	for _, provider := range []string{"smtp", "ses"} {
+		t.Run(provider, func(t *testing.T) {
+			repo := &memoryRepository{}
+			svc := New(repo, Config{EmailProvider: provider, DataEncryptionKey: testEncryptionKey, HashKey: testHashKey})
+			if _, err := svc.Send(context.Background(), "account-api", "pinned-1", validRequest()); err != nil {
+				t.Fatal(err)
+			}
+			if len(repo.creates) != 1 || repo.creates[0].Provider != provider {
+				t.Fatalf("provider was not pinned: %#v", repo.creates)
+			}
+		})
+	}
+}

@@ -103,6 +103,14 @@ func (s *Service) eraseIdempotent(ctx context.Context, userID, email, idempotenc
 	if _, err := tx.ExecContext(ctx, suppressDeliveriesQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes); err != nil {
 		return AccountCleanupResult{}, err
 	}
+	erasedSuppressions, err := tx.ExecContext(ctx, eraseSuppressionsQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes)
+	if err != nil {
+		return AccountCleanupResult{}, err
+	}
+	n, err := erasedSuppressions.RowsAffected()
+	if err != nil {
+		return AccountCleanupResult{}, err
+	}
 	result, err := tx.ExecContext(ctx, eraseQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes)
 	if err != nil {
 		return AccountCleanupResult{}, err
@@ -111,6 +119,7 @@ func (s *Service) eraseIdempotent(ctx context.Context, userID, email, idempotenc
 	if err != nil {
 		return AccountCleanupResult{}, err
 	}
+	affected += n
 	var remaining, unattributedLegacy int64
 	if err := tx.QueryRowContext(ctx, postconditionQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes).Scan(&remaining); err != nil {
 		return AccountCleanupResult{}, err
@@ -227,6 +236,7 @@ const eraseQuery = `
 	SET target_ciphertext=''::bytea,
 		payload_ciphertext=''::bytea,
 		target_hash=repeat('0',64),
+		target_hashes='{}'::jsonb,
 		request_hash=repeat('0',64),
 		idempotency_key='erased:'||message.id::text,
 		resource_id='',
@@ -283,3 +293,20 @@ const postconditionQuery = `
 	FROM notification_messages AS message
 	WHERE EXISTS (SELECT 1 FROM subject_candidates candidate WHERE candidate.hash_key_id=message.subject_hash_key_id AND candidate.subject_hash=message.subject_hash)
 	   OR (message.subject_hash IS NULL AND EXISTS (SELECT 1 FROM email_candidates candidate WHERE candidate.hash_key_id=message.hash_key_id AND candidate.target_hash=message.target_hash))`
+
+// Erase reachable historical aliases before tombstoning the Account-bound messages.
+const eraseSuppressionsQuery = `
+ WITH subject_candidates AS (
+  SELECT * FROM unnest($1::text[], $2::text[]) AS candidate(hash_key_id, subject_hash)
+ ), email_candidates AS (
+  SELECT * FROM unnest($3::text[], $4::text[]) AS candidate(hash_key_id, target_hash)
+ ), matched AS (
+  SELECT message.* FROM notification_messages message WHERE message.channel='email' AND (
+   EXISTS (SELECT 1 FROM subject_candidates c WHERE c.hash_key_id=message.subject_hash_key_id AND c.subject_hash=message.subject_hash)
+   OR (message.subject_hash IS NULL AND EXISTS (SELECT 1 FROM email_candidates c WHERE c.hash_key_id=message.hash_key_id AND c.target_hash=message.target_hash)))
+ ), aliases AS (
+  SELECT candidate.key AS hash_key_id,candidate.value AS target_hash FROM matched m
+  CROSS JOIN LATERAL jsonb_each_text(m.target_hashes || jsonb_build_object(m.hash_key_id,m.target_hash)) candidate
+  UNION SELECT hash_key_id,target_hash FROM email_candidates
+ )
+ DELETE FROM notification_email_suppressions s USING aliases a WHERE s.hash_key_id=a.hash_key_id AND s.target_hash=a.target_hash`

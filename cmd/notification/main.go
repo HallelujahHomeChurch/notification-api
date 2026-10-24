@@ -26,6 +26,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/queue"
 	"github.com/HallelujahHomeChurch/notification-api/internal/retention"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
+	"github.com/HallelujahHomeChurch/notification-api/internal/sesfeedback"
 	"github.com/HallelujahHomeChurch/notification-api/internal/store"
 	"github.com/HallelujahHomeChurch/notification-api/internal/worker"
 )
@@ -43,6 +44,7 @@ type apiComponents struct {
 }
 
 type workerComponents struct {
+	feedback process
 	http     process
 	consumer process
 	close    closeFunc
@@ -103,8 +105,11 @@ func (a app) run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return runProcesses(ctx, cfg.ShutdownTimeout, components.close,
-			components.http, components.consumer)
+		processes := []process{components.http, components.consumer}
+		if components.feedback != nil {
+			processes = append(processes, components.feedback)
+		}
+		return runProcesses(ctx, cfg.ShutdownTimeout, components.close, processes...)
 	default:
 		migrationCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
@@ -184,6 +189,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 	}
 	repository := store.NewWithHashKeys(db, cfg.HashKeys)
 	notificationService := service.New(repository, service.Config{
+		EmailProvider:         cfg.EmailProvider,
 		ActiveEncryptionKeyID: cfg.ActiveEncryptionKeyID,
 		EncryptionKeys:        cfg.EncryptionKeys,
 		ActiveHashKeyID:       cfg.ActiveHashKeyID,
@@ -224,8 +230,18 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		FromName: cfg.SMTPFromName,
 		Logger:   log.New(os.Stdout, "", log.LstdFlags),
 	}
-	if err := providers.ValidateSMTPConfig(smtpConfig); err != nil {
-		return workerComponents{}, fmt.Errorf("validate SMTP config: %w", err)
+	var emailProvider providers.Provider
+	if cfg.EmailProvider == "ses" {
+		ses, err := providers.NewSES(cfg.SES)
+		if err != nil {
+			return workerComponents{}, fmt.Errorf("validate SES config: %w", err)
+		}
+		emailProvider = ses
+	} else {
+		if err := providers.ValidateSMTPConfig(smtpConfig); err != nil {
+			return workerComponents{}, fmt.Errorf("validate SMTP config: %w", err)
+		}
+		emailProvider = providers.NewSMTP(smtpConfig)
 	}
 	webPushConfig := providers.WebPushConfig{
 		PublicKey: cfg.VAPIDPublicKey, PrivateKey: cfg.VAPIDPrivateKey,
@@ -247,12 +263,35 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		_ = db.Close()
 		return workerComponents{}, fmt.Errorf("create consumer: %w", err)
 	}
+	var feedbackProcess process
+	if cfg.SESFeedbackQueueURL != "" {
+		credentials, err := providers.NewFederatedCredentials(cfg.SES)
+		if err != nil {
+			_ = consumer.Close(ctx)
+			_ = db.Close()
+			return workerComponents{}, err
+		}
+		feedbackConfig, err := cfg.FeedbackConfig()
+		if err != nil {
+			_ = consumer.Close(ctx)
+			_ = db.Close()
+			return workerComponents{}, err
+		}
+		feedback, err := sesfeedback.New(feedbackConfig, credentials, sesfeedback.Store{DB: db})
+		if err != nil {
+			_ = consumer.Close(ctx)
+			_ = db.Close()
+			return workerComponents{}, err
+		}
+		feedbackProcess = feedback.Run
+	}
 	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
-		"email": providers.NewSMTP(smtpConfig), "web_push": providers.NewWebPush(webPushConfig),
+		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
 	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
 
 	return workerComponents{
-		http: httpProcess(cfg.Port, workerHealthHandler(db), cfg.ShutdownTimeout),
+		feedback: feedbackProcess,
+		http:     httpProcess(cfg.Port, workerHealthHandler(db), cfg.ShutdownTimeout),
 		consumer: func(ctx context.Context) error {
 			return consumer.Run(ctx, deliveryWorker.Process)
 		},

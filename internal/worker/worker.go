@@ -236,6 +236,20 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 
 	if claimed.Channel == "email" && w.email != nil {
 		delay, gateErr := w.email.begin(ctx, claimed)
+		if errors.Is(gateErr, errEmailSuppressed) {
+			if err := w.repository.markSuppressed(ctx, claimed, "technical_suppression"); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.Complete(ctx)
+		}
+		if errors.Is(gateErr, errEmailProviderMismatch) {
+			if err := w.repository.markDeadLettered(ctx, claimed, "provider_mismatch"); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.DeadLetter(ctx, "provider_mismatch")
+		}
 		if errors.Is(gateErr, errEmailAlreadyAccepted) {
 			receipt, err := w.email.acceptedReceipt(ctx, claimed)
 			if err != nil {
@@ -275,7 +289,7 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	cancel()
 	if claimed.Channel == "email" && w.email != nil {
 		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
-		recordErr := w.email.finish(finishCtx, claimed, providerErr)
+		recordErr := w.email.finish(finishCtx, claimed, receipt, providerErr)
 		finish()
 		if recordErr != nil {
 			return fmt.Errorf("persist email attempt: %w", recordErr)
@@ -377,6 +391,7 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 		}
 		return providers.DeliveryPayload{
 			Recipient: email.To, Subject: email.Subject, Body: email.Body, HTMLBody: email.HTMLBody,
+			DeliveryID:      claimed.DeliveryID,
 			MessageID:       fmt.Sprintf("<%s@notification.alive.org.tw>", claimed.DeliveryID),
 			ListUnsubscribe: email.ListUnsubscribe, OneClickUnsubscribe: email.OneClickUnsubscribe,
 		}, nil

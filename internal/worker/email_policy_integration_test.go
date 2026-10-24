@@ -86,7 +86,7 @@ func TestEmailHistorySafetyFailsClosedAndRetainsUnknown(t *testing.T) {
 	if delay, err := p.begin(context.Background(), c); err != nil || delay != 0 {
 		t.Fatalf("begin: %s %v", delay, err)
 	}
-	if err := p.finish(context.Background(), c, &providers.ProviderError{Kind: providers.ErrorTemporary, Operation: "mail", SMTPCode: 451}); err != nil {
+	if err := p.finish(context.Background(), c, providers.ProviderReceipt{Provider: "smtp"}, &providers.ProviderError{Kind: providers.ErrorTemporary, Operation: "mail", SMTPCode: 451}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE notification_deliveries SET status='dead_lettered' WHERE message_id=$1`, c.MessageID); err != nil {
@@ -136,7 +136,7 @@ func TestEmailQuotaCooldownIsShared(t *testing.T) {
 	if _, err := p.begin(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.finish(context.Background(), c, &providers.ProviderError{Kind: providers.ErrorRateLimited, Operation: "mail", SMTPCode: 451}); err != nil {
+	if err := p.finish(context.Background(), c, providers.ProviderReceipt{Provider: "smtp"}, &providers.ProviderError{Kind: providers.ErrorRateLimited, Operation: "mail", SMTPCode: 451}); err != nil {
 		t.Fatal(err)
 	}
 	other := &emailPolicy{db: db, limits: p.limits}
@@ -152,7 +152,7 @@ func TestEmailAcceptedAttemptCannotBeSentAgainAfterReceiptWriteFailure(t *testin
 	if _, err := p.begin(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.finish(context.Background(), c, nil); err != nil {
+	if err := p.finish(context.Background(), c, providers.ProviderReceipt{Provider: "smtp"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	c.Attempt++
@@ -170,7 +170,7 @@ func TestEmailEvidenceRejectsExpiredPurgedAndIncompleteHistory(t *testing.T) {
 			if _, err := p.begin(context.Background(), c); err != nil {
 				t.Fatal(err)
 			}
-			if err := p.finish(context.Background(), c, &providers.ProviderError{Kind: providers.ErrorTemporary, Operation: "mail", SMTPCode: 451}); err != nil {
+			if err := p.finish(context.Background(), c, providers.ProviderReceipt{Provider: "smtp"}, &providers.ProviderError{Kind: providers.ErrorTemporary, Operation: "mail", SMTPCode: 451}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.Exec(`UPDATE notification_deliveries SET status='dead_lettered' WHERE message_id=$1`, c.MessageID); err != nil {
@@ -211,7 +211,7 @@ func TestEmailRetrySafetyDetectsUnrecordedLegacyClaims(t *testing.T) {
 	if _, err := p.begin(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.finish(context.Background(), c, &providers.ProviderError{Kind: providers.ErrorTemporary, Operation: "mail", SMTPCode: 451}); err != nil {
+	if err := p.finish(context.Background(), c, providers.ProviderReceipt{Provider: "smtp"}, &providers.ProviderError{Kind: providers.ErrorTemporary, Operation: "mail", SMTPCode: 451}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE notification_messages SET status='dead_lettered' WHERE id=$1`, c.MessageID); err != nil {
@@ -235,7 +235,7 @@ func TestEmailAcceptedReceiptRecoversBeforeExpiryAndEligibility(t *testing.T) {
 			if _, err := p.begin(context.Background(), c); err != nil {
 				t.Fatal(err)
 			}
-			if err := p.finish(context.Background(), c, nil); err != nil {
+			if err := p.finish(context.Background(), c, providers.ProviderReceipt{Provider: "smtp"}, nil); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.Exec(`UPDATE notification_deliveries SET status='queued',lease_expires_at=NULL WHERE id=$1`, c.DeliveryID); err != nil {
@@ -288,7 +288,7 @@ func TestEmailAcceptedEvidenceSurvivesOutboxExpiry(t *testing.T) {
 	if _, err := p.begin(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.finish(context.Background(), c, nil); err != nil {
+	if err := p.finish(context.Background(), c, providers.ProviderReceipt{Provider: "smtp"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE notification_deliveries SET status='dead_lettered',last_error_code='expired',lease_expires_at=NULL WHERE id=$1`, c.DeliveryID); err != nil {
@@ -307,5 +307,42 @@ func TestEmailAcceptedEvidenceSurvivesOutboxExpiry(t *testing.T) {
 	var status string
 	if err := db.QueryRow(`SELECT status FROM notification_messages WHERE id=$1`, c.MessageID).Scan(&status); err != nil || status != "sent" {
 		t.Fatalf("accepted evidence overwritten by outbox expiry: %s %v", status, err)
+	}
+}
+
+func TestSESReceiptSurvivesWorkerCrashAndRecovery(t *testing.T) {
+	db := workerTestDatabase(t)
+	p := &emailPolicy{db: db, limits: EmailLimits{PerMinute: 20, PerHour: 100, ReserveMinute: 5, ReserveHour: 20}}
+	c := emailClaim(t, db, "engagement.newsletter")
+	if _, err := p.begin(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	receipt := providers.ProviderReceipt{Provider: "ses", ProviderMessageID: "actual-ses-acceptance", AcceptedAt: time.Now().UTC().Truncate(time.Microsecond)}
+	if err := p.finish(context.Background(), c, receipt, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The worker dies after recording acceptance but before updating the delivery row.
+	recovered, err := p.acceptedReceipt(context.Background(), c)
+	if err != nil || recovered.Provider != receipt.Provider || recovered.ProviderMessageID != receipt.ProviderMessageID || !recovered.AcceptedAt.Equal(receipt.AcceptedAt) {
+		t.Fatalf("receipt recovery: %#v %v", recovered, err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	restored, err := restoreAcceptedEmail(context.Background(), tx, c.DeliveryID)
+	if err != nil || !restored {
+		t.Fatalf("restore: %v %v", restored, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var state, id string
+	if err := db.QueryRow(`SELECT status,provider_message_id FROM notification_deliveries WHERE id=$1`, c.DeliveryID).Scan(&state, &id); err != nil {
+		t.Fatal(err)
+	}
+	if state != "sent" || id != receipt.ProviderMessageID {
+		t.Fatalf("restored %s %s", state, id)
 	}
 }

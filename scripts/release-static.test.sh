@@ -446,3 +446,9 @@ pointer_upload_line="$(awk '/az storage blob upload/ { upload = 1 } upload && /-
 [[ "${deploy_line}" -lt "${publish_line}" && "${guard_line}" -lt "${guard_exit_line}" && "${guard_exit_line}" -lt "${pointer_upload_line}" ]]
 
 echo "release static test ok"
+
+[[ "$(grep -Fc 'SES_FEEDBACK_CONFIG:' "${workflow}")" == "2" ]] || fail "plan and deploy must use the same feedback input"
+[[ "$(grep -Fc 'sesFeedback="${SES_FEEDBACK_CONFIG}"' "${workflow}")" == "4" ]] || fail "all what-if/deploy steps must preserve feedback configuration"
+grep -Fq "param sesFeedback SesFeedbackConfig?" "${bicep}" || fail "feedback must be optional for existing deployments"
+grep -Fq "{ name: 'EMAIL_PROVIDER', value: 'smtp' }" "${bicep}" || fail "feedback listener must preserve SMTP"
+assert_not_contains "${bicep}" "name: 'EMAIL_PROVIDER', value: 'ses'" "listener activation must not select SES sending"
