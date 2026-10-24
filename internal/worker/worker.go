@@ -234,6 +234,20 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 
 	if claimed.Channel == "email" && w.email != nil {
 		delay, gateErr := w.email.begin(ctx, claimed)
+		if errors.Is(gateErr, errEmailSuppressed) {
+			if err := w.repository.markSuppressed(ctx, claimed, "technical_suppression"); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.Complete(ctx)
+		}
+		if errors.Is(gateErr, errEmailProviderMismatch) {
+			if err := w.repository.markDeadLettered(ctx, claimed, "provider_mismatch"); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.DeadLetter(ctx, "provider_mismatch")
+		}
 		if errors.Is(gateErr, errEmailAlreadyAccepted) {
 			receipt, err := w.email.acceptedReceipt(ctx, claimed)
 			if err != nil {

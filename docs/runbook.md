@@ -687,3 +687,55 @@ must not recover SES attempts using synthetic SMTP message IDs; roll back by a
 forward fix using the receipt-aware worker. Revoking Entra trust alone does not
 invalidate already-issued STS credentials: fence workers and revoke AWS role
 permissions/sessions as required by the incident.
+
+## SES feedback operations
+
+Owner: HHC platform maintainers; designated application contact is tracked in the
+private rollout record. Keep `EMAIL_PROVIDER=smtp` and the SES configuration set
+paused until the migration acceptance gates pass. Do not submit SES production
+access by asserting an unmerged or unconfigured feedback consumer is operational.
+
+SES → encrypted standard SNS topic → encrypted SQS → existing worker → PostgreSQL.
+The worker uses the existing Azure identity and scoped STS role; it cannot publish,
+purge queues, or read/delete the DLQ. Resource policies explicitly deny direct
+publish/send, including same-account identities. Do not substitute arbitrary SQS
+URLs or forward an HTTP body to this consumer. SNS signatures are not an HTTP
+trust boundary here: the restricted queue and service-only policies are required.
+
+Before enabling the listener, verify both queues, their redrive policy, the
+non-raw subscription, exact SES destination, consumer IAM policy, encrypted
+storage and the existing Azure action-group route. The worker checks queue ARN
+and DLQ association at startup. Main-queue payload retention is four days and DLQ
+retention fourteen days; SNS managed-endpoint retry can retain messages for up to
+23 days before delivery exhaustion. These external copies can contain recipient
+addresses, mail headers and unsubscribe tokens. Restrict operator access, never
+copy raw bodies into logs/tickets, and include them in privacy/incident handling.
+Database feedback metadata follows parent-message 730-day retention; local
+technical blocks have no automatic expiry pending retention-policy approval.
+
+- `ses_feedback_poll_failed`, `ses_feedback_persist_failed`,
+  `ses_feedback_rejected`, `ses_feedback_health_failed`: investigate federation,
+  IAM, schema, queue provenance/correlation, and provider format without logging
+  raw payloads. Disable sending first if feedback safety cannot be maintained.
+- `ses_feedback_dlq_nonempty`: emitted at least once per minute while the listener
+  sees a backlog. Inspect only with approved restricted operator access. Repair
+  the cause and use a reviewed replay procedure; the deny-direct-send policy
+  intentionally prevents arbitrary re-injection. Never replay the original email.
+- `ses_feedback_suppression_applied`: review a permanent bounce or complaint.
+  The Azure feedback alert routes these markers to the existing action group.
+  Inspect SES reputation metrics as well; pause campaigns if reputation degrades.
+  No newsletter resubscribe, late delivery or provider rollback clears a block.
+
+When rolling back, fence API admission and drain/stop send workers, reconcile
+accepted/unknown receipts, then change API and worker provider configuration
+through the normal release workflow. Pending provider-mismatched work goes to
+DLQ for explicit review, never automatic cross-provider retry. Retain additive
+schema and a receipt/suppression-aware binary; older binaries bypass these safety
+checks. Keep feedback ingestion running for delayed SES events after switching
+back to SMTP. Revoking Entra trust alone does not revoke issued STS credentials.
+
+Local tests prove parsing, durable idempotency, HMAC suppression/rotation,
+unknown-receipt reconciliation and no resurrection after Account erasure. They
+do not prove AWS event delivery, the final alert receiver, or inbox arrival.
+A future approved live test must prove all three before SES cutover. No test or
+simulator email is authorized by this runbook.

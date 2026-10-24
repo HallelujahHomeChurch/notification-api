@@ -13,6 +13,9 @@ import (
 )
 
 var errEmailAcceptanceUnknown = errors.New("email acceptance requires reconciliation")
+var errEmailSuppressed = errors.New("email is technically suppressed")
+var errEmailProviderMismatch = errors.New("email provider does not match pinned delivery")
+
 var errEmailAlreadyAccepted = errors.New("email already accepted")
 
 type EmailLimits struct{ PerMinute, PerHour, ReserveMinute, ReserveHour int }
@@ -25,12 +28,17 @@ func (l EmailLimits) Validate() error {
 }
 
 type emailPolicy struct {
-	db     *sql.DB
-	limits EmailLimits
+	db       *sql.DB
+	limits   EmailLimits
+	provider string
 }
 
 func (w *Worker) WithEmailLimits(db *sql.DB, limits EmailLimits) *Worker {
-	w.email = &emailPolicy{db: db, limits: limits}
+	name := "smtp"
+	if p, ok := w.providers["email"].(interface{ Family() string }); ok {
+		name = p.Family()
+	}
+	w.email = &emailPolicy{db: db, limits: limits, provider: name}
 	return w
 }
 
@@ -48,6 +56,24 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	var now, next, cooldown time.Time
 	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp(),next_send_at,cooldown_until FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&now, &next, &cooldown); err != nil {
 		return 0, err
+	}
+	name := p.provider
+	if name == "" {
+		name = "smtp"
+	}
+	var pinned string
+	if err = tx.QueryRowContext(ctx, `SELECT provider FROM notification_deliveries WHERE id=$1`, c.DeliveryID).Scan(&pinned); err != nil {
+		return 0, err
+	}
+	if pinned != name {
+		return 0, errEmailProviderMismatch
+	}
+	var suppressed bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM notification_messages m CROSS JOIN LATERAL jsonb_each_text(m.target_hashes || jsonb_build_object(m.hash_key_id,m.target_hash)) candidate JOIN notification_email_suppressions s ON s.hash_key_id=candidate.key AND s.target_hash=candidate.value WHERE m.id=$1)`, c.MessageID).Scan(&suppressed); err != nil {
+		return 0, err
+	}
+	if suppressed {
+		return 0, errEmailSuppressed
 	}
 	var uncertain, accepted bool
 	var recorded int
@@ -97,7 +123,7 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	} else {
 		delay = 0
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO notification_email_attempts(delivery_id,attempt,bulk,outcome,started_at,finished_at) VALUES($1,$2,$3,$4::text,$5::timestamptz,CASE WHEN $4::text='deferred' THEN $5::timestamptz ELSE NULL END) ON CONFLICT(delivery_id,attempt) DO UPDATE SET outcome=EXCLUDED.outcome,started_at=EXCLUDED.started_at,finished_at=EXCLUDED.finished_at WHERE notification_email_attempts.outcome='deferred'`, c.DeliveryID, c.Attempt, bulk, outcome, now)
+	result, err := tx.ExecContext(ctx, `INSERT INTO notification_email_attempts(delivery_id,attempt,bulk,outcome,started_at,provider,finished_at) VALUES($1,$2,$3,$4::text,$5::timestamptz,$6,CASE WHEN $4::text='deferred' THEN $5::timestamptz ELSE NULL END) ON CONFLICT(delivery_id,attempt) DO UPDATE SET outcome=EXCLUDED.outcome,started_at=EXCLUDED.started_at,finished_at=EXCLUDED.finished_at WHERE notification_email_attempts.outcome='deferred'`, c.DeliveryID, c.Attempt, bulk, outcome, now, name)
 	if err != nil {
 		return 0, err
 	}
@@ -118,6 +144,12 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 
 func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.ProviderReceipt, providerErr error) error {
 	outcome, stage, enhanced := "accepted", "data", ""
+	if receipt.Provider == "" {
+		receipt.Provider = p.provider
+		if receipt.Provider == "" {
+			receipt.Provider = "smtp"
+		}
+	}
 	code := 250
 	if receipt.Provider == "ses" {
 		code = 0

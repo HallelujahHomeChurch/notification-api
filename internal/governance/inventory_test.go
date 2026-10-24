@@ -57,17 +57,20 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"notification.message-metadata",
 		"notification.delivery-receipts",
 		"notification.email-attempts",
+		"notification.email-feedback", "notification.email-suppressions",
 		"notification.outbox",
 		"notification.rate-limit-buckets",
 	}, mapKeys(datasets))
 
 	exactPhysicalFields := map[string][]string{
+		"notification.email-feedback":             {"sns_message_id", "delivery_id", "provider_message_id", "event_type", "event_at", "received_at"},
+		"notification.email-suppressions":         {"hash_key_id", "target_hash", "reason", "created_at", "updated_at"},
 		"notification.account-cleanup-operations": {"idempotency_key", "subject_ref", "result", "created_at", "updated_at"},
 		"notification.email-attempts":             {"delivery_id", "attempt", "bulk", "started_at", "finished_at", "outcome", "stage", "smtp_code", "enhanced_code", "provider", "provider_message_id", "provider_accepted_at"},
 		"notification.message-sensitive":          {"target_ciphertext", "payload_ciphertext"},
 		"notification.message-metadata": {
 			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",
-			"channel", "target_type", "target_hash", "resource_type", "resource_id", "eligibility_campaign_id", "eligibility_recipient_id", "status", "created_at",
+			"channel", "target_type", "target_hash", "target_hashes", "resource_type", "resource_id", "eligibility_campaign_id", "eligibility_recipient_id", "status", "created_at",
 			"updated_at", "terminal_at", "payload_purged_at", "encryption_key_id", "hash_key_id", "expires_at", "subject_hash", "subject_hash_key_id", "email_history_complete",
 		},
 		"notification.delivery-receipts": {

@@ -111,6 +111,15 @@ func (s *Service) eraseIdempotent(ctx context.Context, userID, email, idempotenc
 	if err != nil {
 		return AccountCleanupResult{}, err
 	}
+	erasedSuppressions, err := tx.ExecContext(ctx, `DELETE FROM notification_email_suppressions s USING unnest($1::text[],$2::text[]) candidate(hash_key_id,target_hash) WHERE s.hash_key_id=candidate.hash_key_id AND s.target_hash=candidate.target_hash`, emailKeyIDs, emailHashes)
+	if err != nil {
+		return AccountCleanupResult{}, err
+	}
+	n, err := erasedSuppressions.RowsAffected()
+	if err != nil {
+		return AccountCleanupResult{}, err
+	}
+	affected += n
 	var remaining, unattributedLegacy int64
 	if err := tx.QueryRowContext(ctx, postconditionQuery, subjectKeyIDs, subjectHashes, emailKeyIDs, emailHashes).Scan(&remaining); err != nil {
 		return AccountCleanupResult{}, err
@@ -227,6 +236,7 @@ const eraseQuery = `
 	SET target_ciphertext=''::bytea,
 		payload_ciphertext=''::bytea,
 		target_hash=repeat('0',64),
+		target_hashes='{}'::jsonb,
 		request_hash=repeat('0',64),
 		idempotency_key='erased:'||message.id::text,
 		resource_id='',

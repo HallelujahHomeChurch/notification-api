@@ -11,8 +11,10 @@ import (
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/crypto"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
+	"github.com/HallelujahHomeChurch/notification-api/internal/sesfeedback"
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"time"
 )
 
 func TestAccountCleanupTombstonesWithoutDSRRequest(t *testing.T) {
@@ -172,5 +174,44 @@ func TestEraseDoesNotUseEmailAgainstExplicitOtherSubject(t *testing.T) {
 	}
 	if len(target) == 0 {
 		t.Fatal("erased another subject's explicitly bound data")
+	}
+}
+
+func TestAccountErasureClearsTechnicalBlocksAndLateFeedbackDoesNotRestoreThem(t *testing.T) {
+	db := testDatabase(t)
+	key := []byte("11111111111111111111111111111111")
+	email := "member@example.test"
+	hash := crypto.Hash(key, []byte(email))
+	id := insertMessage(t, db, "v1", hash, "email", "sent", "")
+	var delivery string
+	if err := db.QueryRow(`SELECT id::text FROM notification_deliveries WHERE message_id=$1`, id).Scan(&delivery); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE notification_messages SET target_hashes=jsonb_build_object('v1',$2::text) WHERE id=$1`, id, hash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO notification_email_attempts(delivery_id,attempt,bulk,outcome,provider,provider_message_id) VALUES($1,1,false,'accepted','ses','ses-erasure')`, delivery); err != nil {
+		t.Fatal(err)
+	}
+	feedback := sesfeedback.Store{DB: db}
+	e := sesfeedback.Event{SNSMessageID: uuid.NewString(), MessageID: "ses-erasure", DeliveryID: delivery, Kind: "complaint", At: time.Now().UTC()}
+	if err := feedback.Handle(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	result, err := New(db, map[string][]byte{"v1": key}).CleanupAccount(context.Background(), AccountCleanupRequest{UserID: uuid.NewString(), Email: email, IdempotencyKey: "erase-feedback"})
+	if err != nil || result.Status != "completed" || result.RecordCount != 2 {
+		t.Fatalf("cleanup=%#v err=%v", result, err)
+	}
+	e.SNSMessageID = uuid.NewString()
+	if err := feedback.Handle(context.Background(), e); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM notification_email_suppressions`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("late feedback restored erased block: %d %v", n, err)
+	}
+	var aliases string
+	if err := db.QueryRow(`SELECT target_hashes::text FROM notification_messages WHERE id=$1`, id).Scan(&aliases); err != nil || aliases != "{}" {
+		t.Fatalf("aliases retained: %s %v", aliases, err)
 	}
 }

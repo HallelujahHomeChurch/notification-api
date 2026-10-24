@@ -181,3 +181,31 @@ feedback ingestion, raise quotas, change queue priority, activate SES, or enable
 login verification. Those controls and live delivery acceptance remain required
 before production cutover. Existing conservative pacing settings are unchanged;
 selecting SES alone does not meet campaign/OTP throughput targets.
+
+### SES feedback and technical suppression (activation disabled)
+
+With `SES_FEEDBACK_QUEUE_URL`, `SES_FEEDBACK_DLQ_URL`, `SES_FEEDBACK_TOPIC_ARN`
+and the federation settings present, the existing worker also consumes a private
+SNS-to-SQS feedback queue. This can run while `EMAIL_PROVIDER=smtp`; blank
+feedback settings preserve current startup. Both API and worker must use the
+same provider selection because each intent pins its provider when created.
+
+Migration 008 adds minimal event metadata, address HMAC blocks and retained-key
+target aliases. The consumer validates the queue/account/topic/configuration-set
+and matches the real SES receipt or a reserved uncertain SES attempt before
+committing feedback. Only committed events are deleted; errors reach the DLQ.
+Duplicate events are idempotent, conflicting duplicate IDs are rejected, and a
+late delivery event does not remove a complaint or permanent-bounce block.
+Unknown acceptance is reconciled without replaying the email.
+
+Technical blocks apply to every Email template and both providers, independently
+of newsletter consent. Temporary bounces do not create permanent blocks. HMAC
+aliases preserve blocks across key rotation; key retirement fails while references
+remain. Explicit verified Account erasure clears local matching HMACs; late
+feedback cannot recreate erased identity data. SES-side suppression is separate.
+No public callback, full provider payload or recipient address is stored in the
+feedback ledger. See [feedback operations](docs/runbook.md#ses-feedback-operations).
+
+The resource PR and runtime configuration must be reviewed and released before
+these controls can be described as operational. This change does not enable SES,
+change pacing or implement the deferred login-security features.

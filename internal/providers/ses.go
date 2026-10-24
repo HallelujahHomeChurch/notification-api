@@ -57,6 +57,20 @@ func NewSES(c SESConfig) (*SES, error) {
 	if err := ValidateSESConfig(c); err != nil {
 		return nil, err
 	}
+	credentials, err := NewFederatedCredentials(c)
+	if err != nil {
+		return nil, err
+	}
+	client := sesv2.New(sesv2.Options{Region: c.Region, Credentials: credentials, RetryMaxAttempts: 1})
+	return &SES{config: c, credentials: credentials, client: client}, nil
+}
+
+func (*SES) Family() string { return "ses" }
+
+func NewFederatedCredentials(c SESConfig) (*aws.CredentialsCache, error) {
+	if err := ValidateSESConfig(c); err != nil {
+		return nil, err
+	}
 	// Explicit identity only: neither developer Azure credentials nor AWS keys/profiles are consulted.
 	identity, err := azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{ID: azidentity.ClientID(c.ManagedIdentityClientID)})
 	if err != nil {
@@ -65,8 +79,7 @@ func NewSES(c SESConfig) (*SES, error) {
 	stsClient := sts.New(sts.Options{Region: c.Region, Credentials: aws.AnonymousCredentials{}, RetryMaxAttempts: 1})
 	federated := &federatedCredentials{identity: identity, scope: c.TokenScope, roleARN: c.RoleARN, sts: stsClient}
 	credentials := aws.NewCredentialsCache(federated, func(o *aws.CredentialsCacheOptions) { o.ExpiryWindow = 5 * time.Minute })
-	client := sesv2.New(sesv2.Options{Region: c.Region, Credentials: credentials, RetryMaxAttempts: 1})
-	return &SES{config: c, credentials: credentials, client: client}, nil
+	return credentials, nil
 }
 
 type webIdentitySTS interface {

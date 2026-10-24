@@ -37,6 +37,8 @@ type SMTP struct {
 	writeMessage func(io.Writer, string, string, DeliveryPayload) error
 }
 
+func (*SMTP) Family() string { return "smtp" }
+
 func NewSMTP(config SMTPConfig) *SMTP {
 	if config.Timeout <= 0 {
 		config.Timeout = defaultSMTPTimeout
