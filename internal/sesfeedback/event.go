@@ -53,6 +53,10 @@ func Parse(body string, c Config) (Event, error) {
 	if _, err := uuid.Parse(envelope.MessageId); err != nil {
 		return Event{}, ErrInvalidEvent
 	}
+	// SES validates a new destination with this non-email control message.
+	if envelope.Message == "Successfully validated SNS topic for Amazon SES event publishing." {
+		return Event{SNSMessageID: envelope.MessageId, Kind: "setup"}, nil
+	}
 	var message struct {
 		EventType string `json:"eventType"`
 		Mail      struct {

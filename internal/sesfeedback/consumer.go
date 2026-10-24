@@ -71,14 +71,16 @@ func (c *Consumer) Poll(ctx context.Context) error {
 			slog.Warn("ses_feedback_rejected")
 			continue
 		}
-		persistCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = c.store.Handle(persistCtx, event)
-		cancel()
-		if err != nil {
-			if !errors.Is(err, ErrDeliveryInFlight) {
-				slog.Error("ses_feedback_persist_failed")
+		if event.Kind != "setup" {
+			persistCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err = c.store.Handle(persistCtx, event)
+			cancel()
+			if err != nil {
+				if !errors.Is(err, ErrDeliveryInFlight) {
+					slog.Error("ses_feedback_persist_failed")
+				}
+				continue
 			}
-			continue
 		}
 		// Delete only after durable processing; a lost delete response is safe to replay.
 		deleteCtx, cancelDelete := context.WithTimeout(ctx, 5*time.Second)
@@ -86,6 +88,9 @@ func (c *Consumer) Poll(ctx context.Context) error {
 		cancelDelete()
 		if err != nil {
 			return err
+		}
+		if event.Kind == "setup" {
+			slog.Info("ses_feedback_setup_received")
 		}
 	}
 	return nil

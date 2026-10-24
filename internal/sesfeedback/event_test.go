@@ -158,3 +158,27 @@ func TestQueuePreflightAndDeadLetterMonitoring(t *testing.T) {
 		t.Fatal("dead-letter backlog was not reported")
 	}
 }
+
+func TestConsumerAcknowledgesOnlyExactTrustedSESSetupMessage(t *testing.T) {
+	setup := "Successfully validated SNS topic for Amazon SES event publishing."
+	body := func(message, topic string) string {
+		return testBody(nil, func(m map[string]any) { m["Message"] = message; m["TopicArn"] = topic })
+	}
+	e, err := Parse(body(setup, testConfig().TopicARN), testConfig())
+	if err != nil || e.Kind != "setup" {
+		t.Fatalf("SES control message rejected: %#v %v", e, err)
+	}
+	for _, b := range []string{body(setup, "wrong-topic"), body(setup+" unrelated text", testConfig().TopicARN)} {
+		if _, err := Parse(b, testConfig()); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatal("untrusted control message accepted")
+		}
+	}
+	q := &fakeQueue{messages: []types.Message{{Body: aws.String(body(setup, testConfig().TopicARN)), ReceiptHandle: aws.String("control-receipt")}}}
+	c := &Consumer{config: testConfig(), client: q, store: handleFunc(func(context.Context, Event) error {
+		t.Fatal("non-email control message persisted as a delivery")
+		return nil
+	})}
+	if err := c.Poll(context.Background()); err != nil || q.deleted != 1 {
+		t.Fatalf("control message not acknowledged: %d %v", q.deleted, err)
+	}
+}
