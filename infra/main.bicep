@@ -27,6 +27,31 @@ param smtpUsernameSecretName string = 'notification-smtp-username'
 param smtpPasswordSecretName string = 'notification-smtp-password'
 param vapidPrivateKeySecretName string = 'notification-vapid-private-key'
 
+
+type SesFeedbackConfig = {
+  region: string
+  roleArn: string
+  tokenScope: string
+  from: string
+  configurationSet: string
+  queueUrl: string
+  dlqUrl: string
+  topicArn: string
+}
+param sesFeedback SesFeedbackConfig?
+
+var sesFeedbackEnvironment = sesFeedback == null ? [] : [
+  { name: 'EMAIL_PROVIDER', value: 'smtp' }
+  { name: 'SES_REGION', value: sesFeedback!.region }
+  { name: 'SES_ROLE_ARN', value: sesFeedback!.roleArn }
+  { name: 'SES_ENTRA_TOKEN_SCOPE', value: sesFeedback!.tokenScope }
+  { name: 'SES_FROM', value: sesFeedback!.from }
+  { name: 'SES_CONFIGURATION_SET', value: sesFeedback!.configurationSet }
+  { name: 'SES_FEEDBACK_QUEUE_URL', value: sesFeedback!.queueUrl }
+  { name: 'SES_FEEDBACK_DLQ_URL', value: sesFeedback!.dlqUrl }
+  { name: 'SES_FEEDBACK_TOPIC_ARN', value: sesFeedback!.topicArn }
+]
+
 var acrPullRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var serviceBusSenderRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
 var serviceBusReceiverRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
@@ -354,7 +379,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
           ], smtpAuthenticationEnabled ? [
             { name: 'SMTP_USERNAME', secretRef: 'smtp-username-v2' }
             { name: 'SMTP_PASSWORD', secretRef: 'smtp-password-v2' }
-          ] : [])
+          ] : [], sesFeedbackEnvironment)
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
