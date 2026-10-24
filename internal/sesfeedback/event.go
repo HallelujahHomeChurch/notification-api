@@ -4,6 +4,7 @@ package sesfeedback
 import (
 	"encoding/json"
 	"errors"
+	"net/mail"
 	"net/url"
 	"strings"
 	"time"
@@ -70,7 +71,8 @@ func Parse(body string, c Config) (Event, error) {
 	if json.Unmarshal([]byte(envelope.Message), &message) != nil {
 		return Event{}, ErrInvalidEvent
 	}
-	if message.Mail.Source != c.Sender || message.Mail.SendingAccountId != c.AccountID || message.Mail.SourceArn != "arn:aws:ses:"+c.Region+":"+c.AccountID+":identity/"+strings.Split(c.Sender, "@")[1] || len(message.Mail.Destination) != 1 || message.Mail.MessageID == "" || len(message.Mail.MessageID) > 256 {
+	source, err := mail.ParseAddress(message.Mail.Source)
+	if err != nil || source.Address != c.Sender || message.Mail.SendingAccountId != c.AccountID || message.Mail.SourceArn != "arn:aws:ses:"+c.Region+":"+c.AccountID+":identity/"+strings.Split(c.Sender, "@")[1] || len(message.Mail.Destination) != 1 || message.Mail.MessageID == "" || len(message.Mail.MessageID) > 256 {
 		return Event{}, ErrInvalidEvent
 	}
 	tags := message.Mail.Tags

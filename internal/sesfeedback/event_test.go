@@ -47,6 +47,7 @@ func TestParseValidatesQueueOriginAndReducesPayload(t *testing.T) {
 			m["Type"] = "SubscriptionConfirmation"
 			m["SubscribeURL"] = "http://169.254.169.254/"
 		}},
+		{name: "wrong_sender", edit: func(m map[string]any) { m["mail"].(map[string]any)["source"] = "HHC <attacker@example.test>" }},
 		{name: "wrong_account", edit: func(m map[string]any) { m["mail"].(map[string]any)["sendingAccountId"] = "999999999999" }},
 		{name: "wrong_identity", edit: func(m map[string]any) { m["mail"].(map[string]any)["sourceArn"] = "other" }},
 		{name: "multiple_recipients", edit: func(m map[string]any) {
@@ -75,6 +76,9 @@ func TestParseValidatesQueueOriginAndReducesPayload(t *testing.T) {
 	e, err = Parse(testBody(func(m map[string]any) { m["bounce"].(map[string]any)["bounceType"] = "Transient" }, nil), testConfig())
 	if err != nil || e.Kind != "soft_bounce" {
 		t.Fatal("soft bounce classified as permanent")
+	}
+	if _, err := Parse(testBody(func(m map[string]any) { m["mail"].(map[string]any)["source"] = "HHC Church <no-reply@example.test>" }, nil), testConfig()); err != nil {
+		t.Fatalf("SES display-name source rejected: %v", err)
 	}
 	c := testConfig()
 	c.QueueURL = "https://attacker.test/feedback"
