@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 )
 
 const (
@@ -22,6 +24,8 @@ const (
 )
 
 type Config struct {
+	EmailProvider              string
+	SES                        providers.SESConfig
 	Environment                string
 	Port                       string
 	DatabaseURL                string
@@ -133,6 +137,8 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
+		EmailProvider:              env("EMAIL_PROVIDER", "smtp"),
+		SES:                        providers.SESConfig{Region: os.Getenv("SES_REGION"), RoleARN: os.Getenv("SES_ROLE_ARN"), ManagedIdentityClientID: os.Getenv("AZURE_CLIENT_ID"), TokenScope: os.Getenv("SES_ENTRA_TOKEN_SCOPE"), From: os.Getenv("SES_FROM"), FromName: env("SMTP_FROM_NAME", "哈利路亞家教會"), ConfigurationSet: os.Getenv("SES_CONFIGURATION_SET")},
 		Environment:                env("ENVIRONMENT", EnvironmentDevelopment),
 		Port:                       env("PORT", "8081"),
 		DatabaseURL:                os.Getenv("DATABASE_URL"),
@@ -211,8 +217,17 @@ func (c Config) Validate(mode string) error {
 		if err := c.validateEncryptionAndServiceBus(); err != nil {
 			return err
 		}
-		if c.SMTPAddr == "" || c.SMTPFrom == "" {
-			return fmt.Errorf("SMTP_ADDR and SMTP_FROM are required")
+		switch c.EmailProvider {
+		case "", "smtp":
+			if c.SMTPAddr == "" || c.SMTPFrom == "" {
+				return fmt.Errorf("SMTP_ADDR and SMTP_FROM are required")
+			}
+		case "ses":
+			if err := providers.ValidateSESConfig(c.SES); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("EMAIL_PROVIDER must be smtp or ses")
 		}
 		if c.VAPIDPublicKey == "" || c.VAPIDPrivateKey == "" || c.VAPIDSubject == "" {
 			return fmt.Errorf("VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT are required")

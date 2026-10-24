@@ -63,7 +63,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 
 	exactPhysicalFields := map[string][]string{
 		"notification.account-cleanup-operations": {"idempotency_key", "subject_ref", "result", "created_at", "updated_at"},
-		"notification.email-attempts":             {"delivery_id", "attempt", "bulk", "started_at", "finished_at", "outcome", "stage", "smtp_code", "enhanced_code"},
+		"notification.email-attempts":             {"delivery_id", "attempt", "bulk", "started_at", "finished_at", "outcome", "stage", "smtp_code", "enhanced_code", "provider", "provider_message_id", "provider_accepted_at"},
 		"notification.message-sensitive":          {"target_ciphertext", "payload_ciphertext"},
 		"notification.message-metadata": {
 			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",

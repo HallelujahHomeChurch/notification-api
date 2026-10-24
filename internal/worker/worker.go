@@ -273,7 +273,7 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	cancel()
 	if claimed.Channel == "email" && w.email != nil {
 		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
-		recordErr := w.email.finish(finishCtx, claimed, providerErr)
+		recordErr := w.email.finish(finishCtx, claimed, receipt, providerErr)
 		finish()
 		if recordErr != nil {
 			return fmt.Errorf("persist email attempt: %w", recordErr)
@@ -375,6 +375,7 @@ func (w *Worker) render(claimed claim) (providers.DeliveryPayload, error) {
 		}
 		return providers.DeliveryPayload{
 			Recipient: email.To, Subject: email.Subject, Body: email.Body, HTMLBody: email.HTMLBody,
+			DeliveryID:      claimed.DeliveryID,
 			MessageID:       fmt.Sprintf("<%s@notification.alive.org.tw>", claimed.DeliveryID),
 			ListUnsubscribe: email.ListUnsubscribe, OneClickUnsubscribe: email.OneClickUnsubscribe,
 		}, nil

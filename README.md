@@ -150,3 +150,34 @@ All production SMTP workers reserve a shared PostgreSQL quota slot before sendin
 Each Email claim records sanitized attempt outcomes; no target, content or raw SMTP response is copied. Campaign sends stop on unknown/incomplete acceptance for reconciliation; account messages retain the existing at-least-once retry policy. Accepted-attempt evidence recovers a failed receipt write without sending again. Attempt rows cascade with the parent delivery under existing 730-day message retention.
 
 The existing caller-scoped status GET adds `safeToRetry`. Only complete, retained, unexpired, definitively rejected Email history can return true; legacy, accepted, ambiguous or incomplete history returns false. Missing fields must be treated as false by consumers. No historical failures are replayed by this migration or worker change.
+
+### SES transport foundation (cutover disabled)
+
+SMTP remains the default. The worker can select `EMAIL_PROVIDER=ses` with
+`SES_REGION`, `SES_ROLE_ARN`, `AZURE_CLIENT_ID`, `SES_ENTRA_TOKEN_SCOPE`,
+`SES_FROM`, and `SES_CONFIGURATION_SET`. These are non-secret identifiers.
+SES mode does not require SMTP configuration. It uses only the named Azure
+managed identity, exchanges its scoped Entra token with regional STS, and caches
+short-lived AWS credentials. AWS profiles, environment access keys and human
+SSO sessions are not credential fallbacks. SES SMTP credentials are not used.
+
+The SES client makes one API attempt per durable worker attempt. Credential
+acquisition failures happen before submission; a transport failure after invoking
+SES is conservatively acceptance-unknown. There is no automatic SMTP failover.
+The existing ambiguous-acceptance policy still applies. SES acceptance means
+queued by the provider, not delivered to an inbox. Raw MIME retains application
+headers, but SES may replace Message-ID; the actual SES receipt and a non-personal
+`hhc_delivery_id` message tag support later feedback correlation.
+
+Migration 007 adds provider receipts to the email-attempt ledger. Existing SMTP
+rows retain their legacy recovery representation. A process crash after recording
+SES acceptance restores the actual receipt without sending again. Never replay
+uncertain sends or run old SMTP workers against SES traffic during rollback;
+fence and drain workers, reconcile uncertain attempts, then explicitly select the
+previous provider through the normal release workflow.
+
+This foundation does not provision trust, sender/DKIM, configuration sets or
+feedback ingestion, raise quotas, change queue priority, activate SES, or enable
+login verification. Those controls and live delivery acceptance remain required
+before production cutover. Existing conservative pacing settings are unchanged;
+selecting SES alone does not meet campaign/OTP throughput targets.

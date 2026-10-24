@@ -477,6 +477,7 @@ func setProductionEnv(t *testing.T) {
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
+		"EMAIL_PROVIDER", "SES_REGION", "SES_ROLE_ARN", "SES_ENTRA_TOKEN_SCOPE", "SES_CONFIGURATION_SET", "SES_FROM", "AZURE_CLIENT_ID",
 		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_ALLOWED_CALLERS",
 		"NOTIFICATION_ALLOW_DEV_CALLER_HEADER", "NOTIFICATION_DATA_ENCRYPTION_KEY", "NOTIFICATION_HASH_KEY",
 		"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "NOTIFICATION_ENCRYPTION_KEYS_JSON",
@@ -500,5 +501,32 @@ func TestSMTPBudgetConfigurationValidation(t *testing.T) {
 	t.Setenv("SMTP_TRANSACTIONAL_RESERVE_PER_HOUR", "100")
 	if _, err := Load(); err == nil {
 		t.Fatal("reserve consuming the whole quota accepted")
+	}
+}
+
+func TestSESWorkerConfigDoesNotRequireSMTP(t *testing.T) {
+	clearConfigEnv(t)
+	for key, value := range map[string]string{
+		"DATABASE_URL": "postgres://localhost/notification_test", "NOTIFICATION_DATA_ENCRYPTION_KEY": base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		"SERVICEBUS_NAMESPACE": "test.servicebus.windows.net", "VAPID_PUBLIC_KEY": "public", "VAPID_PRIVATE_KEY": "private", "VAPID_SUBJECT": "mailto:test@example.test",
+		"EMAIL_PROVIDER": "ses", "SES_REGION": "ap-northeast-1", "SES_ROLE_ARN": "arn:aws:iam::123456789012:role/sender", "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+		"SES_ENTRA_TOKEN_SCOPE": "api://test/.default", "SES_CONFIGURATION_SET": "events", "SES_FROM": "sender@example.test",
+	} {
+		t.Setenv(key, value)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate("worker"); err != nil {
+		t.Fatalf("SES incorrectly requires SMTP: %v", err)
+	}
+	cfg.SES.TokenScope = ""
+	if err := cfg.Validate("worker"); err == nil {
+		t.Fatal("missing federation scope accepted")
+	}
+	cfg.EmailProvider = "unrecognized"
+	if err := cfg.Validate("worker"); err == nil {
+		t.Fatal("unknown provider accepted")
 	}
 }

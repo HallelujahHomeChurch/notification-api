@@ -147,19 +147,23 @@ func (s *SMTP) validate(payload DeliveryPayload) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return host, validateEmailPayload(payload)
+}
+
+func validateEmailPayload(payload DeliveryPayload) error {
 	if !plainAddress(payload.Recipient) {
-		return "", errors.New("invalid email address")
+		return errors.New("invalid email address")
 	}
 	if strings.ContainsAny(payload.Subject, "\r\n") {
-		return "", errors.New("invalid subject")
+		return errors.New("invalid subject")
 	}
 	if strings.ContainsAny(payload.ListUnsubscribe, "\r\n") {
-		return "", errors.New("invalid unsubscribe header")
+		return errors.New("invalid unsubscribe header")
 	}
 	if !validMessageID(payload.MessageID) {
-		return "", errors.New("invalid message ID")
+		return errors.New("invalid message ID")
 	}
-	return host, nil
+	return nil
 }
 
 func smtpHost(config SMTPConfig) (string, error) {

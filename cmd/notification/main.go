@@ -224,8 +224,18 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		FromName: cfg.SMTPFromName,
 		Logger:   log.New(os.Stdout, "", log.LstdFlags),
 	}
-	if err := providers.ValidateSMTPConfig(smtpConfig); err != nil {
-		return workerComponents{}, fmt.Errorf("validate SMTP config: %w", err)
+	var emailProvider providers.Provider
+	if cfg.EmailProvider == "ses" {
+		ses, err := providers.NewSES(cfg.SES)
+		if err != nil {
+			return workerComponents{}, fmt.Errorf("validate SES config: %w", err)
+		}
+		emailProvider = ses
+	} else {
+		if err := providers.ValidateSMTPConfig(smtpConfig); err != nil {
+			return workerComponents{}, fmt.Errorf("validate SMTP config: %w", err)
+		}
+		emailProvider = providers.NewSMTP(smtpConfig)
 	}
 	webPushConfig := providers.WebPushConfig{
 		PublicKey: cfg.VAPIDPublicKey, PrivateKey: cfg.VAPIDPrivateKey,
@@ -248,7 +258,7 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		return workerComponents{}, fmt.Errorf("create consumer: %w", err)
 	}
 	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
-		"email": providers.NewSMTP(smtpConfig), "web_push": providers.NewWebPush(webPushConfig),
+		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
 	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
 
 	return workerComponents{

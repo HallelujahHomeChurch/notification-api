@@ -116,9 +116,12 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	return delay, tx.Commit()
 }
 
-func (p *emailPolicy) finish(ctx context.Context, c claim, providerErr error) error {
+func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.ProviderReceipt, providerErr error) error {
 	outcome, stage, enhanced := "accepted", "data", ""
 	code := 250
+	if receipt.Provider == "ses" {
+		code = 0
+	}
 	var pe *providers.ProviderError
 	if providerErr != nil {
 		outcome = "unknown"
@@ -139,7 +142,7 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, providerErr error) er
 	if err = tx.QueryRowContext(ctx, `SELECT throttle_count FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&strikes); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE notification_email_attempts SET outcome=$3,stage=$4,smtp_code=$5,enhanced_code=$6,finished_at=clock_timestamp() WHERE delivery_id=$1 AND attempt=$2 AND outcome='started'`, c.DeliveryID, c.Attempt, outcome, stage, code, enhanced)
+	result, err := tx.ExecContext(ctx, `UPDATE notification_email_attempts SET outcome=$3,stage=$4,smtp_code=$5,enhanced_code=$6,finished_at=clock_timestamp(),provider=$7,provider_message_id=$8,provider_accepted_at=$9 WHERE delivery_id=$1 AND attempt=$2 AND outcome='started'`, c.DeliveryID, c.Attempt, outcome, stage, code, enhanced, receipt.Provider, nullableReceiptID(receipt.ProviderMessageID), nullableReceiptTime(receipt.AcceptedAt))
 	if err != nil {
 		return err
 	}
@@ -166,9 +169,22 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, providerErr error) er
 }
 
 func (p *emailPolicy) acceptedReceipt(ctx context.Context, c claim) (providers.ProviderReceipt, error) {
-	var at time.Time
-	err := p.db.QueryRowContext(ctx, `SELECT finished_at FROM notification_email_attempts WHERE delivery_id=$1 AND outcome='accepted' ORDER BY attempt DESC LIMIT 1`, c.DeliveryID).Scan(&at)
-	return providers.ProviderReceipt{Provider: "smtp", ProviderMessageID: fmt.Sprintf("<%s@notification.alive.org.tw>", c.DeliveryID), AcceptedAt: at}, err
+	var receipt providers.ProviderReceipt
+	err := p.db.QueryRowContext(ctx, `SELECT provider,COALESCE(provider_message_id,'<'||delivery_id::text||'@notification.alive.org.tw>'),COALESCE(provider_accepted_at,finished_at) FROM notification_email_attempts WHERE delivery_id=$1 AND outcome='accepted' ORDER BY attempt DESC LIMIT 1`, c.DeliveryID).Scan(&receipt.Provider, &receipt.ProviderMessageID, &receipt.AcceptedAt)
+	return receipt, err
+}
+
+func nullableReceiptID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
+}
+func nullableReceiptTime(at time.Time) any {
+	if at.IsZero() {
+		return nil
+	}
+	return at
 }
 
 func (p *emailPolicy) observe(ctx context.Context, c claim) error {
@@ -180,14 +196,15 @@ func (p *emailPolicy) observe(ctx context.Context, c claim) error {
 func restoreAcceptedEmail(ctx context.Context, tx *sql.Tx, deliveryID string) (bool, error) {
 	var messageID string
 	var acceptedAt time.Time
-	err := tx.QueryRowContext(ctx, `SELECT d.message_id::text,a.finished_at FROM notification_deliveries d JOIN notification_email_attempts a ON a.delivery_id=d.id WHERE d.id=$1 AND (d.status IN ('queued','sending') OR (d.status='dead_lettered' AND d.last_error_code='expired')) AND a.outcome='accepted' ORDER BY a.attempt DESC LIMIT 1 FOR UPDATE OF d`, deliveryID).Scan(&messageID, &acceptedAt)
+	var providerMessageID string
+	err := tx.QueryRowContext(ctx, `SELECT d.message_id::text,COALESCE(a.provider_accepted_at,a.finished_at),COALESCE(a.provider_message_id,'<'||d.id::text||'@notification.alive.org.tw>') FROM notification_deliveries d JOIN notification_email_attempts a ON a.delivery_id=d.id WHERE d.id=$1 AND (d.status IN ('queued','sending') OR (d.status='dead_lettered' AND d.last_error_code='expired')) AND a.outcome='accepted' ORDER BY a.attempt DESC LIMIT 1 FOR UPDATE OF d`, deliveryID).Scan(&messageID, &acceptedAt, &providerMessageID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE notification_deliveries SET status='sent',sent_at=$2,provider_message_id=$3,last_error_code=NULL,lease_expires_at=NULL,updated_at=clock_timestamp() WHERE id=$1`, deliveryID, acceptedAt, fmt.Sprintf("<%s@notification.alive.org.tw>", deliveryID)); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE notification_deliveries SET status='sent',sent_at=$2,provider_message_id=$3,last_error_code=NULL,lease_expires_at=NULL,updated_at=clock_timestamp() WHERE id=$1`, deliveryID, acceptedAt, providerMessageID); err != nil {
 		return false, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE notification_messages SET status='sent',terminal_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1`, messageID); err != nil {

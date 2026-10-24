@@ -668,3 +668,22 @@ Deploy Notification v4 support before Account supplies OAuth `payload.expiresAt`
 For a later manual rollback, restore the older Account payload contract before
 rolling back Notification API. Keep a v4-capable worker until every v4 message is
 terminal; do not restore a worker that cannot render persisted versions.
+
+## SES preparation and rollback boundary
+
+Before selecting SES, review the exact Entra issuer/audience/subject and dedicated
+worker role policy using a real workload token without logging it. Trust only that
+worker identity and approved sender/configuration set; never trust a tenant-wide
+subject. Provision and verify sender authentication, authenticated feedback and
+suppression, monitoring, regional production access and sufficient sending quota
+separately. No application setting establishes any of these gates.
+
+Validate the full temporary-credential path and required delivery/capacity tests
+before provider cutover. Keep existing SMTP infrastructure and secrets available
+for a reviewed rollback. Fence/drain sender workers and reconcile accepted/unknown
+attempts before switching providers. Do not implement automatic fallback after a
+timeout. Additive receipt columns may remain during rollback, but an old worker
+must not recover SES attempts using synthetic SMTP message IDs; roll back by a
+forward fix using the receipt-aware worker. Revoking Entra trust alone does not
+invalidate already-issued STS credentials: fence workers and revoke AWS role
+permissions/sessions as required by the incident.
