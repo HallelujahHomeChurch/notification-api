@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -637,5 +638,16 @@ func TestEmailThrottleWaitDoesNotExhaustGeneralFailureBudget(t *testing.T) {
 	}
 	if repository.retryCode != "rate_limited" || repository.retryDelay != time.Hour || message.deadLettered != 0 {
 		t.Fatalf("quota wait exhausted failures: %#v", repository)
+	}
+}
+
+func TestWorkerRejectsForeignEmailPolicyDatabaseBeforeClaim(t *testing.T) {
+	provider := &fakeProvider{}
+	w := New(&sql.DB{}, provider, testKey).WithEmailLimits(&sql.DB{}, EmailLimits{})
+	if err := w.Process(context.Background(), &fakeMessage{id: "not-claimed"}); err == nil {
+		t.Fatal("foreign email-policy database was silently rebound")
+	}
+	if provider.calls != 0 {
+		t.Fatal("invalid configuration called provider")
 	}
 }
