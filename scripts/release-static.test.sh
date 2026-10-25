@@ -58,7 +58,7 @@ assert_contains "${workflow}" 'group:[[:space:]]*notification-production' "produ
 assert_contains "${workflow}" 'cancel-in-progress:[[:space:]]*false' "production releases must not cancel in progress"
 assert_contains "${workflow}" '(?s)paths:\n.*?- docs/data-governance\.yaml' "data-governance changes must trigger production release"
 assert_contains "${workflow}" 'POSTGRES_DB:[[:space:]]*notification_test' "Postgres test database is missing"
-assert_contains "${workflow}" 'go test -tags=integration -json \./\.\.\. -count=1' "integration tests are missing"
+assert_contains "${workflow}" 'go test -p 1 -tags=integration -json \./\.\.\. -count=1' "integration tests are missing"
 assert_contains "${workflow}" 'go vet \./\.\.\.' "go vet is missing"
 assert_contains "${workflow}" 'bash scripts/release-static\.test\.sh' "release static test is not run by CI"
 scanner='ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
@@ -68,7 +68,7 @@ grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-co
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 notification-api:verify' "${ci_workflow}" || fail "CI image scan is missing"
 grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1' "${workflow}" || fail "release dependency scan is missing"
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 notification-api:verify' "${workflow}" || fail "release verification-image scan is missing"
-grep -Fq 'docker pull "${IMAGE_REF}"' "${workflow}" || fail "immutable release image pull is missing"
+grep -Fq 'docker pull --platform linux/amd64 "${IMAGE_REF}"' "${workflow}" || fail "immutable release image pull is missing"
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "${IMAGE_REF}"' "${workflow}" || fail "immutable release image scan is missing"
 scan_line="$(grep -nF 'name: Scan immutable image' "${workflow}" | cut -d: -f1)"
 what_if_line="$(grep -nF 'name: Produce complete what-if plan' "${workflow}" | cut -d: -f1)"
@@ -250,7 +250,7 @@ printf '%s\n' "${publish_job}" | grep -q -- '--name current.json' || fail "curre
 printf '%s\n' "${publish_job}" | grep -q -- '--overwrite true' || fail "current pointer must be replaceable"
 
 for verify_workflow in "${ci_workflow}" "${workflow}"; do
-  grep -Fq 'go test -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" ||
+  grep -Fq 'go test -p 1 -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" ||
     fail "combined unit and integration evidence stream is missing"
   grep -Fq 'set -o pipefail' "${verify_workflow}" || fail "governance evidence pipeline must fail closed"
   grep -Fq 'GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl"' "${verify_workflow}" ||
@@ -274,7 +274,7 @@ for verify_workflow in "${ci_workflow}" "${workflow}"; do
   [[ "${actual_payloads}" == $'.artifacts/data-governance/export/data-governance.yaml\n.artifacts/data-governance/export/data-governance.json' ]] ||
     fail "governance artifact must contain exactly the exported YAML and JSON"
 
-  integration_line="$(grep -nF 'go test -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" | cut -d: -f1)"
+  integration_line="$(grep -nF 'go test -p 1 -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" | cut -d: -f1)"
   export_line="$(grep -nF "go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1" "${verify_workflow}" | cut -d: -f1)"
   upload_line="$(grep -nF 'name: Store verified governance manifest' "${verify_workflow}" | cut -d: -f1)"
   [[ "${integration_line}" -lt "${export_line}" && "${export_line}" -lt "${upload_line}" ]] ||
@@ -459,6 +459,24 @@ for root in ('cmd', 'internal'):
                 assert path.name.endswith('_test.go') and line in ('//go:build integration', '// +build integration'), f'non-additive build constraint: {path}'
 for name in ('ci', 'release'):
     text = Path(f'.github/workflows/{name}.yml').read_text()
-    assert text.count('go test -tags=integration -json ./... -count=1 | tee ') == 1
+    assert text.count('go test -p 1 -tags=integration -json ./... -count=1 | tee ') == 1
     assert 'go test -json ./...' not in text, 'untagged tests would be run twice'
+PYTEST
+
+# Artifact selection is exact and restricted to this release's verified producer.
+python3 - <<'PYTEST'
+from pathlib import Path
+release = Path('.github/workflows/release.yml').read_text()
+verify, plan = release.split('  plan:', 1)
+plan = plan.split('  deploy:', 1)[0]
+assert 'az acr build' not in release
+assert release.count('docker build --platform linux/amd64 -t notification-api:verify .') == 1
+assert 'image_artifact_id: ${{ steps.image_artifact.outputs.artifact-id }}' in verify
+assert 'artifact-ids: ${{ needs.verify.outputs.image_artifact_id }}' in plan
+assert 'digest-mismatch: error' in plan
+assert 'run-id:' not in plan and 'github-token:' not in plan
+assert verify.index('name: Scan image') < verify.index('name: Export verified image') < verify.index('name: Store verified image')
+assert plan.index('name: Verify and load image') < plan.index('docker push ') < plan.index('name: Scan immutable image')
+assert "steps.load_image.outputs.api_image_id" in plan
+assert '.artifacts' in Path('.dockerignore').read_text().splitlines()
 PYTEST

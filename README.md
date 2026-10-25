@@ -216,3 +216,22 @@ pending dependency: provision the capped login/secret and its narrow identity
 read permission with Job admission paused before release. No credentials or
 role assignments were created here; see azure-infra PR144 for the operator
 preview and inventory verification.
+
+## Release image handoff
+
+The release Verify job builds and scans one `linux/amd64` image. The plan job
+loads that image from the exact artifact ID emitted by Verify; it does not
+rebuild the source in ACR. The handoff checks the full commit, platform, archive
+checksums and image identities before loading. After push, the immutable digest
+is pulled and checked against the verified image ID before the existing scan
+and deployment plan. GitHub's same-run artifact selection supplies provenance;
+checksums alone are corruption detection, not signatures.
+
+PR CI exercises rejection cases and a real image export/load round trip. Release
+transport adds gzip/save, upload, download and load work; measure these costs
+against the removed ACR build before claiming a release-time improvement.
+Migration, worker rollout, health gates and rollback remain in the release flow.
+
+CI executes integration packages serially (`go test -p 1`): migration fixtures
+share a database-wide advisory lock even when their schemas differ. This keeps
+the existing lock deadline assertions meaningful; all cases still run once.

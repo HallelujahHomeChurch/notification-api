@@ -80,15 +80,16 @@ jobs:
         run: |
           mkdir -p .artifacts/data-governance
           set -o pipefail
-          go test -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl
+          go test -p 1 -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl
           GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl" \
           GOVERNANCE_OUTPUT_DIR="$PWD/.artifacts/data-governance/export" \
             go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1
           bash scripts/test-publish-data-governance.sh
           go vet ./...
           bash scripts/release-static.test.sh
+          bash scripts/test-release-image-artifact.sh
       - name: Build image
-        run: docker build -t notification-api:verify .
+        run: docker build --platform linux/amd64 -t notification-api:verify .
       - name: Scan image
         run: |
           docker run --rm \
@@ -96,6 +97,10 @@ jobs:
             -v "$TRIVY_CACHE:/root/.cache/trivy" \
             ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
             image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 notification-api:verify
+      - name: Verify image handoff round trip
+        run: |
+          bash scripts/release-image-artifact.sh pack "$RUNNER_TEMP/release-image" "$GITHUB_SHA" notification-api:verify
+          bash scripts/release-image-artifact.sh load "$RUNNER_TEMP/release-image" "$GITHUB_SHA"
       - name: Store verified governance manifest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
