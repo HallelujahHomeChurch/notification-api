@@ -70,8 +70,7 @@ jobs:
         run: |
           mkdir -p .artifacts/data-governance
           set -o pipefail
-          go test -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl
-          go test -tags=integration -json ./... -count=1 | tee -a .artifacts/data-governance/test-events.jsonl
+          go test -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl
           GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl" \
           GOVERNANCE_OUTPUT_DIR="$PWD/.artifacts/data-governance/export" \
             go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1
