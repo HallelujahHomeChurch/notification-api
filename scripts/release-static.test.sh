@@ -58,7 +58,6 @@ assert_contains "${workflow}" 'group:[[:space:]]*notification-production' "produ
 assert_contains "${workflow}" 'cancel-in-progress:[[:space:]]*false' "production releases must not cancel in progress"
 assert_contains "${workflow}" '(?s)paths:\n.*?- docs/data-governance\.yaml' "data-governance changes must trigger production release"
 assert_contains "${workflow}" 'POSTGRES_DB:[[:space:]]*notification_test' "Postgres test database is missing"
-assert_contains "${workflow}" 'go test -json \./\.\.\. -count=1' "unit tests are missing"
 assert_contains "${workflow}" 'go test -tags=integration -json \./\.\.\. -count=1' "integration tests are missing"
 assert_contains "${workflow}" 'go vet \./\.\.\.' "go vet is missing"
 assert_contains "${workflow}" 'bash scripts/release-static\.test\.sh' "release static test is not run by CI"
@@ -251,10 +250,8 @@ printf '%s\n' "${publish_job}" | grep -q -- '--name current.json' || fail "curre
 printf '%s\n' "${publish_job}" | grep -q -- '--overwrite true' || fail "current pointer must be replaceable"
 
 for verify_workflow in "${ci_workflow}" "${workflow}"; do
-  grep -Fq 'go test -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" ||
-    fail "untagged governance evidence stream is missing"
-  grep -Fq 'go test -tags=integration -json ./... -count=1 | tee -a .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" ||
-    fail "tagged governance evidence append is missing"
+  grep -Fq 'go test -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" ||
+    fail "combined unit and integration evidence stream is missing"
   grep -Fq 'set -o pipefail' "${verify_workflow}" || fail "governance evidence pipeline must fail closed"
   grep -Fq 'GOVERNANCE_TEST_EVENTS="$PWD/.artifacts/data-governance/test-events.jsonl"' "${verify_workflow}" ||
     fail "governance exporter must consume the combined evidence stream"
@@ -277,12 +274,11 @@ for verify_workflow in "${ci_workflow}" "${workflow}"; do
   [[ "${actual_payloads}" == $'.artifacts/data-governance/export/data-governance.yaml\n.artifacts/data-governance/export/data-governance.json' ]] ||
     fail "governance artifact must contain exactly the exported YAML and JSON"
 
-  unit_line="$(grep -nF 'go test -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" | cut -d: -f1)"
-  integration_line="$(grep -nF 'go test -tags=integration -json ./... -count=1 | tee -a .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" | cut -d: -f1)"
+  integration_line="$(grep -nF 'go test -tags=integration -json ./... -count=1 | tee .artifacts/data-governance/test-events.jsonl' "${verify_workflow}" | cut -d: -f1)"
   export_line="$(grep -nF "go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1" "${verify_workflow}" | cut -d: -f1)"
   upload_line="$(grep -nF 'name: Store verified governance manifest' "${verify_workflow}" | cut -d: -f1)"
-  [[ "${unit_line}" -lt "${integration_line}" && "${integration_line}" -lt "${export_line}" && "${export_line}" -lt "${upload_line}" ]] ||
-    fail "governance evidence must run untagged, append tagged, export, then upload"
+  [[ "${integration_line}" -lt "${export_line}" && "${export_line}" -lt "${upload_line}" ]] ||
+    fail "governance evidence must run the combined suite, export, then upload"
 done
 
 download_step="$(printf '%s\n' "${publish_job}" | awk '/^      - name: Download verified governance manifest$/ { capture=1; next } capture && /^      - / { exit } capture { print }')"
@@ -452,3 +448,17 @@ echo "release static test ok"
 grep -Fq "param sesFeedback SesFeedbackConfig?" "${bicep}" || fail "feedback must be optional for existing deployments"
 grep -Fq "{ name: 'EMAIL_PROVIDER', value: 'smtp' }" "${bicep}" || fail "feedback listener must preserve SMTP"
 assert_not_contains "${bicep}" "name: 'EMAIL_PROVIDER', value: 'ses'" "listener activation must not select SES sending"
+
+# The integration tag is additive; a future replacement requires reviewing the one-pass policy.
+python3 - <<'PYTEST'
+from pathlib import Path
+for root in ('cmd', 'internal'):
+    for path in Path(root).rglob('*.go'):
+        for line in path.read_text().splitlines():
+            if line.startswith('//go:build') or line.startswith('// +build'):
+                assert path.name.endswith('_test.go') and line in ('//go:build integration', '// +build integration'), f'non-additive build constraint: {path}'
+for name in ('ci', 'release'):
+    text = Path(f'.github/workflows/{name}.yml').read_text()
+    assert text.count('go test -tags=integration -json ./... -count=1 | tee ') == 1
+    assert 'go test -json ./...' not in text, 'untagged tests would be run twice'
+PYTEST
