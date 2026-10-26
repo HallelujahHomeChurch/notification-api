@@ -231,7 +231,9 @@ not a production connection-budget or scale acceptance result.
 SMTP retains its existing minute/hour settings. SES uses separate rolling-second
 and rolling-24-hour limits: `SES_EMAILS_PER_SECOND=1`, `SES_EMAILS_PER_DAY=200`,
 `SES_TRANSACTIONAL_RESERVE_PER_SECOND=0`, and
-`SES_TRANSACTIONAL_RESERVE_PER_DAY=20` by default. Shared PostgreSQL reservations
+`SES_TRANSACTIONAL_RESERVE_PER_DAY=20` by default. SES transactions use available rolling capacity without waiting on the bulk
+pacing clock; shared provider cooldowns and total quotas still apply. SMTP pacing
+is unchanged. Shared PostgreSQL reservations
 count rejected and unknown attempts conservatively and prevent campaigns from
 using the transactional reserve. SES attempt counts exclude SMTP attempts;
 provider cooldown remains conservative during rollback. Exhausted windows defer

@@ -73,7 +73,11 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	}
 	defer tx.Rollback()
 	var now, next, cooldown time.Time
-	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp(),next_send_at,cooldown_until FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&now, &next, &cooldown); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT next_send_at,cooldown_until FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&next, &cooldown); err != nil {
+		return 0, err
+	}
+	// A clock evaluated before the lock wait can expire a reservation before admission.
+	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
 		return 0, err
 	}
 	name := p.provider
@@ -119,6 +123,11 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 		return 0, errEmailAcceptanceUnknown
 	}
 	bulk := campaignEmail(c)
+	// SES transactions use reserved rolling capacity, not the bulk pacing clock.
+	smoothPacing := name != "ses" || bulk
+	if !smoothPacing {
+		next = now
+	}
 	windows := []struct {
 		duration       time.Duration
 		total, reserve int
@@ -158,7 +167,7 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	if n, _ := result.RowsAffected(); n != 1 {
 		return 0, fmt.Errorf("email attempt fence lost")
 	}
-	if delay == 0 {
+	if delay == 0 && smoothPacing {
 		period, rate := windows[0].duration, windows[0].total
 		if bulk {
 			rate -= windows[0].reserve

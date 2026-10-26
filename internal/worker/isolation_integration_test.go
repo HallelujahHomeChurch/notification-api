@@ -17,34 +17,42 @@ import (
 var isolationLimits = EmailLimits{PerSecond: 5, ReserveSecond: 1, PerDay: 6000, ReserveDay: 1000}
 
 func TestSESReplicasShareRollingRateReservations(t *testing.T) {
-	db := workerTestDatabase(t)
-	db.SetMaxOpenConns(5)
-	policies := []*emailPolicy{{db: db, provider: "ses", limits: isolationLimits}, {db: db, provider: "ses", limits: isolationLimits}}
-	claims := make([]claim, 20)
-	for i := range claims {
-		claims[i] = emailClaim(t, db, "engagement.newsletter")
-		if _, err := db.Exec(`UPDATE notification_deliveries SET provider='ses' WHERE id=$1`, claims[i].DeliveryID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for i, c := range claims {
-		wg.Go(func() {
-			<-start
-			if _, err := policies[i%2].begin(context.Background(), c); err != nil {
-				t.Error(err)
+	for _, template := range []string{"engagement.newsletter", "account.verify-email"} {
+		t.Run(template, func(t *testing.T) {
+			maximum := 4
+			if template == "account.verify-email" {
+				maximum = 5
+			}
+			db := workerTestDatabase(t)
+			db.SetMaxOpenConns(5)
+			policies := []*emailPolicy{{db: db, provider: "ses", limits: isolationLimits}, {db: db, provider: "ses", limits: isolationLimits}}
+			claims := make([]claim, 20)
+			for i := range claims {
+				claims[i] = emailClaim(t, db, template)
+				if _, err := db.Exec(`UPDATE notification_deliveries SET provider='ses' WHERE id=$1`, claims[i].DeliveryID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			for i, c := range claims {
+				wg.Go(func() {
+					<-start
+					if _, err := policies[i%2].begin(context.Background(), c); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+			close(start)
+			wg.Wait()
+			var admitted, violations int
+			if err := db.QueryRow(`SELECT count(*) FROM notification_email_attempts WHERE outcome='started'`).Scan(&admitted); err != nil || admitted == 0 {
+				t.Fatalf("admitted=%d: %v", admitted, err)
+			}
+			if err := db.QueryRow(`SELECT count(*) FROM notification_email_attempts a WHERE a.outcome='started' AND (SELECT count(*) FROM notification_email_attempts b WHERE b.outcome='started' AND b.started_at>a.started_at-interval '1 second' AND b.started_at<=a.started_at)> $1`, maximum).Scan(&violations); err != nil || violations != 0 {
+				t.Fatalf("replicas overran rate/reserve: violations=%d %v", violations, err)
 			}
 		})
-	}
-	close(start)
-	wg.Wait()
-	var admitted, violations int
-	if err := db.QueryRow(`SELECT count(*) FROM notification_email_attempts WHERE outcome='started'`).Scan(&admitted); err != nil || admitted == 0 {
-		t.Fatalf("admitted=%d: %v", admitted, err)
-	}
-	if err := db.QueryRow(`SELECT count(*) FROM notification_email_attempts a WHERE a.outcome='started' AND (SELECT count(*) FROM notification_email_attempts b WHERE b.outcome='started' AND b.started_at>a.started_at-interval '1 second' AND b.started_at<=a.started_at)>4`).Scan(&violations); err != nil || violations != 0 {
-		t.Fatalf("replicas overran bulk reserve: violations=%d %v", violations, err)
 	}
 }
 
@@ -328,5 +336,100 @@ func TestFakeSES429SchedulesDurableRetryWithoutGeneralFailureCharge(t *testing.T
 	}
 	if provider.calls.Load() != 1 {
 		t.Fatal("broker duplicate bypassed retry time")
+	}
+}
+
+func TestSESTransactionalAdmissionIgnoresOnlyBulkPacing(t *testing.T) {
+	for _, mode := range []string{"available", "cooldown", "second-quota", "day-quota"} {
+		t.Run(mode, func(t *testing.T) {
+			db := workerTestDatabase(t)
+			transaction, bulk := emailClaim(t, db, "account.verify-email"), emailClaim(t, db, "engagement.newsletter")
+			if _, err := db.Exec(`UPDATE notification_deliveries SET provider='ses' WHERE id IN ($1,$2)`, transaction.DeliveryID, bulk.DeliveryID); err != nil {
+				t.Fatal(err)
+			}
+			var pacedAt time.Time
+			if err := db.QueryRow(`UPDATE notification_email_budget SET next_send_at=clock_timestamp()+interval '1 minute' WHERE id=true RETURNING next_send_at`).Scan(&pacedAt); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "cooldown" {
+				if _, err := db.Exec(`UPDATE notification_email_budget SET cooldown_until=clock_timestamp()+interval '1 minute' WHERE id=true`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "second-quota" || mode == "day-quota" {
+				count, age := 5, "0 seconds"
+				if mode == "day-quota" {
+					count, age = 10, "1 minute"
+				}
+				if _, err := db.Exec(`INSERT INTO notification_email_attempts(delivery_id,attempt,bulk,outcome,provider,started_at,finished_at) SELECT $1,n,n<=8,'rejected','ses',clock_timestamp()-$3::interval,clock_timestamp() FROM generate_series(1,$2::integer) n`, bulk.DeliveryID, count, age); err != nil {
+					t.Fatal(err)
+				}
+			}
+			policy := &emailPolicy{db: db, provider: "ses", limits: EmailLimits{PerSecond: 5, PerDay: 10, ReserveSecond: 1, ReserveDay: 2}}
+			delay, err := policy.begin(t.Context(), transaction)
+			if err != nil || (mode == "available" && delay != 0) || (mode != "available" && delay <= 0) {
+				t.Fatalf("mode=%s transaction delay=%s err=%v", mode, delay, err)
+			}
+			if mode == "day-quota" && delay < 23*time.Hour {
+				t.Fatalf("daily quota was bypassed: %s", delay)
+			}
+			if mode == "available" {
+				var after time.Time
+				if err := db.QueryRow(`SELECT next_send_at FROM notification_email_budget WHERE id=true`).Scan(&after); err != nil || !after.Equal(pacedAt) {
+					t.Fatalf("transaction changed bulk clock: before=%s after=%s err=%v", pacedAt, after, err)
+				}
+				if delay, err := policy.begin(t.Context(), bulk); err != nil || delay <= 0 {
+					t.Fatalf("bulk bypassed pacing: delay=%s err=%v", delay, err)
+				}
+			}
+		})
+	}
+}
+
+func TestEmailBudgetClockStartsAfterLockWait(t *testing.T) {
+	db := workerTestDatabase(t)
+	claim := emailClaim(t, db, "account.verify-email")
+	if _, err := db.Exec(`UPDATE notification_deliveries SET provider='ses' WHERE id=$1`, claim.DeliveryID); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback()
+	var pid int
+	if err := holder.QueryRow(`SELECT pg_backend_pid() FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&emailPolicy{db: db, provider: "ses", limits: isolationLimits}).begin(ctx, claim)
+		done <- err
+	}()
+	for {
+		var waiting bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, pid).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var releasedAt time.Time
+	if err := holder.QueryRow(`SELECT clock_timestamp()`).Scan(&releasedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var startedAt time.Time
+	if err := db.QueryRow(`SELECT started_at FROM notification_email_attempts WHERE delivery_id=$1`, claim.DeliveryID).Scan(&startedAt); err != nil || startedAt.Before(releasedAt) {
+		t.Fatalf("reservation used pre-lock clock: started=%s released=%s err=%v", startedAt, releasedAt, err)
 	}
 }
