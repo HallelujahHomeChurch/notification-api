@@ -758,6 +758,10 @@ connections, while isolation requires at least five. Activation is blocked until
 reviewed worker-only pool parameter, whole-login/replica/recovery connection budget
 and parent Terraform environment/scaler ownership are aligned. Do not raise the API
 pool or bypass the release guard to activate this prepared source.
+The five-connection minimum is worker-only; review API/worker flag propagation
+separately while retaining the API's two-connection budget. Check active,
+candidate and recovery replicas plus parent Terraform state against the capped
+role/server envelope before removing the release guard.
 
 Before enabling isolation:
 

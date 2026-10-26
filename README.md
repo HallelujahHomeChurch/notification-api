@@ -267,7 +267,12 @@ remain in the normal suite. Fake-provider throughput is not inbox acceptance.
 
 Bicep's `isolatedDeliveryQueues` parameter defaults to false. Normal release
 rejects activation until the worker-only pool, whole-login capacity budget and
-parent Terraform ownership are reviewed; the API pool is unchanged. The prepared
+parent Terraform ownership are reviewed; the API pool is unchanged.
+The five-connection minimum is worker-only; review API/worker flag propagation
+separately while retaining the API's two-connection budget. Check active,
+candidate and recovery replicas plus parent Terraform state against the capped
+role/server envelope before removing the release guard.
+The prepared
 conditional configuration declares the two additional queues, passes the common runtime
 setting and scales on all three queues. The release workflow passes the reviewed
 `NOTIFICATION_ISOLATED_QUEUES` repository variable consistently to planning and
