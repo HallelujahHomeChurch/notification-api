@@ -76,7 +76,7 @@ datasets:
     owner: notification-api
     purpose: "Record provider delivery attempts, leases, outcomes and optional provider receipt metadata."
     necessity: required
-    storage: {"kind":"postgres","resource":"notification_deliveries","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_deliveries"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/worker/worker.go","symbol":"postgresStore.markSent"},{"path":"internal/providers/provider.go","symbol":"ProviderReceipt"}]}
+    storage: {"kind":"postgres","resource":"notification_deliveries","sources":[{"path":"internal/migrations/sql/001_initial.sql","symbol":"notification_deliveries"},{"path":"internal/store/store.go","symbol":"Store.Create"},{"path":"internal/worker/postgres.go","symbol":"postgresStore.markSent"},{"path":"internal/providers/provider.go","symbol":"ProviderReceipt"}]}
     subject_keys: [{"kind":"user_id","field":"message_id -> notification_messages(subject_hash_key_id,subject_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"candidateSubjectHashes"}]},{"kind":"verified_canonical_email","field":"message_id -> notification_messages(hash_key_id,target_hash)","evidence":[{"path":"internal/accountcleanup/service.go","symbol":"Service.CleanupAccount"},{"path":"internal/accountcleanup/service.go","symbol":"candidateHashes"}]}]
     data_classes: ["identity","security","activity"]
     fields:

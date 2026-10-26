@@ -131,7 +131,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"internal/retention/worker.go#postgresRepository.retain",
 		"internal/accountcleanup/service.go#Service.CleanupAccount",
 		"internal/httpapi/handler.go#handler.authorizeCaller",
-		"internal/worker/worker.go#postgresStore.markSent",
+		"internal/worker/postgres.go#postgresStore.markSent",
 		"internal/providers/provider.go#ProviderReceipt",
 		"internal/outbox/dispatcher.go#Dispatcher.DispatchOne",
 		"internal/queue/servicebus.go#ServiceBus.Publish",

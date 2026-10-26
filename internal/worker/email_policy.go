@@ -30,8 +30,16 @@ func (l EmailLimits) Validate() error {
 
 type emailPolicy struct {
 	db       *sql.DB
+	conn     *sql.Conn
 	limits   EmailLimits
 	provider string
+}
+
+func (p *emailPolicy) statements() deliveryStatements {
+	if p.conn != nil {
+		return p.conn
+	}
+	return p.db
 }
 
 func (w *Worker) WithEmailLimits(db *sql.DB, limits EmailLimits) *Worker {
@@ -49,7 +57,7 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	if err := p.limits.Validate(); err != nil {
 		return 0, err
 	}
-	tx, err := p.db.BeginTx(ctx, nil)
+	tx, err := beginDeliveryTransaction(ctx, p.db, p.conn)
 	if err != nil {
 		return 0, err
 	}
@@ -165,7 +173,7 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 			}
 		}
 	}
-	tx, err := p.db.BeginTx(ctx, nil)
+	tx, err := beginDeliveryTransaction(ctx, p.db, p.conn)
 	if err != nil {
 		return err
 	}
@@ -203,7 +211,7 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 
 func (p *emailPolicy) acceptedReceipt(ctx context.Context, c claim) (providers.ProviderReceipt, error) {
 	var receipt providers.ProviderReceipt
-	err := p.db.QueryRowContext(ctx, `SELECT provider,COALESCE(provider_message_id,'<'||delivery_id::text||'@notification.alive.org.tw>'),COALESCE(provider_accepted_at,finished_at) FROM notification_email_attempts WHERE delivery_id=$1 AND outcome='accepted' ORDER BY attempt DESC LIMIT 1`, c.DeliveryID).Scan(&receipt.Provider, &receipt.ProviderMessageID, &receipt.AcceptedAt)
+	err := p.statements().QueryRowContext(ctx, `SELECT provider,COALESCE(provider_message_id,'<'||delivery_id::text||'@notification.alive.org.tw>'),COALESCE(provider_accepted_at,finished_at) FROM notification_email_attempts WHERE delivery_id=$1 AND outcome='accepted' ORDER BY attempt DESC LIMIT 1`, c.DeliveryID).Scan(&receipt.Provider, &receipt.ProviderMessageID, &receipt.AcceptedAt)
 	return receipt, err
 }
 
@@ -221,7 +229,7 @@ func nullableReceiptTime(at time.Time) any {
 }
 
 func (p *emailPolicy) observe(ctx context.Context, c claim) error {
-	_, err := p.db.ExecContext(ctx, `INSERT INTO notification_email_attempts(delivery_id,attempt,bulk,outcome,finished_at) VALUES($1,$2,$3,'deferred',clock_timestamp()) ON CONFLICT DO NOTHING`, c.DeliveryID, c.Attempt, campaignEmail(c))
+	_, err := p.statements().ExecContext(ctx, `INSERT INTO notification_email_attempts(delivery_id,attempt,bulk,outcome,finished_at) VALUES($1,$2,$3,'deferred',clock_timestamp()) ON CONFLICT DO NOTHING`, c.DeliveryID, c.Attempt, campaignEmail(c))
 	return err
 }
 
