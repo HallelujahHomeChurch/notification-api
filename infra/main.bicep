@@ -12,6 +12,7 @@ param deployRuntime bool = true
 param provisionPermissions bool = true
 param serviceBusNamespaceName string = 'alive-notifications-${uniqueString(subscription().id, resourceGroup().id)}'
 param queueName string = 'notifications-email'
+param isolatedDeliveryQueues bool = false
 param smtpAddr string
 param smtpFrom string
 param smtpFromName string = '哈利路亞家教會'
@@ -52,6 +53,21 @@ var sesFeedbackEnvironment = sesFeedback == null ? [] : [
   { name: 'SES_FEEDBACK_TOPIC_ARN', value: sesFeedback!.topicArn }
 ]
 
+var isolatedQueueNames = ['${queueName}-transactional', '${queueName}-bulk']
+var workerQueueNames = concat([queueName], isolatedDeliveryQueues ? isolatedQueueNames : [])
+var deliveryQueueProperties = {
+  requiresDuplicateDetection: true
+  duplicateDetectionHistoryTimeWindow: 'PT10M'
+  lockDuration: 'PT2M'
+  maxDeliveryCount: 10
+  defaultMessageTimeToLive: 'P7D'
+  deadLetteringOnMessageExpiration: true
+  enablePartitioning: true
+  maxSizeInMegabytes: 16384
+  maxMessageSizeInKilobytes: 256
+  autoDeleteOnIdle: 'P10675199DT2H48M5.4775807S'
+}
+
 var acrPullRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var serviceBusSenderRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
 var serviceBusReceiverRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
@@ -77,6 +93,7 @@ var commonEnvironment = [
   { name: 'QUEUE_DRIVER', value: 'servicebus' }
   { name: 'SERVICEBUS_NAMESPACE', value: '${serviceBus.name}.servicebus.windows.net' }
   { name: 'SERVICEBUS_QUEUE_NAME', value: emailQueue.name }
+  { name: 'NOTIFICATION_ISOLATED_QUEUES', value: string(isolatedDeliveryQueues) }
   { name: 'SHUTDOWN_TIMEOUT_SECONDS', value: '30' }
   { name: 'DB_MAX_OPEN_CONNS', value: '2' }
   { name: 'DB_MAX_IDLE_CONNS', value: '1' }
@@ -135,19 +152,14 @@ resource serviceBus 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
 resource emailQueue 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' = {
   parent: serviceBus
   name: queueName
-  properties: {
-    requiresDuplicateDetection: true
-    duplicateDetectionHistoryTimeWindow: 'PT10M'
-    lockDuration: 'PT2M'
-    maxDeliveryCount: 10
-    defaultMessageTimeToLive: 'P7D'
-    deadLetteringOnMessageExpiration: true
-    enablePartitioning: true
-    maxSizeInMegabytes: 16384
-    maxMessageSizeInKilobytes: 256
-    autoDeleteOnIdle: 'P10675199DT2H48M5.4775807S'
-  }
+  properties: deliveryQueueProperties
 }
+
+resource isolatedEmailQueues 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' = [for name in isolatedDeliveryQueues ? isolatedQueueNames : []: {
+  parent: serviceBus
+  name: name
+  properties: deliveryQueueProperties
+}]
 
 resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'notification-api-identity'
@@ -314,6 +326,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   }
   dependsOn: [
     apiAcrPull
+    isolatedEmailQueues
     apiServiceBusSender
   ]
 }
@@ -406,25 +419,24 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         cooldownPeriod: 300
         minReplicas: 1
         maxReplicas: 5
-        rules: [
-          {
-            name: 'service-bus-email'
+        rules: [for (workerQueue, index) in workerQueueNames: {
+            name: index == 0 ? 'service-bus-email' : 'service-bus-email-${index}'
             custom: {
               type: 'azure-servicebus'
               metadata: {
                 namespace: serviceBus.name
-                queueName: emailQueue.name
+                queueName: workerQueue
                 messageCount: '5'
               }
               identity: workerIdentity.id
             }
-          }
-        ]
+          }]
       }
     }
   }
   dependsOn: [
     workerAcrPull
+    isolatedEmailQueues
     workerServiceBusReceiver
   ]
 }

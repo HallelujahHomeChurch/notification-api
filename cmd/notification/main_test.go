@@ -11,6 +11,46 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 )
 
+func TestDeliveryQueuesAndProviderLimitsStayOptIn(t *testing.T) {
+	cfg := config.Config{ServiceBusQueueName: "notifications", ServiceBusNamespace: "test.servicebus.windows.net", SMTPEmailsPerMinute: 20, SMTPEmailsPerHour: 100, SMTPReservePerMinute: 5, SMTPReservePerHour: 20, SESEmailsPerSecond: 5, SESEmailsPerDay: 6000, SESReservePerSecond: 1, SESReservePerDay: 1000}
+	lanes := serviceBusQueues(cfg)
+	if len(lanes) != 1 || lanes[0].lane != "" || lanes[0].config.QueueName != "notifications" {
+		t.Fatalf("legacy queue changed: %+v", lanes)
+	}
+	limits := deliveryEmailLimits(cfg)
+	if limits.PerMinute != 20 || limits.PerHour != 100 || limits.PerSecond != 0 {
+		t.Fatalf("SMTP defaults changed: %+v", limits)
+	}
+	cfg.IsolatedDeliveryQueues = true
+	lanes = serviceBusQueues(cfg)
+	if len(lanes) != 3 {
+		t.Fatalf("isolated lanes=%d", len(lanes))
+	}
+	want := map[string]string{"transactional": "notifications-transactional", "bulk": "notifications-bulk", "web_push": "notifications"}
+	for _, lane := range lanes {
+		if lane.config.QueueName != want[string(lane.lane)] || lane.config.NamespaceFQDN != cfg.ServiceBusNamespace {
+			t.Fatalf("wrong lane routing: %+v", lane)
+		}
+	}
+	cfg.EmailProvider = "ses"
+	limits = deliveryEmailLimits(cfg)
+	if limits.PerSecond != 5 || limits.PerDay != 6000 || limits.ReserveSecond != 1 || limits.ReserveDay != 1000 || limits.PerHour != 0 {
+		t.Fatalf("SES inherited SMTP limits: %+v", limits)
+	}
+}
+
+func TestCloseResourcesClosesAllInReverseOrderDespiteError(t *testing.T) {
+	failure := errors.New("close failed")
+	var order []string
+	err := closeResources(context.Background(), []closeFunc{
+		func(context.Context) error { order = append(order, "database"); return nil },
+		func(context.Context) error { order = append(order, "queue"); return failure },
+	})
+	if !errors.Is(err, failure) || strings.Join(order, ",") != "queue,database" {
+		t.Fatalf("cleanup order=%v err=%v", order, err)
+	}
+}
+
 func TestRunRejectsInvalidModeBeforeLoadingConfig(t *testing.T) {
 	loaded := false
 	application := app{

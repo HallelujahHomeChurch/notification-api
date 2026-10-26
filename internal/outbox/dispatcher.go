@@ -43,7 +43,8 @@ type store interface {
 }
 
 type postgresStore struct {
-	db *sql.DB
+	db   *sql.DB
+	lane queue.Lane
 }
 
 type Dispatcher struct {
@@ -58,6 +59,10 @@ type Dispatcher struct {
 
 func New(db *sql.DB, publisher queue.Publisher) *Dispatcher {
 	return newDispatcher(postgresStore{db: db}, publisher)
+}
+
+func NewForLane(db *sql.DB, publisher queue.Publisher, lane queue.Lane) *Dispatcher {
+	return newDispatcher(postgresStore{db: db, lane: lane}, publisher)
 }
 
 func newDispatcher(store store, publisher queue.Publisher) *Dispatcher {
@@ -193,10 +198,16 @@ func (s postgresStore) claimNext(ctx context.Context, lease time.Duration) (clai
 		      )
 		  AND delivery.status='queued'
 		  AND message.status='queued'
+		  AND ($1::text='' OR CASE
+		      WHEN message.channel='web_push' THEN 'web_push'
+		      WHEN message.template_id LIKE 'engagement.%' THEN 'bulk'
+		      ELSE 'transactional'
+		      END=$1::text)
 		ORDER BY COALESCE(outbox.lease_expires_at, outbox.next_attempt_at),
 		         outbox.created_at, outbox.id
 		FOR UPDATE OF outbox, delivery, message SKIP LOCKED
 		LIMIT 1`,
+		string(s.lane),
 	).Scan(
 		&claimed.OutboxID,
 		&claimed.DeliveryID,
