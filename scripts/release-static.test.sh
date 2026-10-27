@@ -46,6 +46,7 @@ assert_not_contains() {
 
 [[ -f "${workflow}" ]] || fail "release workflow is missing"
 bash "${repo_root}/scripts/verify-secret-scope.test.sh"
+python3 "${repo_root}/scripts/test-release-readiness.py"
 
 assert_contains "${workflow}" 'contents:[[:space:]]*read' "contents permission must be read-only"
 assert_contains "${workflow}" '(?s)^permissions:\n  contents: read\n\nconcurrency:' "workflow permissions must only read contents"
