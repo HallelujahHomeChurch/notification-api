@@ -63,7 +63,11 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	}
 	defer tx.Rollback()
 	var now, next, cooldown time.Time
-	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp(),next_send_at,cooldown_until FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&now, &next, &cooldown); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT next_send_at,cooldown_until FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&next, &cooldown); err != nil {
+		return 0, err
+	}
+	// A clock evaluated before the lock wait can expire a reservation before admission.
+	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
 		return 0, err
 	}
 	name := p.provider

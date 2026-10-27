@@ -352,3 +352,51 @@ func TestSESReceiptSurvivesWorkerCrashAndRecovery(t *testing.T) {
 		t.Fatalf("restored %s %s", state, id)
 	}
 }
+
+func TestSMTPBudgetClockStartsAfterLockWait(t *testing.T) {
+	db := workerTestDatabase(t)
+	claim := emailClaim(t, db, "account.verify-email")
+	holder, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback()
+	var pid int
+	if err := holder.QueryRow(`SELECT pg_backend_pid() FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		delay, err := (&emailPolicy{db: db, limits: EmailLimits{PerMinute: 20, PerHour: 100, ReserveMinute: 5, ReserveHour: 20}}).begin(ctx, claim)
+		if err == nil && delay != 0 {
+			err = fmt.Errorf("free SMTP slot deferred: %s", delay)
+		}
+		done <- err
+	}()
+	for {
+		var waiting bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, pid).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var releasedAt time.Time
+	if err := holder.QueryRow(`SELECT clock_timestamp()`).Scan(&releasedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var startedAt time.Time
+	if err := db.QueryRow(`SELECT started_at FROM notification_email_attempts WHERE delivery_id=$1`, claim.DeliveryID).Scan(&startedAt); err != nil || startedAt.Before(releasedAt) {
+		t.Fatalf("SMTP reservation used pre-lock clock: started=%s released=%s err=%v", startedAt, releasedAt, err)
+	}
+}
