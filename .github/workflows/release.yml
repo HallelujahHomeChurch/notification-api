@@ -668,7 +668,7 @@ jobs:
               fi
               if [[ "$read_failed" == true ]]; then
                 read_errors=$((read_errors + 1))
-                if grep -Eq 'AuthorizationFailed|AuthenticationFailed|Forbidden|Unauthorized|unrecognized arguments|Invalid.*[Qq]uery' <<< "$read_error" || (( read_errors >= 3 )); then
+                if grep -Eq 'AuthorizationFailed|AuthenticationFailed|AADSTS[0-9]+|InvalidAuthenticationToken|Forbidden|Unauthorized|unrecognized arguments|Invalid.*[Qq]uery' <<< "$read_error" || (( read_errors >= 3 )); then
                   echo "Readiness metadata unavailable for ${app_name}; refusing deployment verification" >&2
                   return 1
                 fi

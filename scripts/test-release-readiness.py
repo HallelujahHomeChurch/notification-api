@@ -33,6 +33,14 @@ az() {
     echo 'ERROR: AuthorizationFailed; PRIVATE_MARKER' >&2
     return 1
   fi
+  if [[ "$SCENARIO" == aadsts ]]; then
+    echo 'ERROR: AADSTS700213; PRIVATE_MARKER' >&2
+    return 1
+  fi
+  if [[ "$SCENARIO" == token ]]; then
+    echo 'ERROR: InvalidAuthenticationToken; PRIVATE_MARKER' >&2
+    return 1
+  fi
   if [[ "$SCENARIO" == config ]]; then
     echo 'ERROR: unrecognized arguments; PRIVATE_MARKER' >&2
     return 1
@@ -85,10 +93,11 @@ class ReadinessTests(unittest.TestCase):
                 self.assertNotIn('PRIVATE_MARKER', result.stdout + result.stderr)
 
     def test_permission_and_input_errors_fail_fast(self):
-        for scenario in ('auth', 'config'):
+        for scenario in ('auth', 'aadsts', 'token', 'config'):
             result, counts = self.run_poll(scenario)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(counts, {'app': 1, 'image': 0})
+            self.assertNotIn('PRIVATE_MARKER', result.stdout + result.stderr)
 
     def test_mismatched_identity_never_becomes_ready(self):
         for scenario in ('different-image', 'different-revision'):
