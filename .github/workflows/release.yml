@@ -630,30 +630,57 @@ jobs:
           image_ref="${IMAGE_REF}"
           wait_for_revision() {
             local app_name="$1"
+            local deadline=$((SECONDS + 600)) read_errors=0 read_failed read_error read_timeout
             for attempt in {1..60}; do
-              state="$(az containerapp show \
+              read_timeout=$((deadline - SECONDS))
+              (( read_timeout > 0 )) || break
+              if (( read_timeout > 30 )); then read_timeout=30; fi
+              read_failed=false
+              deployed_image=""
+              if state="$(timeout "$read_timeout" az containerapp show \
                 --resource-group "${RESOURCE_GROUP}" \
                 --name "${app_name}" \
                 --query "join('|', [properties.latestRevisionName, properties.latestReadyRevisionName])" \
                 --output tsv \
-                --only-show-errors)"
-              IFS='|' read -r latest ready <<< "${state}"
-              deployed_image=""
-              if [[ -n "${latest}" && "${latest}" == "${ready}" ]]; then
-                deployed_image="$(az containerapp revision show \
-                  --resource-group "${RESOURCE_GROUP}" \
-                  --name "${app_name}" \
-                  --revision "${ready}" \
-                  --query "properties.template.containers[0].image" \
-                  --output tsv \
-                  --only-show-errors)"
-                if [[ "${deployed_image}" == "${image_ref}" ]]; then
-                  echo "${app_name} is ready on ${ready} with ${image_ref}"
-                  return 0
+                --only-show-errors 2>&1)"; then
+                IFS='|' read -r latest ready <<< "${state}"
+                if [[ -n "${latest}" && "${latest}" == "${ready}" ]]; then
+                  read_timeout=$((deadline - SECONDS))
+                  (( read_timeout > 0 )) || break
+                  if (( read_timeout > 30 )); then read_timeout=30; fi
+                  if deployed_image="$(timeout "$read_timeout" az containerapp revision show \
+                    --resource-group "${RESOURCE_GROUP}" \
+                    --name "${app_name}" \
+                    --revision "${ready}" \
+                    --query "properties.template.containers[0].image" \
+                    --output tsv \
+                    --only-show-errors 2>&1)"; then
+                    if [[ "${deployed_image}" == "${image_ref}" ]]; then
+                      echo "${app_name} is ready on ${ready} with ${image_ref}"
+                      return 0
+                    fi
+                  else
+                    read_error="$deployed_image"; deployed_image=""; read_failed=true
+                  fi
                 fi
+              else
+                read_error="$state"; state=""; latest=""; ready=""; read_failed=true
+              fi
+              if [[ "$read_failed" == true ]]; then
+                read_errors=$((read_errors + 1))
+                if grep -Eq 'AuthorizationFailed|AuthenticationFailed|AADSTS[0-9]+|InvalidAuthenticationToken|Forbidden|Unauthorized|unrecognized arguments|Invalid.*[Qq]uery' <<< "$read_error" || (( read_errors >= 3 )); then
+                  echo "Readiness metadata unavailable for ${app_name}; refusing deployment verification" >&2
+                  return 1
+                fi
+                echo "Retrying readiness metadata read for ${app_name} (${read_errors}/3)" >&2
+              else
+                read_errors=0
               fi
               echo "Waiting for ${app_name}: latest=${latest:-none} ready=${ready:-none} image=${deployed_image:-none} (${attempt}/60)"
-              sleep 10
+              read_timeout=$((deadline - SECONDS))
+              (( read_timeout > 0 )) || break
+              if (( read_timeout > 10 )); then read_timeout=10; fi
+              sleep "$read_timeout"
             done
             echo "${app_name} did not become ready with ${image_ref}" >&2
             return 1
