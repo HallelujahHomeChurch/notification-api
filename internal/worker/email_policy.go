@@ -16,12 +16,22 @@ import (
 var errEmailAcceptanceUnknown = errors.New("email acceptance requires reconciliation")
 var errEmailSuppressed = errors.New("email is technically suppressed")
 var errEmailProviderMismatch = errors.New("email provider does not match pinned delivery")
+var errEmailExpired = errors.New("email expired before submission")
 
 var errEmailAlreadyAccepted = errors.New("email already accepted")
 
-type EmailLimits struct{ PerMinute, PerHour, ReserveMinute, ReserveHour int }
+type EmailLimits struct {
+	PerMinute, PerHour, ReserveMinute, ReserveHour int
+	PerSecond, PerDay, ReserveSecond, ReserveDay   int
+}
 
 func (l EmailLimits) Validate() error {
+	if l.PerSecond != 0 || l.PerDay != 0 || l.ReserveSecond != 0 || l.ReserveDay != 0 {
+		if l.PerMinute != 0 || l.PerHour != 0 || l.ReserveMinute != 0 || l.ReserveHour != 0 || l.PerSecond <= 0 || l.PerDay <= 0 || l.ReserveSecond < 0 || l.ReserveDay < 0 || l.ReserveSecond >= l.PerSecond || l.ReserveDay >= l.PerDay {
+			return errors.New("SES quotas must be positive, reserves smaller than quotas, and SMTP windows unset")
+		}
+		return nil
+	}
 	if l.PerMinute <= 0 || l.PerHour <= 0 || l.ReserveMinute < 0 || l.ReserveHour < 0 || l.ReserveMinute >= l.PerMinute || l.ReserveHour >= l.PerHour {
 		return errors.New("SMTP quotas must be positive and reserves smaller than quotas")
 	}
@@ -75,11 +85,15 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 		name = "smtp"
 	}
 	var pinned string
-	if err = tx.QueryRowContext(ctx, `SELECT provider FROM notification_deliveries WHERE id=$1`, c.DeliveryID).Scan(&pinned); err != nil {
+	var expires time.Time
+	if err = tx.QueryRowContext(ctx, `SELECT d.provider,m.expires_at FROM notification_deliveries d JOIN notification_messages m ON m.id=d.message_id WHERE d.id=$1`, c.DeliveryID).Scan(&pinned, &expires); err != nil {
 		return 0, err
 	}
 	if pinned != name {
 		return 0, errEmailProviderMismatch
+	}
+	if !expires.After(now) {
+		return 0, errEmailExpired
 	}
 	var suppressed bool
 	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM notification_messages m CROSS JOIN LATERAL jsonb_each_text(m.target_hashes || jsonb_build_object(m.hash_key_id,m.target_hash)) candidate JOIN notification_email_suppressions s ON s.hash_key_id=candidate.key AND s.target_hash=candidate.value WHERE m.id=$1)`, c.MessageID).Scan(&suppressed); err != nil {
@@ -109,13 +123,23 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 		return 0, errEmailAcceptanceUnknown
 	}
 	bulk := campaignEmail(c)
-	for _, window := range []struct {
+	// SES transactions use reserved rolling capacity, not the bulk pacing clock.
+	smoothPacing := name != "ses" || bulk
+	if !smoothPacing {
+		next = now
+	}
+	windows := []struct {
 		duration       time.Duration
 		total, reserve int
-	}{{time.Minute, p.limits.PerMinute, p.limits.ReserveMinute}, {time.Hour, p.limits.PerHour, p.limits.ReserveHour}} {
+	}{{time.Minute, p.limits.PerMinute, p.limits.ReserveMinute}, {time.Hour, p.limits.PerHour, p.limits.ReserveHour}}
+	if p.limits.PerSecond > 0 {
+		windows[0].duration, windows[0].total, windows[0].reserve = time.Second, p.limits.PerSecond, p.limits.ReserveSecond
+		windows[1].duration, windows[1].total, windows[1].reserve = 24*time.Hour, p.limits.PerDay, p.limits.ReserveDay
+	}
+	for _, window := range windows {
 		var total, bulkCount int
 		var oldest, oldestBulk sql.NullTime
-		err = tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER(WHERE bulk),min(started_at),min(started_at) FILTER(WHERE bulk) FROM notification_email_attempts WHERE outcome<>'deferred' AND started_at>$1`, now.Add(-window.duration)).Scan(&total, &bulkCount, &oldest, &oldestBulk)
+		err = tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER(WHERE bulk),min(started_at),min(started_at) FILTER(WHERE bulk) FROM notification_email_attempts WHERE provider=$2 AND outcome<>'deferred' AND started_at>$1`, now.Add(-window.duration), name).Scan(&total, &bulkCount, &oldest, &oldestBulk)
 		if err != nil {
 			return 0, err
 		}
@@ -143,12 +167,12 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	if n, _ := result.RowsAffected(); n != 1 {
 		return 0, fmt.Errorf("email attempt fence lost")
 	}
-	if delay == 0 {
-		perMinute := p.limits.PerMinute
+	if delay == 0 && smoothPacing {
+		period, rate := windows[0].duration, windows[0].total
 		if bulk {
-			perMinute -= p.limits.ReserveMinute
+			rate -= windows[0].reserve
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE notification_email_budget SET next_send_at=$1 WHERE id=true`, now.Add(time.Minute/time.Duration(perMinute))); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE notification_email_budget SET next_send_at=$1 WHERE id=true`, now.Add(period/time.Duration(rate))); err != nil {
 			return 0, err
 		}
 	}

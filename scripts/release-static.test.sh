@@ -481,3 +481,41 @@ assert plan.index('name: Verify and load image') < plan.index('docker push ') < 
 assert "steps.load_image.outputs.api_image_id" in plan
 assert '.artifacts' in Path('.dockerignore').read_text().splitlines()
 PYTEST
+
+# The opt-in must reach both processes and every normal release phase.
+grep -Fq 'param isolatedDeliveryQueues bool = false' "${bicep}" || fail 'queue isolation must default off'
+grep -Fq "{ name: 'NOTIFICATION_ISOLATED_QUEUES', value: string(isolatedDeliveryQueues) }" "${bicep}" || fail 'shared isolation runtime setting is missing'
+grep -Fq 'resource isolatedEmailQueues' "${bicep}" || fail 'isolated queue resources are missing'
+grep -Fq 'in workerQueueNames:' "${bicep}" || fail 'all delivery queues must participate in worker scaling'
+[[ "$(grep -Fc 'isolatedDeliveryQueues="${ISOLATED_DELIVERY_QUEUES}"' "${workflow}")" == '4' ]] || fail 'all release plans and deployments must pass the same isolation setting'
+[[ "$(grep -Fc 'ISOLATED_DELIVERY_QUEUES: ${{ vars.NOTIFICATION_ISOLATED_QUEUES' "${workflow}")" == '2' ]] || fail 'plan and deploy must share the reviewed isolation variable'
+
+# Execute the actual pre-cloud guards; source-token checks alone do not prove refusal.
+python3 - <<'PYISOLATION'
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import textwrap
+
+text = Path('.github/workflows/release.yml').read_text()
+for name in ('plan', 'deploy'):
+    job = re.split(r'(?m)^  [A-Za-z_][A-Za-z0-9_-]*: *$', text.split(f'  {name}:\n', 1)[1], maxsplit=1)[0]
+    assert job.index('name: Validate release configuration') < job.index('name: Sign in to Azure with OIDC')
+blocks = re.findall(r'      - name: Validate release configuration\n        shell: bash\n        run: \|\n((?:(?:          [^\n]*)?\n)+)', text)
+assert len(blocks) == 2
+with tempfile.TemporaryDirectory() as directory:
+    env = dict(os.environ, GITHUB_REF='refs/heads/main', GITHUB_ENV=f'{directory}/env',
+        AZURE_CLIENT_ID='synthetic', AZURE_TENANT_ID='synthetic', AZURE_SUBSCRIPTION_ID='synthetic',
+        SMTP_ADDR='smtp.example:587', SMTP_FROM='sender@example.com', SMTP_AUTHENTICATION_ENABLED='true',
+        VAPID_PUBLIC_KEY='synthetic', VAPID_SUBJECT='mailto:sender@example.com',
+        NOTIFICATION_TEMPLATE_DAILY_LIMIT='1000', NOTIFICATION_VAULT_NAME='synthetic',
+        ACTIVE_ENCRYPTION_KEY_ID='v1', ACTIVE_HASH_KEY_ID='v1',
+        IMAGE_REF='alive.azurecr.io/alive/notification-api@sha256:' + 'a' * 64)
+    for block in blocks:
+        for value in ('false', 'true', 'invalid'):
+            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', textwrap.dedent(block)],
+                env=dict(env, ISOLATED_DELIVERY_QUEUES=value), capture_output=True, text=True)
+            assert (result.returncode == 0) == (value == 'false'), (value, result.stderr)
+PYISOLATION

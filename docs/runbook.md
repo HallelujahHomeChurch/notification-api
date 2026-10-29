@@ -22,6 +22,11 @@ avoid silently dropping account verification or password-reset email.
 - Immutable image format:
   `alive.azurecr.io/alive/notification-api@sha256:<digest>`
 
+When isolated delivery is enabled, also operate `notifications-email-transactional`
+and `notifications-email-bulk`. Pausing only the legacy queue is insufficient;
+the [isolation gates](#isolated-delivery-activation-and-rollback) apply to all
+three queues and every active worker revision.
+
 Before changing production:
 
 1. Freeze notification releases and record the incident/change identifier.
@@ -739,3 +744,67 @@ unknown-receipt reconciliation and no resurrection after Account erasure. They
 do not prove AWS event delivery, the final alert receiver, or inbox arrival.
 A future approved live test must prove all three before SES cutover. No test or
 simulator email is authorized by this runbook.
+
+## Isolated delivery activation and rollback
+
+This is a future reviewed release procedure, not evidence of activation.
+`NOTIFICATION_ISOLATED_QUEUES` and the Bicep parameter default to false. SMTP
+remains the default provider; queue isolation and provider selection are separate.
+No local or CI acceptance grants merge, deployment or real-send permission.
+
+The current normal release deliberately rejects `NOTIFICATION_ISOLATED_QUEUES=true`
+before Azure login or resource planning. Its template gives the worker two PG
+connections, while isolation requires at least five. Activation is blocked until a
+reviewed worker-only pool parameter, whole-login/replica/recovery connection budget
+and parent Terraform environment/scaler ownership are aligned. Do not raise the API
+pool or bypass the release guard to activate this prepared source.
+The five-connection minimum is worker-only; review API/worker flag propagation
+separately while retaining the API's two-connection budget. Check active,
+candidate and recovery replicas plus parent Terraform state against the capped
+role/server envelope before removing the release guard.
+
+Before enabling isolation:
+
+1. Review the two additive queue resources and common API/worker setting. Keep
+   existing namespace RBAC, secrets and the legacy queue. Coordinate the parent
+   platform Terraform environment/scale ownership before any apply so it cannot
+   overwrite the service's enabled setting or scaler rules.
+2. Verify every participating API/worker revision supports the three lanes.
+   Drain or explicitly reconcile previously published legacy email before
+   claiming full Web Push isolation. Pending outbox rows retain their original
+   expiry, consent, idempotency and provider ownership.
+3. Use the normal immutable release workflow, with the same reviewed setting in
+   all planning and deployment operations. Provision queues before the runtime
+   depends on them; Bicep declares that dependency. Do not turn SES on as part
+   of a queue-only release.
+4. Validate routing and backlog/oldest-age separately for transactional email,
+   campaigns and Web Push. Account-wide SES capacity, credentials, actual broker
+   behavior and real mail/inbox acceptance remain separate live gates.
+
+For an approved provider rollback:
+
+1. Stop new sends across all lanes, API retry publication paths and every old
+   worker revision. A canceled context or expired lease cannot prove an already
+   started network call stopped; wait for bounded drain and verify process or
+   credential isolation. Do not switch if that cannot be established.
+2. Reconcile the attempt ledger. Accepted SES receipts must remain accepted;
+   unknown or started attempts stay quarantined. Missing feedback is not evidence
+   of rejection. Keep SES feedback ingestion available for late events.
+3. Restore the approved SMTP runtime with isolation still enabled. New SMTP
+   intents can proceed within SMTP's lower limits. Existing SES-pinned intents
+   do not automatically migrate; the worker fences them as `provider_mismatch`
+   and preserves their ledger. Accepted receipt recovery precedes that fence.
+   Any deliberate retry/transfer requires separate review of complete rejection
+   evidence; do not repin rows or clear attempts, cooldowns or suppression by SQL.
+4. Verify SMTP health and all three queues through the normal release path.
+   Restoring SMTP does not promise SES throughput. Do not disable queue isolation
+   while work remains in the additional queues; disabling the flag would stop
+   consuming them. Queue removal and credential/resource cleanup require a
+   separate reviewed change after drain and the observation period.
+
+Fake-provider tests prove publication isolation, shared reservations, bounded
+pacing, submission throughput and the conservative receipt/provider fence. They
+also demonstrate that an old fake call can finish after cancellation and must
+be drained before rollback. They do not prove cloud revision retirement,
+credential revocation or any live provider transition. No automatic failover or
+bulk provider-transfer control is introduced here.
