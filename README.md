@@ -276,3 +276,13 @@ Standalone worker dependency logging retains its existing 30-second events;
 its missing-heartbeat threshold remains 90 seconds. API monitoring silence beyond
 six minutes (five-minute heartbeat plus sampling/ingestion allowance) is unknown,
 not healthy. LOG_LEVEL filtering remains unchanged; retain info for heartbeats.
+
+## Immutable image scan evidence
+
+Release publication scans the pulled, identity-verified image once into Trivy
+JSON. The same validated report gates fixable High/Critical vulnerabilities and
+summarizes unfixed findings. High/Critical secrets also block without printing
+matched content. Malformed reports, wrong image/version and scanner failures block.
+The pinned scanner, vulnerability DB metadata, source dependency scan, CI image
+scan and main verification-image scan remain. This removes one duplicate scan
+of the same publication digest, not checks across different commits or artifacts.
