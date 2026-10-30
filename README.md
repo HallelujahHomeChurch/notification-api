@@ -235,3 +235,27 @@ Migration, worker rollout, health gates and rollback remain in the release flow.
 CI executes integration packages serially (`go test -p 1`): migration fixtures
 share a database-wide advisory lock even when their schemas differ. This keeps
 the existing lock deadline assertions meaningful; all cases still run once.
+
+## Application health and dependency diagnostics
+
+Application liveness/readiness describes the initialized HTTP process, not remote
+dependency availability. Startup validation remains mandatory; shutdown uses the
+existing HTTP drain and owned worker cancellation/join. A DB, Redis or Dapr outage
+does not make a responsive initialized API unready. Actual business requests
+retain their existing authorization, durability and fail-closed behavior.
+
+An independent runtime worker checks each dependency with its own two-second
+deadline, once per 30-second cycle without overlapping probes. It emits
+`dependency_health` with `dependency`, `outcome` and `elapsed_ms`; no raw errors,
+DSNs, tokens or response bodies are logged. Outcomes are `ok`, `deadline`,
+`cancelled`, `unavailable` and `not_configured`. DB is monitored in every serving
+mode; Account additionally monitors Redis. Dapr outbound health is sampled only
+when the injected `DAPR_HTTP_PORT` is configured, using `DAPR_API_TOKEN` when set;
+it does not prove downstream applications are available. Redirects are rejected.
+
+Keep `LOG_LEVEL=info` to retain baseline/recovery heartbeats; dependency failures
+are Warn. `dependency_monitor_stopped` records the worker exit. Alert on a missing
+per-replica heartbeat for more than 90 seconds while the replica is expected to
+serve; silence is unknown, not healthy. These logs complement request/trace and
+platform sidecar lifecycle evidence and never determine AP probe responses.
+Alert deployment and production acceptance remain separate from this source change.

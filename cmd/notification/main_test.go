@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -293,5 +295,18 @@ func assertStarted(t *testing.T, started <-chan string, want ...string) {
 		if !got[name] {
 			t.Fatalf("started = %v, missing %q", got, name)
 		}
+	}
+}
+
+func TestWorkerReadinessIgnoresClosedDatabase(t *testing.T) {
+	db, err := sql.Open("pgx", "postgres://invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	response := httptest.NewRecorder()
+	workerHealthHandler(db).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("readiness = %d", response.Code)
 	}
 }

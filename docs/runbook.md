@@ -52,9 +52,11 @@ test -n "${namespace}"
    rejection, backlog, duplicate risk, or provider failure. Do not collect
    recipient addresses in the incident channel.
 2. Check API and worker latest/ready revisions and immutable images.
-3. Check API and worker readiness. `/ready` proves PostgreSQL connectivity.
-   Queue/provider clients are initialized before HTTP starts, but readiness
-   does not send email or request Service Bus management access.
+3. Check API and worker readiness. `/ready` proves only local initialization
+   and HTTP responsiveness. Inspect per-replica `dependency_health` heartbeats
+   separately for DB and configured Dapr failures; missing logs are unknown,
+   not healthy. Queue/provider clients are initialized before HTTP starts,
+   but readiness does not send email or request Service Bus management access.
 4. Check queue status, active-message count, and DLQ count.
 5. Run the non-PII [database health queries](#database-health-queries).
 6. Check provider error kind/operation and provider-side acceptance records.

@@ -246,7 +246,7 @@ func TestHealthDoesNotCheckDependencies(t *testing.T) {
 	}
 }
 
-func TestReadyChecksDatabase(t *testing.T) {
+func TestReadyDoesNotCheckDatabase(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		err    error
@@ -254,7 +254,7 @@ func TestReadyChecksDatabase(t *testing.T) {
 		code   string
 	}{
 		{name: "ready", status: http.StatusOK},
-		{name: "database unavailable", err: errors.New("database unavailable"), status: http.StatusServiceUnavailable, code: "NTF_NOT_READY"},
+		{name: "database unavailable", err: errors.New("database unavailable"), status: http.StatusOK},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			db := &fakePinger{err: test.err}
@@ -266,8 +266,8 @@ func TestReadyChecksDatabase(t *testing.T) {
 			} else {
 				assertError(t, response, test.status, test.code)
 			}
-			if db.calls != 1 {
-				t.Fatalf("PingContext calls = %d, want 1", db.calls)
+			if db.calls != 0 {
+				t.Fatalf("PingContext calls = %d, want 0", db.calls)
 			}
 		})
 	}

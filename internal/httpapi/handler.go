@@ -165,12 +165,6 @@ func (h *handler) ready(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "NTF_NOT_READY")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-	if err := h.db.PingContext(ctx); err != nil {
-		writeError(w, r, http.StatusServiceUnavailable, "NTF_NOT_READY")
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 

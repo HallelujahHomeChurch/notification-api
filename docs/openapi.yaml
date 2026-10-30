@@ -40,17 +40,17 @@ paths:
       x-hhc-visibility: operations
       x-hhc-callers: []
       operationId: ready
-      summary: Check whether required dependencies are ready
+      summary: Check whether the application is initialized
       security: []
       responses:
         '200':
-          description: Required dependencies are ready.
+          description: The application is initialized and serving.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadyResponse'
         '503':
-          description: A required dependency is unavailable.
+          description: The application is not initialized.
           content:
             application/json:
               schema:
