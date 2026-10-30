@@ -31,7 +31,7 @@ func TestSampleClassifiesWithoutRawError(t *testing.T) {
 				t.Fatal("missing bound")
 			}
 			return tc.err
-		}})
+		}}, nil)
 		if !strings.Contains(logs.String(), "outcome="+tc.outcome) || strings.Contains(logs.String(), "secret") || strings.Contains(logs.String(), "postgres://") {
 			t.Fatal(logs.String())
 		}
@@ -75,5 +75,60 @@ func TestDaprProbeDoesNotFollowRedirectOrLeakToken(t *testing.T) {
 	}
 	if !errors.Is(Dapr("", "").Ping(context.Background()), errNotConfigured) {
 		t.Fatal("missing configuration")
+	}
+}
+
+func TestObservationTransitionsAndHeartbeat(t *testing.T) {
+	now := time.Unix(1000, 0)
+	var db, dapr observation
+	if !db.due("ok", now) || !dapr.due("ok", now) {
+		t.Fatal("initial samples missing")
+	}
+	if db.due("ok", now.Add(30*time.Second)) {
+		t.Fatal("unchanged sample emitted")
+	}
+	if !db.due("deadline", now.Add(time.Minute)) {
+		t.Fatal("outage missing")
+	}
+	if dapr.due("ok", now.Add(time.Minute)) {
+		t.Fatal("cross-dependency state interference")
+	}
+	if db.due("deadline", now.Add(5*time.Minute)) {
+		t.Fatal("heartbeat too early")
+	}
+	if !db.due("deadline", now.Add(6*time.Minute)) {
+		t.Fatal("unhealthy heartbeat missing")
+	}
+	if !db.due("ok", now.Add(6*time.Minute+time.Second)) {
+		t.Fatal("recovery missing")
+	}
+	if !dapr.due("ok", now.Add(5*time.Minute)) {
+		t.Fatal("healthy heartbeat missing")
+	}
+	if !(*observation)(nil).due("ok", now) {
+		t.Fatal("unthrottled worker changed")
+	}
+}
+
+func TestAPSamplesContinueWhenEventsSuppressed(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	calls := 0
+	var failure error
+	var state observation
+	check := Check{Name: "db", Ping: func(context.Context) error { calls++; return failure }}
+	sample(context.Background(), check, &state)
+	sample(context.Background(), check, &state)
+	failure = errors.New("secret")
+	sample(context.Background(), check, &state)
+	sample(context.Background(), check, &state)
+	state.emitted = time.Now().Add(-5 * time.Minute)
+	sample(context.Background(), check, &state)
+	failure = nil
+	sample(context.Background(), check, &state)
+	if calls != 6 || strings.Count(logs.String(), "dependency_health") != 4 || strings.Contains(logs.String(), "secret") {
+		t.Fatalf("calls=%d events=%s", calls, logs.String())
 	}
 }

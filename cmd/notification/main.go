@@ -221,7 +221,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 	retentionWorker := retention.New(db)
 
 	return apiComponents{
-		monitor:   monitorDependencies(db),
+		monitor:   monitorAPDependencies(db),
 		http:      httpProcess(cfg.Port, handler, cfg.ShutdownTimeout),
 		outbox:    dispatcher.Run,
 		retention: retentionWorker.Run,
@@ -441,6 +441,13 @@ func writeStatus(w http.ResponseWriter, status int, value string) {
 func monitorDependencies(db *sql.DB) process {
 	return func(ctx context.Context) error {
 		dependencyhealth.Run(ctx, dependencyhealth.Check{Name: "db", Ping: db.PingContext}, dependencyhealth.Dapr(os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN")))
+		return nil
+	}
+}
+
+func monitorAPDependencies(db *sql.DB) process {
+	return func(ctx context.Context) error {
+		dependencyhealth.RunAP(ctx, dependencyhealth.Check{Name: "db", Ping: db.PingContext}, dependencyhealth.Dapr(os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN")))
 		return nil
 	}
 }

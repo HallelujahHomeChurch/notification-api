@@ -245,7 +245,9 @@ does not make a responsive initialized API unready. Actual business requests
 retain their existing authorization, durability and fail-closed behavior.
 
 An independent runtime worker checks each dependency with its own two-second
-deadline, once per 30-second cycle without overlapping probes. It emits
+deadline, once per 30-second cycle without overlapping probes. In API mode it
+emits an initial sample, outcome changes and a five-minute heartbeat (including
+unchanged failures). It emits
 `dependency_health` with `dependency`, `outcome` and `elapsed_ms`; no raw errors,
 DSNs, tokens or response bodies are logged. Outcomes are `ok`, `deadline`,
 `cancelled`, `unavailable` and `not_configured`. DB is monitored in every serving
@@ -255,7 +257,22 @@ it does not prove downstream applications are available. Redirects are rejected.
 
 Keep `LOG_LEVEL=info` to retain baseline/recovery heartbeats; dependency failures
 are Warn. `dependency_monitor_stopped` records the worker exit. Alert on a missing
-per-replica heartbeat for more than 90 seconds while the replica is expected to
+API per-replica heartbeat for more than six minutes while the replica is expected to
 serve; silence is unknown, not healthy. These logs complement request/trace and
 platform sidecar lifecycle evidence and never determine AP probe responses.
 Alert deployment and production acceptance remain separate from this source change.
+
+## HTTP diagnostic correlation
+
+API responses and request context share a single `X-HHC-Request-ID`: one supplied
+ASCII `[A-Za-z0-9._:-]{1,128}` value, or a generated 128-bit random ID for missing,
+duplicate or invalid input. Only one valid lowercase version-00 `traceparent`
+with nonzero trace/span IDs and flags `00`/`01` enters diagnostic context.
+Supplied headers remain
+unchanged for independent audit-provenance validation; diagnostic IDs never
+establish caller identity or replace required supplied audit evidence.
+
+Standalone worker dependency logging retains its existing 30-second events;
+its missing-heartbeat threshold remains 90 seconds. API monitoring silence beyond
+six minutes (five-minute heartbeat plus sampling/ingestion allowance) is unknown,
+not healthy. LOG_LEVEL filtering remains unchanged; retain info for heartbeats.
