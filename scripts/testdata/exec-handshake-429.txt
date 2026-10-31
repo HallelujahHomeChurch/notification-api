@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  [Azure CLI/WebSocket stack paths removed]
+    raise WebSocketBadStatusException
+websocket._exceptions.WebSocketBadStatusException: Handshake status 429 Too Many Requests
+[Response headers, body, request identifiers and timestamps removed]

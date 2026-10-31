@@ -293,3 +293,5 @@ Provision these through azure-infra before initial service deployment; routine
 service releases do not create or overwrite them. Existing identity IDs and
 secret references stay unchanged. Explicit permission-bootstrap flags still
 control their existing role-assignment scope; this change does not grant access.
+
+The gateway Dapr readiness release probe retains a 60-second total deadline. Only an Azure exec WebSocket handshake 429 with no HTTP response is retried (at most three attempts, 2s/4s backoff); application HTTP failures, unknown exec errors and timeouts fail closed. Probe output is classified without printing raw transport responses. Automatic rollback still retains a compatible ready worker reader while restoring the prior API.

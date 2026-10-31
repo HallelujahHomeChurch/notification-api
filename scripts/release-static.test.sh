@@ -143,12 +143,10 @@ assert_contains "${workflow}" 'properties\.template\.containers\[0\]\.image' "re
 assert_contains "${workflow}" 'properties\.latestReadyRevisionName' "rollback must capture Ready revisions"
 assert_contains "${workflow}" 'az containerapp revision copy' "rollback must copy the previous Ready revision"
 assert_contains "${workflow}" 'rollback_status=0' "API and worker rollback outcomes must be aggregated"
-assert_contains "${workflow}" 'script -q' "Container Apps exec TTY wrapper is missing"
-assert_contains "${workflow}" 'timeout 60s script -q' "Container Apps exec must have a hard timeout"
+assert_contains "${repo_root}/scripts/probe-dapr-readiness.py" "'script', '-q', '-e'" "Container Apps exec TTY wrapper is missing"
+assert_contains "${workflow}" 'timeout 60s python3 scripts/probe-dapr-readiness.py' "Container Apps exec must have a hard timeout"
 assert_contains "${workflow}" 'timeout-minutes:[[:space:]]*[0-9]+' "deploy job must have a bounded timeout"
-assert_contains "${workflow}" '/usr/bin/wget' "gateway readiness probe must use the existing wget"
-assert_contains "${workflow}" "grep -Eq 'HTTP/1" "Dapr probe must validate HTTP 200"
-assert_contains "${workflow}" "grep -Eq '\"status\"" "Dapr probe must validate the response body"
+assert_contains "${repo_root}/scripts/probe-dapr-readiness.py" '/usr/bin/wget' "gateway readiness probe must use the existing wget"
 
 assert_contains "${dockerfile}" '^FROM golang:1\.26\.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder$' "Go base image must use the approved multi-arch digest"
 assert_contains "${dockerfile}" '^FROM gcr\.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35$' "runtime base image must use the approved multi-arch digest"
@@ -514,3 +512,5 @@ source=Path("infra/main.bicep").read_text()
 for name in ['apiIdentity', 'workerIdentity', 'migrateIdentity', 'serviceBus', 'emailQueue']:
     assert re.search(r"resource "+name+r" '[^']+' existing =", source), name
 PYOWNER
+
+python3 "${repo_root}/scripts/test-probe-dapr-readiness.py"

@@ -725,31 +725,7 @@ jobs:
       - name: Verify Dapr readiness through API gateway
         id: smoke_runtime
         shell: bash
-        run: |
-          dapr_url="http://localhost:3500/v1.0/invoke/notification-api/method/ready"
-          probe_exit=0
-          probe_output="$(timeout 60s script -q -e -c \
-            "az containerapp exec --resource-group \"${RESOURCE_GROUP}\" --name \"${API_GATEWAY_APP_NAME}\" --command \"/usr/bin/wget -S -O - ${dapr_url}\"" \
-            /dev/null 2>&1)" || probe_exit=$?
-          probe_output="${probe_output//$'\r'/}"
-          printf '%s\n' "${probe_output}"
-
-          if (( probe_exit == 124 )); then
-            echo "Dapr readiness probe timed out after 60 seconds" >&2
-            exit 1
-          fi
-          if ! grep -Eq 'HTTP/1\.[01][[:space:]]+200' <<< "${probe_output}"; then
-            echo "Dapr readiness probe did not return HTTP 200" >&2
-            exit 1
-          fi
-          if ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' <<< "${probe_output}"; then
-            echo "Dapr readiness probe returned an unexpected body" >&2
-            exit 1
-          fi
-          if (( probe_exit != 0 )); then
-            echo "Dapr readiness probe command failed with exit ${probe_exit}" >&2
-            exit 1
-          fi
+        run: timeout 60s python3 scripts/probe-dapr-readiness.py "$RESOURCE_GROUP" "$API_GATEWAY_APP_NAME"
 
       - name: Capture healthy release
         id: release_outputs
