@@ -117,51 +117,25 @@ resource emailSender 'Microsoft.Communication/emailServices/domains/senderUserna
   }
 }
 
-resource serviceBus 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
+resource serviceBus 'Microsoft.ServiceBus/namespaces@2024-01-01' existing = {
   name: serviceBusNamespaceName
-  location: location
-  sku: {
-    name: 'Standard'
-    tier: 'Standard'
-  }
-  properties: {
-    minimumTlsVersion: '1.2'
-    disableLocalAuth: true
-    publicNetworkAccess: 'Enabled'
-    zoneRedundant: true
-  }
 }
 
-resource emailQueue 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' = {
+resource emailQueue 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' existing = {
   parent: serviceBus
   name: queueName
-  properties: {
-    requiresDuplicateDetection: true
-    duplicateDetectionHistoryTimeWindow: 'PT10M'
-    lockDuration: 'PT2M'
-    maxDeliveryCount: 10
-    defaultMessageTimeToLive: 'P7D'
-    deadLetteringOnMessageExpiration: true
-    enablePartitioning: true
-    maxSizeInMegabytes: 16384
-    maxMessageSizeInKilobytes: 256
-    autoDeleteOnIdle: 'P10675199DT2H48M5.4775807S'
-  }
 }
 
-resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'notification-api-identity'
-  location: location
 }
 
-resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'notification-worker-identity'
-  location: location
 }
 
-resource migrateIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource migrateIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'notification-migrate-identity'
-  location: location
 }
 
 resource apiAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (provisionPermissions) {

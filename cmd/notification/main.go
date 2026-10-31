@@ -17,6 +17,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
+	"github.com/HallelujahHomeChurch/notification-api/internal/dependencyhealth"
 	"github.com/HallelujahHomeChurch/notification-api/internal/eligibilityclient"
 	"github.com/HallelujahHomeChurch/notification-api/internal/httpapi"
 	"github.com/HallelujahHomeChurch/notification-api/internal/logging"
@@ -37,6 +38,7 @@ type process func(context.Context) error
 type closeFunc func(context.Context) error
 
 type apiComponents struct {
+	monitor   process
 	http      process
 	outbox    process
 	retention process
@@ -44,6 +46,7 @@ type apiComponents struct {
 }
 
 type workerComponents struct {
+	monitor  process
 	feedback process
 	http     process
 	consumer process
@@ -98,14 +101,20 @@ func (a app) run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return runProcesses(ctx, cfg.ShutdownTimeout, components.close,
-			components.http, components.outbox, components.retention)
+		processes := []process{components.http, components.outbox, components.retention}
+		if components.monitor != nil {
+			processes = append(processes, components.monitor)
+		}
+		return runProcesses(ctx, cfg.ShutdownTimeout, components.close, processes...)
 	case "worker":
 		components, err := a.buildWorker(ctx, cfg)
 		if err != nil {
 			return err
 		}
 		processes := []process{components.http, components.consumer}
+		if components.monitor != nil {
+			processes = append(processes, components.monitor)
+		}
 		if components.feedback != nil {
 			processes = append(processes, components.feedback)
 		}
@@ -212,6 +221,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 	retentionWorker := retention.New(db)
 
 	return apiComponents{
+		monitor:   monitorAPDependencies(db),
 		http:      httpProcess(cfg.Port, handler, cfg.ShutdownTimeout),
 		outbox:    dispatcher.Run,
 		retention: retentionWorker.Run,
@@ -290,6 +300,7 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
 
 	return workerComponents{
+		monitor:  monitorDependencies(db),
 		feedback: feedbackProcess,
 		http:     httpProcess(cfg.Port, workerHealthHandler(db), cfg.ShutdownTimeout),
 		consumer: func(ctx context.Context) error {
@@ -412,9 +423,7 @@ func workerHealthHandler(db *sql.DB) http.Handler {
 		writeStatus(w, http.StatusOK, "healthy")
 	})
 	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := db.PingContext(ctx); err != nil {
+		if db == nil {
 			writeStatus(w, http.StatusServiceUnavailable, "not_ready")
 			return
 		}
@@ -427,4 +436,18 @@ func writeStatus(w http.ResponseWriter, status int, value string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": value})
+}
+
+func monitorDependencies(db *sql.DB) process {
+	return func(ctx context.Context) error {
+		dependencyhealth.Run(ctx, dependencyhealth.Check{Name: "db", Ping: db.PingContext}, dependencyhealth.Dapr(os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN")))
+		return nil
+	}
+}
+
+func monitorAPDependencies(db *sql.DB) process {
+	return func(ctx context.Context) error {
+		dependencyhealth.RunAP(ctx, dependencyhealth.Check{Name: "db", Ping: db.PingContext}, dependencyhealth.Dapr(os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN")))
+		return nil
+	}
 }

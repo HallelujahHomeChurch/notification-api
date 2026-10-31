@@ -12,6 +12,7 @@ import (
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/HallelujahHomeChurch/notification-api/internal/correlation"
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
 	"github.com/google/uuid"
 )
@@ -42,8 +43,7 @@ type handler struct {
 type contextKey int
 
 const (
-	requestIDKey contextKey = iota
-	callerKey
+	callerKey contextKey = iota
 )
 
 type responseEnvelope struct {
@@ -77,7 +77,7 @@ func New(service notificationService, db pinger, allowedCallers []string, allowD
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "NTF_NOT_FOUND")
 	})
-	return h.withRequestID(mux)
+	return correlation.Middleware(mux)
 }
 
 func (h *handler) cleanupAccount(w http.ResponseWriter, r *http.Request) {
@@ -99,17 +99,6 @@ func (h *handler) cleanupAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeEnvelope(w, http.StatusOK, r, result, nil)
-}
-
-func (h *handler) withRequestID(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := strings.TrimSpace(r.Header.Get("X-HHC-Request-ID"))
-		if requestID == "" {
-			requestID = uuid.NewString()
-		}
-		w.Header().Set("X-HHC-Request-ID", requestID)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, requestID)))
-	})
 }
 
 func (h *handler) authorize(next http.Handler) http.Handler {
@@ -162,12 +151,6 @@ func (h *handler) health(w http.ResponseWriter, _ *http.Request) {
 
 func (h *handler) ready(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeError(w, r, http.StatusServiceUnavailable, "NTF_NOT_READY")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-	if err := h.db.PingContext(ctx); err != nil {
 		writeError(w, r, http.StatusServiceUnavailable, "NTF_NOT_READY")
 		return
 	}
@@ -288,6 +271,5 @@ func callerFromContext(ctx context.Context) string {
 }
 
 func requestIDFromContext(ctx context.Context) string {
-	requestID, _ := ctx.Value(requestIDKey).(string)
-	return requestID
+	return correlation.RequestID(ctx)
 }
