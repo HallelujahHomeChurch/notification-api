@@ -8,6 +8,10 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
+	"github.com/HallelujahHomeChurch/notification-api/internal/telemetry"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ServiceBusConfig struct {
@@ -61,12 +65,20 @@ func (q *ServiceBus) Publish(ctx context.Context, messageID, deliveryID string) 
 	if err != nil {
 		return fmt.Errorf("encode service bus message: %w", err)
 	}
+	ctx, span := otel.Tracer("notification-api").Start(ctx, "queue.publish", trace.WithSpanKind(trace.SpanKindProducer))
+	defer span.End()
+	properties := map[string]any{}
+	if parent := telemetry.Parent(ctx); parent != "" {
+		properties["traceparent"] = parent
+	}
 	contentType := "application/json"
 	if err := q.sender.SendMessage(ctx, &azservicebus.Message{
-		Body:        body,
-		ContentType: &contentType,
-		MessageID:   &messageID,
+		Body:                  body,
+		ApplicationProperties: properties,
+		ContentType:           &contentType,
+		MessageID:             &messageID,
 	}, nil); err != nil {
+		span.SetStatus(codes.Error, "")
 		return fmt.Errorf("publish outbox message %s: %w", messageID, err)
 	}
 	return nil

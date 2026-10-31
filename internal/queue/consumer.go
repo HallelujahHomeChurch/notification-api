@@ -11,7 +11,11 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
+	"github.com/HallelujahHomeChurch/notification-api/internal/telemetry"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -109,6 +113,16 @@ func (c *ServiceBusConsumer) Run(ctx context.Context, handle Handler) error {
 }
 
 func (c *ServiceBusConsumer) handle(ctx context.Context, message *serviceBusMessage, handle Handler) error {
+	// Durable work starts a new trace linked only to validated transport metadata.
+	options := []trace.SpanStartOption{trace.WithNewRoot(), trace.WithSpanKind(trace.SpanKindConsumer)}
+	if parent, ok := message.message.ApplicationProperties["traceparent"].(string); ok {
+		linked := trace.SpanContextFromContext(telemetry.ExtractParent(context.Background(), parent))
+		if linked.IsValid() {
+			options = append(options, trace.WithLinks(trace.Link{SpanContext: linked}))
+		}
+	}
+	ctx, span := otel.Tracer("notification-api").Start(ctx, "queue.process", options...)
+	defer span.End()
 	handlerCtx, cancel := context.WithCancel(ctx)
 	result := make(chan error, 1)
 	go func() { result <- handle(handlerCtx, message) }()
@@ -118,6 +132,9 @@ func (c *ServiceBusConsumer) handle(ctx context.Context, message *serviceBusMess
 	for {
 		select {
 		case err := <-result:
+			if err != nil {
+				span.SetStatus(codes.Error, "")
+			}
 			cancel()
 			return err
 		case <-ctx.Done():

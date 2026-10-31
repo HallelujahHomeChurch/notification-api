@@ -295,3 +295,15 @@ secret references stay unchanged. Explicit permission-bootstrap flags still
 control their existing role-assignment scope; this change does not grant access.
 
 Release acceptance uses ACA metadata for the exact new immutable API/worker revision: latest=ready, active, Healthy, Running/Provisioned, and full traffic ownership where ingress exists. No Azure exec or private HTTP probe is used. Metadata/channel failure or timeout fails the release as verification_unavailable without automatic rollback; only confirmed unhealthy candidate evidence triggers recovery. An uncertain write result is also unverified. Recovery retains an already-ready compatible worker reader, and does not reverse migrations or app-scoped configuration. This proves platform rollout health, not real provider delivery.
+
+## Application tracing
+
+The existing `OTEL_EXPORTER_OTLP_ENDPOINT` enables OTLP/gRPC export; absent endpoint leaves request handling and validated propagation available without export. No new credential is required. `OTEL_TRACES_SAMPLER_ARG` controls new-root sampling (default `0.01`, maximum `0.1`); sampled remote parents pass the local probability sampler while keeping their trace ID, remote unsampled parents stay unsampled, and local child spans retain their parent decision. This probability is not a hard ingestion quota, and remote trace trees may be partial. Export uses bounded batches and shutdown, and failures leave application behavior unchanged.
+
+Application HTTP spans record only normalized method and status, excluding health probes. The existing validated diagnostic request ID is added as `hhc.request_id` only when it is exactly 32 lowercase hex characters, allowing Gateway log joins for API-created root traces without exporting arbitrary supplied strings. Internal local Dapr client spans propagate the active application span; URLs, bodies, identities, credentials and error descriptions are not span attributes. Release identity uses `RELEASE`, then `CONTAINER_APP_REVISION`. API and background spans require separate live ingestion acceptance after release.
+
+Queue publishing creates a producer span and adds only W3C `traceparent` transport metadata. Consumers start a new trace linked to that producer, while preserving message IDs, payloads, claims and settlement. The durable HTTP-to-outbox boundary does not persist the original API trace; this change does not claim that missing edge. Worker resources use `notification-worker`.
+
+Services using the same Go trace-ID ratio sampler and rate make the same decision for a shared trace ID; crossing multiple such services does not multiply the sampling probabilities. Next.js Sentry independently samples 1% of requests, so its overlap with a Go 1% trace-ID sample is approximately 0.01% in expectation, not a guarantee of a complete chain.
+
+Caller-selected trace IDs that fall in the selected hash range can force 100% sampling for those requests. The platform coordinator owns quota review in the next cost phase; no hard ingestion quota is promised before that review.
