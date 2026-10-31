@@ -293,3 +293,5 @@ Provision these through azure-infra before initial service deployment; routine
 service releases do not create or overwrite them. Existing identity IDs and
 secret references stay unchanged. Explicit permission-bootstrap flags still
 control their existing role-assignment scope; this change does not grant access.
+
+Release acceptance uses ACA metadata for the exact new immutable API/worker revision: latest=ready, active, Healthy, Running/Provisioned, and full traffic ownership where ingress exists. No Azure exec or private HTTP probe is used. Metadata/channel failure or timeout fails the release as verification_unavailable without automatic rollback; only confirmed unhealthy candidate evidence triggers recovery. An uncertain write result is also unverified. Recovery retains an already-ready compatible worker reader, and does not reverse migrations or app-scoped configuration. This proves platform rollout health, not real provider delivery.
