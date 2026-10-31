@@ -294,6 +294,8 @@ service releases do not create or overwrite them. Existing identity IDs and
 secret references stay unchanged. Explicit permission-bootstrap flags still
 control their existing role-assignment scope; this change does not grant access.
 
+Release acceptance uses ACA metadata for the exact new immutable API/worker revision: latest=ready, active, Healthy, Running/Provisioned, and full traffic ownership where ingress exists. No Azure exec or private HTTP probe is used. Metadata/channel failure or timeout fails the release as verification_unavailable without automatic rollback; only confirmed unhealthy candidate evidence triggers recovery. An uncertain write result is also unverified. Recovery retains an already-ready compatible worker reader, and does not reverse migrations or app-scoped configuration. This proves platform rollout health, not real provider delivery.
+
 ## Application tracing
 
 The existing `OTEL_EXPORTER_OTLP_ENDPOINT` enables OTLP/gRPC export; absent endpoint leaves request handling and validated propagation available without export. No new credential is required. `OTEL_TRACES_SAMPLER_ARG` controls new-root sampling (default `0.01`, maximum `0.1`); sampled remote parents pass the local probability sampler while keeping their trace ID, remote unsampled parents stay unsampled, and local child spans retain their parent decision. This probability is not a hard ingestion quota, and remote trace trees may be partial. Export uses bounded batches and shutdown, and failures leave application behavior unchanged.

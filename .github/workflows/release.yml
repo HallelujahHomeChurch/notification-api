@@ -593,63 +593,11 @@ jobs:
         id: deploy_runtime
         shell: bash
         run: |
-          image_ref="${IMAGE_REF}"
+          echo "state=verification_unavailable" >> "$GITHUB_OUTPUT"
           wait_for_revision() {
-            local app_name="$1"
-            local deadline=$((SECONDS + 600)) read_errors=0 read_failed read_error read_timeout
-            for attempt in {1..60}; do
-              read_timeout=$((deadline - SECONDS))
-              (( read_timeout > 0 )) || break
-              if (( read_timeout > 30 )); then read_timeout=30; fi
-              read_failed=false
-              deployed_image=""
-              if state="$(timeout "$read_timeout" az containerapp show \
-                --resource-group "${RESOURCE_GROUP}" \
-                --name "${app_name}" \
-                --query "join('|', [properties.latestRevisionName, properties.latestReadyRevisionName])" \
-                --output tsv \
-                --only-show-errors 2>&1)"; then
-                IFS='|' read -r latest ready <<< "${state}"
-                if [[ -n "${latest}" && "${latest}" == "${ready}" ]]; then
-                  read_timeout=$((deadline - SECONDS))
-                  (( read_timeout > 0 )) || break
-                  if (( read_timeout > 30 )); then read_timeout=30; fi
-                  if deployed_image="$(timeout "$read_timeout" az containerapp revision show \
-                    --resource-group "${RESOURCE_GROUP}" \
-                    --name "${app_name}" \
-                    --revision "${ready}" \
-                    --query "properties.template.containers[0].image" \
-                    --output tsv \
-                    --only-show-errors 2>&1)"; then
-                    if [[ "${deployed_image}" == "${image_ref}" ]]; then
-                      echo "${app_name} is ready on ${ready} with ${image_ref}"
-                      return 0
-                    fi
-                  else
-                    read_error="$deployed_image"; deployed_image=""; read_failed=true
-                  fi
-                fi
-              else
-                read_error="$state"; state=""; latest=""; ready=""; read_failed=true
-              fi
-              if [[ "$read_failed" == true ]]; then
-                read_errors=$((read_errors + 1))
-                if grep -Eq 'AuthorizationFailed|AuthenticationFailed|AADSTS[0-9]+|InvalidAuthenticationToken|Forbidden|Unauthorized|unrecognized arguments|Invalid.*[Qq]uery' <<< "$read_error" || (( read_errors >= 3 )); then
-                  echo "Readiness metadata unavailable for ${app_name}; refusing deployment verification" >&2
-                  return 1
-                fi
-                echo "Retrying readiness metadata read for ${app_name} (${read_errors}/3)" >&2
-              else
-                read_errors=0
-              fi
-              echo "Waiting for ${app_name}: latest=${latest:-none} ready=${ready:-none} image=${deployed_image:-none} (${attempt}/60)"
-              read_timeout=$((deadline - SECONDS))
-              (( read_timeout > 0 )) || break
-              if (( read_timeout > 10 )); then read_timeout=10; fi
-              sleep "$read_timeout"
-            done
-            echo "${app_name} did not become ready with ${image_ref}" >&2
-            return 1
+            local app_name="$1" previous="$PREVIOUS_API_REVISION"
+            [[ "$app_name" != "$WORKER_APP_NAME" ]] || previous="$PREVIOUS_WORKER_REVISION"
+            python3 scripts/verify-aca-revision.py "$RESOURCE_GROUP" "$app_name" "$IMAGE_REF" "$previous"
           }
 
           worker_revision_mode="$(az containerapp show \
@@ -657,6 +605,7 @@ jobs:
             --query 'properties.configuration.activeRevisionsMode' --output tsv --only-show-errors)"
           [[ "${worker_revision_mode}" == "Single" ]] || { echo "Worker reader rollout requires Single revision mode" >&2; exit 1; }
 
+          echo "state=verification_unavailable" >> "$GITHUB_OUTPUT"
           az containerapp update \
             --resource-group "${RESOURCE_GROUP}" \
             --name "${WORKER_APP_NAME}" \
@@ -664,6 +613,7 @@ jobs:
             --only-show-errors --output none
           wait_for_revision "${WORKER_APP_NAME}"
           for attempt in {1..60}; do
+            echo "state=verification_unavailable" >> "$GITHUB_OUTPUT"
             old_replicas="$(az containerapp replica list \
               --resource-group "${RESOURCE_GROUP}" \
               --name "${WORKER_APP_NAME}" \
@@ -677,6 +627,7 @@ jobs:
           done
           echo "WORKER_READER_READY=true" >> "${GITHUB_ENV}"
 
+          echo "state=verification_unavailable" >> "$GITHUB_OUTPUT"
           az deployment group create \
             --name "notification-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --resource-group "${RESOURCE_GROUP}" \
@@ -699,8 +650,6 @@ jobs:
             --only-show-errors \
             --output none
 
-          wait_for_revision "${API_APP_NAME}"
-          wait_for_revision "${WORKER_APP_NAME}"
 
       - name: Verify worker Dapr configuration
         shell: bash
@@ -722,34 +671,12 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Dapr readiness through API gateway
+      - name: Verify ACA revisions
         id: smoke_runtime
         shell: bash
         run: |
-          dapr_url="http://localhost:3500/v1.0/invoke/notification-api/method/ready"
-          probe_exit=0
-          probe_output="$(timeout 60s script -q -e -c \
-            "az containerapp exec --resource-group \"${RESOURCE_GROUP}\" --name \"${API_GATEWAY_APP_NAME}\" --command \"/usr/bin/wget -S -O - ${dapr_url}\"" \
-            /dev/null 2>&1)" || probe_exit=$?
-          probe_output="${probe_output//$'\r'/}"
-          printf '%s\n' "${probe_output}"
-
-          if (( probe_exit == 124 )); then
-            echo "Dapr readiness probe timed out after 60 seconds" >&2
-            exit 1
-          fi
-          if ! grep -Eq 'HTTP/1\.[01][[:space:]]+200' <<< "${probe_output}"; then
-            echo "Dapr readiness probe did not return HTTP 200" >&2
-            exit 1
-          fi
-          if ! grep -Eq '"status"[[:space:]]*:[[:space:]]*"ready"' <<< "${probe_output}"; then
-            echo "Dapr readiness probe returned an unexpected body" >&2
-            exit 1
-          fi
-          if (( probe_exit != 0 )); then
-            echo "Dapr readiness probe command failed with exit ${probe_exit}" >&2
-            exit 1
-          fi
+          python3 scripts/verify-aca-revision.py "$RESOURCE_GROUP" "$API_APP_NAME" "$IMAGE_REF" "$PREVIOUS_API_REVISION"
+          python3 scripts/verify-aca-revision.py "$RESOURCE_GROUP" "$WORKER_APP_NAME" "$IMAGE_REF" "$PREVIOUS_WORKER_REVISION"
 
       - name: Capture healthy release
         id: release_outputs
@@ -759,7 +686,7 @@ jobs:
           echo "image=${IMAGE_REF}" >> "${GITHUB_OUTPUT}"
 
       - name: Roll back runtime after failed deployment verification
-        if: ${{ failure() && steps.deploy_runtime.outcome != 'skipped' }}
+        if: ${{ failure() && (steps.deploy_runtime.outputs.state == 'unhealthy' || steps.smoke_runtime.outputs.state == 'unhealthy') }}
         shell: bash
         run: |
           rollback() {

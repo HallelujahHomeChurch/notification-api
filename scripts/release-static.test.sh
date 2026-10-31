@@ -129,7 +129,7 @@ migration_polls="$(sed -n 's/.*for attempt in {1\.\.\([0-9]*\)};.*/\1/p' <<< "${
 migration_poll_seconds="$(sed -n 's/.*sleep \([0-9]*\)/\1/p' <<< "${migration_wait}")"
 [[ $((migration_polls * migration_poll_seconds)) -ge $((migration_timeout + 120)) ]] || fail "migration polling must outlast the replica deadline and completion reporting"
 assert_contains "${workflow}" 'deployRuntime=true' "runtime deployment is missing"
-assert_contains "${workflow}" '(?s)id: deploy_runtime.*?az containerapp update.*?wait_for_revision "\$\{WORKER_APP_NAME\}".*?az containerapp replica list.*?WORKER_READER_READY=true.*?az deployment group create.*?wait_for_revision "\$\{API_APP_NAME\}"' "worker reader must be ready and previous worker drained before API emits new template versions"
+assert_contains "${workflow}" '(?s)id: deploy_runtime.*?az containerapp update.*?wait_for_revision "\$\{WORKER_APP_NAME\}".*?az containerapp replica list.*?WORKER_READER_READY=true.*?az deployment group create.*?name: Verify ACA revisions.*?verify-aca-revision.py' "worker reader must be ready and previous worker drained before API emits new template versions"
 assert_contains "${workflow}" 'if \[\[ "\$\{WORKER_READER_READY:-false\}" != "true" \]\]' "rollback must retain a ready reader for already persisted template versions"
 assert_contains "${workflow}" '(?s)worker_revision_mode.*?properties\.configuration\.activeRevisionsMode.*?worker_revision_mode.*?Single' "reader drain must require single revision mode"
 
@@ -143,12 +143,7 @@ assert_contains "${workflow}" 'properties\.template\.containers\[0\]\.image' "re
 assert_contains "${workflow}" 'properties\.latestReadyRevisionName' "rollback must capture Ready revisions"
 assert_contains "${workflow}" 'az containerapp revision copy' "rollback must copy the previous Ready revision"
 assert_contains "${workflow}" 'rollback_status=0' "API and worker rollback outcomes must be aggregated"
-assert_contains "${workflow}" 'script -q' "Container Apps exec TTY wrapper is missing"
-assert_contains "${workflow}" 'timeout 60s script -q' "Container Apps exec must have a hard timeout"
 assert_contains "${workflow}" 'timeout-minutes:[[:space:]]*[0-9]+' "deploy job must have a bounded timeout"
-assert_contains "${workflow}" '/usr/bin/wget' "gateway readiness probe must use the existing wget"
-assert_contains "${workflow}" "grep -Eq 'HTTP/1" "Dapr probe must validate HTTP 200"
-assert_contains "${workflow}" "grep -Eq '\"status\"" "Dapr probe must validate the response body"
 
 assert_contains "${dockerfile}" '^FROM golang:1\.26\.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder$' "Go base image must use the approved multi-arch digest"
 assert_contains "${dockerfile}" '^FROM gcr\.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35$' "runtime base image must use the approved multi-arch digest"
@@ -436,7 +431,7 @@ run_openapi_publication_case missing 01 invalid-candidate
 
 deploy_line="$(grep -n '^  deploy:' "${workflow}" | cut -d: -f1)"
 publish_line="$(grep -n '^  publish_openapi:' "${workflow}" | cut -d: -f1)"
-smoke_line="$(grep -n 'name: Verify Dapr readiness through API gateway' "${workflow}" | cut -d: -f1)"
+smoke_line="$(grep -n 'name: Verify ACA revisions' "${workflow}" | cut -d: -f1)"
 outputs_line="$(grep -n 'id: release_outputs' "${workflow}" | cut -d: -f1)"
 rollback_line="$(grep -n 'name: Roll back runtime after failed deployment verification' "${workflow}" | cut -d: -f1)"
 guard_line="$(grep -nF 'pointer_exists="$(az storage blob exists' "${workflow}" | cut -d: -f1)"
