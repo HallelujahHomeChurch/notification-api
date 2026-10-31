@@ -46,7 +46,7 @@ func Init(ctx context.Context, name string) func() {
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(2*time.Second)),
 		sdktrace.WithResource(resource.NewSchemaless(attribute.String("service.name", name), attribute.String("service.version", env("RELEASE", env("CONTAINER_APP_REVISION", "unknown"))), attribute.String("deployment.environment.name", env("ENVIRONMENT", "production")))),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(sampleRatio()))),
+		sdktrace.WithSampler(sampler()),
 	)
 	otel.SetTracerProvider(provider)
 	return func() {
@@ -177,4 +177,10 @@ func (b *body) Close() error {
 	}
 	b.once.Do(func() { b.span.End() })
 	return err
+}
+
+func sampler() sdktrace.Sampler {
+	root := sdktrace.TraceIDRatioBased(sampleRatio())
+	// Remote sampled flags are correlation, not authority to raise this service's budget.
+	return sdktrace.ParentBased(root, sdktrace.WithRemoteParentSampled(root))
 }

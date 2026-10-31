@@ -296,7 +296,7 @@ control their existing role-assignment scope; this change does not grant access.
 
 ## Application tracing
 
-The existing `OTEL_EXPORTER_OTLP_ENDPOINT` enables OTLP/gRPC export; absent endpoint leaves request handling and validated propagation available without export. No new credential is required. `OTEL_TRACES_SAMPLER_ARG` controls new-root sampling (default `0.01`, maximum `0.1`); valid parent sampling decisions are retained, so this is not a hard ingestion quota. Export uses bounded batches and shutdown, and failures leave application behavior unchanged.
+The existing `OTEL_EXPORTER_OTLP_ENDPOINT` enables OTLP/gRPC export; absent endpoint leaves request handling and validated propagation available without export. No new credential is required. `OTEL_TRACES_SAMPLER_ARG` controls new-root sampling (default `0.01`, maximum `0.1`); sampled remote parents pass the local probability sampler while keeping their trace ID, remote unsampled parents stay unsampled, and local child spans retain their parent decision. This probability is not a hard ingestion quota, and remote trace trees may be partial. Export uses bounded batches and shutdown, and failures leave application behavior unchanged.
 
 Application HTTP spans record only normalized method and status, excluding health probes. Internal local Dapr client spans propagate the active application span; URLs, bodies, identities, credentials and error descriptions are not span attributes. Release identity uses `RELEASE`, then `CONTAINER_APP_REVISION`. API and background spans require separate live ingestion acceptance after release.
 

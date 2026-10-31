@@ -156,7 +156,7 @@ func TestOTLPExport(t *testing.T) {
 	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.1")
 	t.Setenv("RELEASE", "test-release")
 	shutdown := Init(context.Background(), service)
-	ctx := ExtractParent(context.Background(), "00-12345678901234567890123456789012-1234567890123456-01")
+	ctx := ExtractParent(context.Background(), "00-00000000000000000000000000000001-1234567890123456-01")
 	_, span := otel.Tracer(service).Start(ctx, "test.export")
 	span.End()
 	shutdown()
@@ -167,5 +167,35 @@ func TestOTLPExport(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no real OTLP export")
+	}
+}
+
+func TestRemoteSampledFlagCannotRaiseLocalBudget(t *testing.T) {
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.01")
+	selected, _ := trace.TraceIDFromHex("00000000000000000000000000000001")
+	rejected, _ := trace.TraceIDFromHex("ffffffffffffffffffffffffffffffff")
+	id, _ := trace.SpanIDFromHex("1234567890123456")
+	for _, tc := range []struct {
+		name            string
+		remote, sampled bool
+		id              trace.TraceID
+		want            sdktrace.SamplingDecision
+	}{
+		{"remote sampled high", true, true, rejected, sdktrace.Drop},
+		{"remote sampled low", true, true, selected, sdktrace.RecordAndSample},
+		{"remote unsampled low", true, false, selected, sdktrace.Drop},
+		{"local sampled high", false, true, rejected, sdktrace.RecordAndSample},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := trace.TraceFlags(0)
+			if tc.sampled {
+				flags = trace.FlagsSampled
+			}
+			parent := trace.NewSpanContext(trace.SpanContextConfig{TraceID: tc.id, SpanID: id, TraceFlags: flags, Remote: tc.remote})
+			got := sampler().ShouldSample(sdktrace.SamplingParameters{ParentContext: trace.ContextWithSpanContext(context.Background(), parent), TraceID: tc.id, Name: "test"})
+			if got.Decision != tc.want {
+				t.Fatalf("decision=%v want=%v", got.Decision, tc.want)
+			}
+		})
 	}
 }
