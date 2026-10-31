@@ -223,8 +223,9 @@ The release Verify job builds and scans one `linux/amd64` image. The plan job
 loads that image from the exact artifact ID emitted by Verify; it does not
 rebuild the source in ACR. The handoff checks the full commit, platform, archive
 checksums and image identities before loading. After push, the immutable digest
-is pulled and checked against the verified image ID before the existing scan
-and deployment plan. GitHub's same-run artifact selection supplies provenance;
+is pulled and checked against the verified image ID before the deployment plan.
+The release scan gates artifact export and publication; the same verified bytes
+are not scanned again after promotion. GitHub's same-run artifact selection supplies provenance;
 checksums alone are corruption detection, not signatures.
 
 PR CI exercises rejection cases and a real image export/load round trip. Release
@@ -279,10 +280,10 @@ not healthy. LOG_LEVEL filtering remains unchanged; retain info for heartbeats.
 
 ## Immutable image scan evidence
 
-Release publication scans the pulled, identity-verified image once into Trivy
-JSON. The same validated report gates fixable High/Critical vulnerabilities and
+Release Verify scans the built image once into Trivy JSON before artifact export. The same validated report gates fixable High/Critical vulnerabilities and
 summarizes unfixed findings. High/Critical secrets also block without printing
 matched content. Malformed reports, wrong image/version and scanner failures block.
 The pinned scanner, vulnerability DB metadata, source dependency scan, CI image
-scan and main verification-image scan remain. This removes one duplicate scan
-of the same publication digest, not checks across different commits or artifacts.
+scan remain. Exact same-run artifact identity and post-push image identity bind
+the scan gate to the published bytes. No checks across different commits or
+artifacts are removed.

@@ -64,20 +64,20 @@ assert_contains "${workflow}" 'go vet \./\.\.\.' "go vet is missing"
 assert_contains "${workflow}" 'bash scripts/release-static\.test\.sh' "release static test is not run by CI"
 scanner='ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
 [[ "$(grep -Fc "${scanner}" "${ci_workflow}")" == "2" ]] || fail "CI must pin both Trivy scans"
-[[ "$(grep -Fc "${scanner}" "${workflow}")" == "4" ]] || fail "release must pin dependency, verification-image, and immutable-image scans"
+[[ "$(grep -Fc "${scanner}" "${workflow}")" == "1" ]] || fail "release dependency scan must remain pinned; image scan uses the pinned helper"
 grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1' "${ci_workflow}" || fail "CI dependency scan is missing"
 grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 notification-api:verify' "${ci_workflow}" || fail "CI image scan is missing"
 grep -Fq 'fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1' "${workflow}" || fail "release dependency scan is missing"
-grep -Fq 'image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 notification-api:verify' "${workflow}" || fail "release verification-image scan is missing"
+grep -Fq 'sh scripts/scan-image.sh notification-api:verify' "${workflow}" || fail "release verification-image scan is missing"
 grep -Fq 'docker pull --platform linux/amd64 "${IMAGE_REF}"' "${workflow}" || fail "immutable release image pull is missing"
-grep -Fq 'sh scripts/scan-image.sh "${IMAGE_REF}"' "${workflow}" || fail "immutable release image scan is missing"
+[[ "$(grep -Fc 'sh scripts/scan-image.sh' "${workflow}")" == 1 ]] || fail "release must scan the verified image exactly once"
 grep -Fq "${scanner}" scripts/scan-image.sh || fail "immutable scanner pin missing"
 [[ "$(grep -Fc 'docker run' scripts/scan-image.sh)" == 1 ]] || fail "immutable image must scan exactly once"
 grep -Fq 'image --scanners vuln,secret --severity HIGH,CRITICAL --format json' scripts/scan-image.sh || fail "JSON vulnerability scan missing"
 python3 scripts/test-trivy-report.py
-scan_line="$(grep -nF 'name: Scan immutable image' "${workflow}" | cut -d: -f1)"
+scan_line="$(grep -nF 'name: Verify published image identity' "${workflow}" | cut -d: -f1)"
 what_if_line="$(grep -nF 'name: Produce complete what-if plan' "${workflow}" | cut -d: -f1)"
-[[ "${scan_line}" -lt "${what_if_line}" ]] || fail "immutable image scan must finish before release planning"
+[[ "${scan_line}" -lt "${what_if_line}" ]] || fail "published image identity verification must finish before release planning"
 assert_contains "${workflow}" 'uses: actions/checkout@[0-9a-f]{40}[[:space:]]+# v7\.0\.1' "checkout must use a full SHA with the approved version comment"
 assert_contains "${workflow}" 'uses: actions/setup-go@[0-9a-f]{40}[[:space:]]+# v7\.0\.0' "setup-go must use a full SHA with the approved version comment"
 assert_contains "${workflow}" 'uses: azure/login@[0-9a-f]{40}[[:space:]]+# v3\.0\.0' "azure-login must use a full SHA with the approved version comment"
@@ -480,8 +480,29 @@ assert 'image_artifact_id: ${{ steps.image_artifact.outputs.artifact-id }}' in v
 assert 'artifact-ids: ${{ needs.verify.outputs.image_artifact_id }}' in plan
 assert 'digest-mismatch: error' in plan
 assert 'run-id:' not in plan and 'github-token:' not in plan
+assert 'needs: verify' in plan
+assert 'sh scripts/scan-image.sh notification-api:verify' in verify
+assert 'scan-image.sh' not in plan
 assert verify.index('name: Scan image') < verify.index('name: Export verified image') < verify.index('name: Store verified image')
-assert plan.index('name: Verify and load image') < plan.index('docker push ') < plan.index('name: Scan immutable image')
+assert plan.index('name: Verify and load image') < plan.index('docker push ') < plan.index('name: Verify published image identity')
 assert "steps.load_image.outputs.api_image_id" in plan
 assert '.artifacts' in Path('.dockerignore').read_text().splitlines()
+assert 'continue-on-error:' not in verify and 'if: ${{ always() }}' not in verify
+# Execute the release scan then export commands with a failed scanner. Export must not run.
+import os, subprocess, tempfile
+scan = verify.split('      - name: Scan image\n', 1)[1].split('      - name:', 1)[0]
+assert 'run: sh scripts/scan-image.sh notification-api:verify' in scan
+export = verify.split('      - name: Export verified image\n', 1)[1].split('      - name:', 1)[0]
+export_command = export.split('        run: ', 1)[1].strip()
+with tempfile.TemporaryDirectory() as folder:
+    root = Path(folder)
+    (root/'docker').write_text('#!/bin/sh\nexit 42\n')
+    (root/'bash').write_text('#!/bin/sh\ntouch "$EXPORT_MARKER"\n')
+    for name in ('docker', 'bash'): (root/name).chmod(0o755)
+    env = {**os.environ, 'PATH': folder + os.pathsep + os.environ['PATH'],
+           'RUNNER_TEMP': folder, 'GITHUB_SHA': 'a'*40, 'EXPORT_MARKER': str(root/'exported')}
+    result = subprocess.run(['/bin/bash', '-euo', 'pipefail', '-c',
+        'sh scripts/scan-image.sh notification-api:verify\n' + export_command], env=env, capture_output=True)
+    assert result.returncode == 42, result.stderr
+    assert not (root/'exported').exists(), 'failed scan exported a release artifact'
 PYTEST
