@@ -192,9 +192,11 @@ func TestRemoteSampledFlagCannotRaiseLocalBudget(t *testing.T) {
 				flags = trace.FlagsSampled
 			}
 			parent := trace.NewSpanContext(trace.SpanContextConfig{TraceID: tc.id, SpanID: id, TraceFlags: flags, Remote: tc.remote})
-			got := sampler().ShouldSample(sdktrace.SamplingParameters{ParentContext: trace.ContextWithSpanContext(context.Background(), parent), TraceID: tc.id, Name: "test"})
-			if got.Decision != tc.want {
-				t.Fatalf("decision=%v want=%v", got.Decision, tc.want)
+			for repeat := 0; repeat < 100; repeat++ {
+				got := sampler().ShouldSample(sdktrace.SamplingParameters{ParentContext: trace.ContextWithSpanContext(context.Background(), parent), TraceID: tc.id, Name: "test"})
+				if got.Decision != tc.want {
+					t.Fatalf("repeat=%d decision=%v want=%v", repeat, got.Decision, tc.want)
+				}
 			}
 		})
 	}
