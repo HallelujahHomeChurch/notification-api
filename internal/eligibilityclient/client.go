@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/HallelujahHomeChurch/notification-api/internal/telemetry"
 )
 
 type Client struct {
@@ -18,7 +19,7 @@ type Client struct {
 }
 
 func New(baseURL string) *Client {
-	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 8 * time.Second}}
+	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Transport: telemetry.Transport(nil), Timeout: 8 * time.Second}}
 }
 
 func (c *Client) Check(ctx context.Context, ref contracts.EligibilityRef) (bool, error) {

@@ -29,6 +29,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/service"
 	"github.com/HallelujahHomeChurch/notification-api/internal/sesfeedback"
 	"github.com/HallelujahHomeChurch/notification-api/internal/store"
+	"github.com/HallelujahHomeChurch/notification-api/internal/telemetry"
 	"github.com/HallelujahHomeChurch/notification-api/internal/worker"
 )
 
@@ -95,6 +96,15 @@ func (a app) run(ctx context.Context, args []string) error {
 	if err := cfg.Validate(args[0]); err != nil {
 		return fmt.Errorf("validate %s config: %w", args[0], err)
 	}
+	if args[0] != "migrate" {
+		name := "notification-api"
+		if args[0] == "worker" {
+			name = "notification-worker"
+		}
+		shutdownTelemetry := telemetry.Init(ctx, name)
+		defer shutdownTelemetry()
+	}
+
 	switch args[0] {
 	case "api":
 		components, err := a.buildAPI(ctx, cfg)
@@ -350,7 +360,7 @@ func httpProcess(port string, handler http.Handler, timeout time.Duration) proce
 	return func(ctx context.Context) error {
 		server := &http.Server{
 			Addr:              ":" + port,
-			Handler:           handler,
+			Handler:           telemetry.Handler(handler),
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       15 * time.Second,
 			WriteTimeout:      30 * time.Second,
