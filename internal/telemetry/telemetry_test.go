@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HallelujahHomeChurch/notification-api/internal/correlation"
+
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -208,5 +210,36 @@ func TestRemoteSampledFlagCannotRaiseLocalBudget(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCanonicalRequestIDJoinsRootSpanWithoutIncomingTrace(t *testing.T) {
+	exp := recordingProvider(t)
+	for _, id := range []string{"1234567890abcdef1234567890abcdef", "not-a-canonical-id", "ABCDEF1234567890ABCDEF1234567890", "12345678-1234-1234-1234-123456789abc"} {
+		req := httptest.NewRequest("GET", "http://local/private", nil)
+		req.Header.Set("X-HHC-Request-ID", id)
+		Handler(correlation.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if correlation.RequestID(r.Context()) != id || !trace.SpanContextFromContext(r.Context()).IsValid() {
+				t.Fatal("correlation context changed")
+			}
+			w.WriteHeader(200)
+		}))).ServeHTTP(httptest.NewRecorder(), req)
+		spans := exp.GetSpans()
+		last := spans[len(spans)-1]
+		found := false
+		for _, attr := range last.Attributes {
+			if attr.Key == "hhc.request_id" {
+				found = true
+				if attr.Value.AsString() != id {
+					t.Fatal("wrong diagnostic join")
+				}
+			}
+		}
+		if found != (id == "1234567890abcdef1234567890abcdef") {
+			t.Fatal("request ID export allowlist violated")
+		}
+		if last.Parent.IsValid() {
+			t.Fatal("incoming trace invented")
+		}
 	}
 }
