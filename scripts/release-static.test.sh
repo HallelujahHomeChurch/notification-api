@@ -154,7 +154,6 @@ assert_contains "${dockerfile}" '^FROM golang:1\.26\.10-alpine@sha256:9ce231b289
 assert_contains "${dockerfile}" '^FROM gcr\.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35$' "runtime base image must use the approved multi-arch digest"
 
 assert_contains "${bicep}" 'param provisionPermissions bool = true' "provisionPermissions must default to true"
-assert_contains "${bicep}" 'zoneRedundant:[[:space:]]*true' "Service Bus zone redundancy must match production"
 assert_contains "${bicep}" "param notificationVaultName string = 'alive-notify-[^']+'" "notification must use a dedicated vault"
 assert_contains "${bicep}" "(?s)resource vault 'Microsoft\\.KeyVault/vaults@[^']+' existing = \\{.*?name: notificationVaultName" "runtime secrets must reference the dedicated vault"
 assert_contains "${bicep}" 'NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID' "active encryption key ID is missing"
@@ -506,3 +505,12 @@ with tempfile.TemporaryDirectory() as folder:
     assert result.returncode == 42, result.stderr
     assert not (root/'exported').exists(), 'failed scan exported a release artifact'
 PYTEST
+
+# Shared platform resources are references, never routine release writes.
+python3 - <<'PYOWNER'
+from pathlib import Path
+import re
+source=Path("infra/main.bicep").read_text()
+for name in ['apiIdentity', 'workerIdentity', 'migrateIdentity', 'serviceBus', 'emailQueue']:
+    assert re.search(r"resource "+name+r" '[^']+' existing =", source), name
+PYOWNER

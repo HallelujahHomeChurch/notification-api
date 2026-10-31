@@ -287,3 +287,9 @@ The pinned scanner, vulnerability DB metadata, source dependency scan, CI image
 scan remain. Exact same-run artifact identity and post-push image identity bind
 the scan gate to the published bytes. No checks across different commits or
 artifacts are removed.
+
+Runtime templates reference platform-owned resources as `existing`: `apiIdentity`, `workerIdentity`, `migrateIdentity`, `serviceBus`, `emailQueue`.
+Provision these through azure-infra before initial service deployment; routine
+service releases do not create or overwrite them. Existing identity IDs and
+secret references stay unchanged. Explicit permission-bootstrap flags still
+control their existing role-assignment scope; this change does not grant access.
