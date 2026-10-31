@@ -182,7 +182,7 @@ func (b *body) Close() error {
 
 func sampler() sdktrace.Sampler {
 	root := sdktrace.TraceIDRatioBased(sampleRatio())
-	// Remote sampled flags are correlation, not authority to raise this service's budget.
+	// shortcut: caller-selected trace IDs can force sampling; platform owner reviews quotas in the next cost phase.
 	return sdktrace.ParentBased(root, sdktrace.WithRemoteParentSampled(root))
 }
 

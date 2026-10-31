@@ -305,3 +305,5 @@ Application HTTP spans record only normalized method and status, excluding healt
 Queue publishing creates a producer span and adds only W3C `traceparent` transport metadata. Consumers start a new trace linked to that producer, while preserving message IDs, payloads, claims and settlement. The durable HTTP-to-outbox boundary does not persist the original API trace; this change does not claim that missing edge. Worker resources use `notification-worker`.
 
 Services using the same Go trace-ID ratio sampler and rate make the same decision for a shared trace ID; crossing multiple such services does not multiply the sampling probabilities. Next.js Sentry independently samples 1% of requests, so its overlap with a Go 1% trace-ID sample is approximately 0.01% in expectation, not a guarantee of a complete chain.
+
+Caller-selected trace IDs that fall in the selected hash range can force 100% sampling for those requests. The platform coordinator owns quota review in the next cost phase; no hard ingestion quota is promised before that review.
