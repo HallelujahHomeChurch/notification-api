@@ -8,7 +8,8 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('probe', Path(__file__).with_name('probe-dapr-readiness.py'))
 probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
-THROTTLED = Path(__file__).with_name('testdata').joinpath('exec-handshake-429.txt').read_text()
+ACTUAL_THROTTLE = Path(__file__).with_name('testdata').joinpath('exec-handshake-429.txt').read_text()
+THROTTLED = ACTUAL_THROTTLE.replace("{'retry-after': '600'}\n", '')
 READY = 'HTTP/1.1 200 OK\n{"status":"ready"}'
 
 
@@ -45,6 +46,29 @@ class ProbeTests(unittest.TestCase):
                 self.assertEqual(status, 1)
                 self.assertEqual(run.call_count, 1)
                 sleep.assert_not_called()
+
+    def test_actual_server_cooldown_exceeds_budget(self):
+        status, run, sleep = self.run_probe([subprocess.CompletedProcess([], 1, '', ACTUAL_THROTTLE)])
+        self.assertEqual(status, 1)
+        self.assertEqual(run.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_short_retry_after_is_respected(self):
+        status, run, sleep = self.run_probe([subprocess.CompletedProcess([], 1, '', THROTTLED + "{'retry-after': '5'}"),
+                                          subprocess.CompletedProcess([], 0, READY, '')])
+        self.assertEqual(status, 0)
+        sleep.assert_called_once_with(5)
+
+    def test_invalid_retry_after_fails_closed(self):
+        for header in ["{'retry-after': 'unknown'}", 'retry-after malformed']:
+            status, run, sleep = self.run_probe([subprocess.CompletedProcess([], 1, '', THROTTLED + header)])
+            self.assertEqual(status, 1)
+            self.assertEqual(run.call_count, 1)
+            sleep.assert_not_called()
+
+    def test_http_date_retry_after(self):
+        with patch.object(probe.time, 'time', return_value=0):
+            self.assertEqual(probe.retry_after("{'retry-after': 'Thu, 01 Jan 1970 00:00:05 GMT'}"), 5)
 
     def test_shared_deadline_not_reset(self):
         status, run, sleep = self.run_probe([subprocess.CompletedProcess([], 1, '', THROTTLED)], [0, 58, 59])

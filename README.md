@@ -294,4 +294,6 @@ service releases do not create or overwrite them. Existing identity IDs and
 secret references stay unchanged. Explicit permission-bootstrap flags still
 control their existing role-assignment scope; this change does not grant access.
 
-The gateway Dapr readiness release probe retains a 60-second total deadline. Only an Azure exec WebSocket handshake 429 with no HTTP response is retried (at most three attempts, 2s/4s backoff); application HTTP failures, unknown exec errors and timeouts fail closed. Probe output is classified without printing raw transport responses. Automatic rollback still retains a compatible ready worker reader while restoring the prior API.
+The gateway Dapr readiness release probe retains a 60-second total deadline. Only an Azure exec WebSocket handshake 429 with no HTTP response is retried (at most three attempts, minimum 2s/4s backoff respecting Retry-After); application HTTP failures, unknown exec errors and timeouts fail closed. Probe output is classified without printing raw transport responses. Automatic rollback still retains a compatible ready worker reader while restoring the prior API.
+
+A Retry-After that exceeds the remaining probe budget fails immediately instead of retrying early or extending the deadline. The observed release failure requested 600 seconds; that case remains a failed probe and requires a later reviewed release after cooldown, not an automatic rerun.

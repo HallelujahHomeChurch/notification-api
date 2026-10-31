@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Bounded read-only probe; only Azure exec handshake throttling is retryable."""
+from email.utils import parsedate_to_datetime
 import re
 import shlex
 import subprocess
@@ -8,6 +9,25 @@ import time
 
 HANDSHAKE_429 = 'websocket._exceptions.WebSocketBadStatusException: Handshake status 429 Too Many Requests'
 HTTP = re.compile(r'HTTP/\d(?:\.\d)?\s+\d{3}')
+
+
+def retry_after(output):
+    if not re.search(r'retry-after', output, re.I):
+        return 0
+    values = re.findall(r"['\"]retry-after['\"]\s*:\s*['\"]([^'\"]+)['\"]|^retry-after:\s*([^\r\n]+)$", output, re.I | re.M)
+    if not values:
+        raise ValueError('unparseable Retry-After')
+    delays = []
+    for quoted, plain in values:
+        value = (quoted or plain).strip()
+        if value.isascii() and value.isdigit():
+            delays.append(int(value))
+        else:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                raise ValueError('Retry-After requires timezone')
+            delays.append(max(0, date.timestamp() - time.time()))
+    return max(delays)
 
 
 def probe(resource_group, gateway):
@@ -29,7 +49,11 @@ def probe(resource_group, gateway):
         # Any HTTP response is application/proxy evidence: never retry it here.
         if result.returncode not in (0, 124) and HANDSHAKE_429 in output and not HTTP.search(output):
             if attempt < 2:
-                delay = 2 ** (attempt + 1)
+                try:
+                    delay = max(2 ** (attempt + 1), retry_after(output))
+                except (ValueError, TypeError, OverflowError):
+                    print('Azure exec Retry-After cannot be verified; no retry', file=sys.stderr)
+                    return 1
                 if deadline - time.monotonic() > delay:
                     print('Azure exec handshake throttled before HTTP; bounded retry', flush=True)
                     time.sleep(delay)
