@@ -155,6 +155,7 @@ func TestOTLPExport(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+listener.Addr().String())
 	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.1")
 	t.Setenv("RELEASE", "test-release")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "member.secret=sentinel,service.name=private-name")
 	shutdown := Init(context.Background(), service)
 	ctx := ExtractParent(context.Background(), "00-00000000000000000000000000000001-1234567890123456-01")
 	_, span := otel.Tracer(service).Start(ctx, "test.export")
@@ -164,6 +165,14 @@ func TestOTLPExport(t *testing.T) {
 	case req := <-c.received:
 		if len(req.ResourceSpans) != 1 || len(req.ResourceSpans[0].Resource.Attributes) != 3 {
 			t.Fatal("unexpected resource metadata")
+		}
+		for _, attr := range req.ResourceSpans[0].Resource.Attributes {
+			if attr.Key != "service.name" && attr.Key != "service.version" && attr.Key != "deployment.environment.name" {
+				t.Fatal("environment resource escaped allowlist")
+			}
+			if strings.Contains(attr.Value.String(), "sentinel") || strings.Contains(attr.Value.String(), "private-name") {
+				t.Fatal("private environment metadata exported")
+			}
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no real OTLP export")

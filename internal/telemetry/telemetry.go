@@ -43,9 +43,10 @@ func Init(ctx context.Context, name string) func() {
 	// Export failures must not disclose endpoint credentials or request errors.
 	var exportWarning sync.Once
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { exportWarning.Do(func() { slog.Warn("trace export failed") }) }))
+	safeResource := resource.NewSchemaless(attribute.String("service.name", name), attribute.String("service.version", env("RELEASE", env("CONTAINER_APP_REVISION", "unknown"))), attribute.String("deployment.environment.name", env("ENVIRONMENT", "production")))
 	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(2*time.Second)),
-		sdktrace.WithResource(resource.NewSchemaless(attribute.String("service.name", name), attribute.String("service.version", env("RELEASE", env("CONTAINER_APP_REVISION", "unknown"))), attribute.String("deployment.environment.name", env("ENVIRONMENT", "production")))),
+		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: safeResource}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(2*time.Second)),
+		sdktrace.WithResource(safeResource),
 		sdktrace.WithSampler(sampler()),
 	)
 	otel.SetTracerProvider(provider)
@@ -184,3 +185,24 @@ func sampler() sdktrace.Sampler {
 	// Remote sampled flags are correlation, not authority to raise this service's budget.
 	return sdktrace.ParentBased(root, sdktrace.WithRemoteParentSampled(root))
 }
+
+// Enforce the resource allowlist at export, after SDK environment merging.
+type resourceExporter struct {
+	sdktrace.SpanExporter
+	resource *resource.Resource
+}
+
+func (e resourceExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	safe := make([]sdktrace.ReadOnlySpan, len(spans))
+	for i, span := range spans {
+		safe[i] = resourceSpan{ReadOnlySpan: span, resource: e.resource}
+	}
+	return e.SpanExporter.ExportSpans(ctx, safe)
+}
+
+type resourceSpan struct {
+	sdktrace.ReadOnlySpan
+	resource *resource.Resource
+}
+
+func (s resourceSpan) Resource() *resource.Resource { return s.resource }
