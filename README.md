@@ -62,6 +62,15 @@ Web Push uses `engagement.web-push`, a `web_push` target containing serialized
 `actionUrl`. HTTP 404/410 permanently invalidate the endpoint; HTTP 429 and
 5xx responses use the existing durable retry policy.
 
+## Engagement status over private HTTPS
+
+The API starts a second listener on port 8082 only when
+`NOTIFICATION_ENGAGEMENT_STATUS_TOKEN` is set to a dedicated 32-byte credential
+encoded as hex. Private HTTPS terminates at internal ingress for that port.
+The listener serves only authenticated `GET /priv/notifications/{messageId}`
+for `engagement-api`. Keep Dapr on port 8081 for enqueue, cleanup, and existing
+status callers. Ordinary releases leave the second listener disabled.
+
 ## API
 
 Internal endpoint:

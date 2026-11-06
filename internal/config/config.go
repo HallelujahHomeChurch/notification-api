@@ -3,10 +3,12 @@ package config
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 )
 
 const (
+	EngagementStatusPort     = 8082
 	EnvironmentDevelopment   = "development"
 	EnvironmentProduction    = "production"
 	legacyKeyID              = "legacy-v1"
@@ -38,6 +41,7 @@ type Config struct {
 	DBMaxIdleConns             int
 	DBConnMaxLifetime          time.Duration
 	AllowedCallers             []string
+	EngagementStatusToken      string
 	AllowDevCallerHeader       bool
 	ActiveEncryptionKeyID      string
 	EncryptionKeys             map[string][]byte
@@ -155,6 +159,7 @@ func Load() (Config, error) {
 		DBConnMaxLifetime:          dbConnMaxLifetime,
 		AllowedCallers:             parseCallers(os.Getenv("NOTIFICATION_ALLOWED_CALLERS")),
 		AllowDevCallerHeader:       allowDevCallerHeader,
+		EngagementStatusToken:      os.Getenv("NOTIFICATION_ENGAGEMENT_STATUS_TOKEN"),
 		ActiveEncryptionKeyID:      activeEncryptionKeyID,
 		EncryptionKeys:             encryptionKeys,
 		DataEncryptionKey:          dataEncryptionKey,
@@ -219,6 +224,19 @@ func (c Config) Validate(mode string) error {
 		}
 		if len(c.HashKey) < 32 {
 			return fmt.Errorf("NOTIFICATION_HASH_KEY must contain at least 32 bytes")
+		}
+		if c.EngagementStatusToken != "" {
+			key, err := hex.DecodeString(c.EngagementStatusToken)
+			if err != nil || len(key) != 32 {
+				return fmt.Errorf("NOTIFICATION_ENGAGEMENT_STATUS_TOKEN must encode 32 bytes as hex")
+			}
+			if !slices.Contains(c.AllowedCallers, "engagement-api") {
+				return fmt.Errorf("Engagement status requires engagement-api in NOTIFICATION_ALLOWED_CALLERS")
+			}
+			port, err := strconv.Atoi(c.Port)
+			if err != nil || port < 1 || port > 65535 || port == EngagementStatusPort {
+				return fmt.Errorf("Engagement status requires a valid PORT distinct from %d", EngagementStatusPort)
+			}
 		}
 		if len(c.AllowedCallers) == 0 {
 			return fmt.Errorf("NOTIFICATION_ALLOWED_CALLERS is required")
