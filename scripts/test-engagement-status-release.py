@@ -154,7 +154,8 @@ class StatusReleaseTests(unittest.TestCase):
         inputs = dict(versions, GITHUB_REF="refs/heads/main", GITHUB_REPOSITORY="HallelujahHomeChurch/notification-api",
                       RETIRE_DAPR_REVISIONS=REVISION + " account-api--current engagement-api--current")
         for scenario in ("ready", "transient", "mode-lag", "provisioning-lag", "never-ready",
-                         "config-drift", "pin-drift", "image-drift"):
+                         "secret-order", "secret-uri-drift", "duplicate-secret", "config-drift",
+                         "pin-drift", "image-drift"):
             with self.subTest(scenario=scenario):
                 api = copy.deepcopy(original)
                 commands = []
@@ -202,7 +203,14 @@ class StatusReleaseTests(unittest.TestCase):
                     action = args[3]
                     commands.append(action)
                     if action == "disable":
-                        api["properties"]["configuration"]["dapr"] = {"enabled": False}
+                        config = api["properties"]["configuration"]
+                        config["dapr"] = {"enabled": False}
+                        if scenario == "secret-order":
+                            config["secrets"].reverse()
+                        if scenario == "secret-uri-drift":
+                            config["secrets"][0]["keyVaultUrl"] = VAULT_SECRETS_URI + SECRET + "/" + "d" * 32
+                        if scenario == "duplicate-secret":
+                            config["secrets"].append(copy.deepcopy(config["secrets"][0]))
                         if scenario == "config-drift":
                             api["properties"]["template"]["scale"]["minReplicas"] = 2
                         if scenario == "pin-drift":
@@ -215,11 +223,14 @@ class StatusReleaseTests(unittest.TestCase):
                       patch("engagement_status_release.az", side_effect=az), patch("time.sleep") as sleep,
                       patch("engagement_status_release.require_caller_pins"), patch("engagement_status_release.command", side_effect=command)):
                     failures = {"never-ready": "not healthy yet", "config-drift": r"properties\.template\.scale\.minReplicas",
+                                "secret-uri-drift": r"properties\.configuration\.secrets",
+                                "duplicate-secret": "duplicate secret names",
                                 "pin-drift": "private HTTPS readback", "image-drift": "readback identity"}
                     if scenario in failures:
                         with self.assertRaisesRegex(ValueError, failures[scenario]) as error:
                             retire_dapr()
                         self.assertNotIn("fixture.invalid", str(error.exception))
+                        self.assertNotIn(VAULT_SECRETS_URI, str(error.exception))
                     else:
                         retire_dapr()
                 self.assertEqual(sleep.call_count, {"transient": 1, "mode-lag": 1, "provisioning-lag": 1,
