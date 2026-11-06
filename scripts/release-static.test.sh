@@ -52,8 +52,8 @@ assert_contains "${workflow}" 'contents:[[:space:]]*read' "contents permission m
 assert_contains "${workflow}" '(?s)^permissions:\n  contents: read\n\nconcurrency:' "workflow permissions must only read contents"
 assert_contains "${workflow}" '(?s)  plan:\n.*?    needs: verify\n.*?    permissions:\n      contents: read\n      id-token: write' "plan must depend on verify and receive OIDC"
 assert_contains "${workflow}" '(?s)  deploy:\n.*?    needs: plan\n.*?    environment: production\n.*?    permissions:\n      contents: read\n      id-token: write' "deploy must depend on plan, require production approval, and receive fresh OIDC"
-grep -Fq 'if: ${{ vars.PRODUCTION_DEPLOY_ENABLED == '\''true'\'' }}' "${workflow}" ||
-  fail "deploy must remain disabled until the protected production gate is configured"
+assert_contains "${workflow}" "^  deploy:\\n    name: Migrate and deploy\\n    needs: plan\\n    if: \\x24\\{\\{ !cancelled\\(\\) && needs\\.plan\\.result == 'success' && vars\\.PRODUCTION_DEPLOY_ENABLED == 'true' \\}\\}" "deploy must require a successful plan and the production gate even when image verification was skipped"
+assert_contains "${workflow}" "^  publish_openapi:\\n    needs: \\[deploy, plan\\]\\n    if: \\x24\\{\\{ !cancelled\\(\\) && needs\\.deploy\\.result == 'success' && needs\\.plan\\.result == 'success' \\}\\}" "publication must require successful deployment and planning even when image verification was skipped"
 [[ "$(grep -Ec 'id-token:[[:space:]]*write' "${workflow}")" == "4" ]] || fail "status configuration, plan, deploy, and docs publication must each receive OIDC"
 assert_contains "${workflow}" 'group:[[:space:]]*notification-production' "production concurrency group is missing"
 assert_contains "${workflow}" 'cancel-in-progress:[[:space:]]*false' "production releases must not cancel in progress"
