@@ -151,13 +151,38 @@ class StatusReleaseTests(unittest.TestCase):
                                  "configuration": {"dapr": {"enabled": False}}}}
         inputs = dict(versions, GITHUB_REF="refs/heads/main", GITHUB_REPOSITORY="HallelujahHomeChurch/notification-api",
                       RETIRE_DAPR_REVISIONS=REVISION + " account-api--current engagement-api--current")
-        for bad_readback in (False, True):
-            with self.subTest(bad_readback=bad_readback):
+        for scenario in ("ready", "transient", "never-ready", "config-drift", "image-drift"):
+            with self.subTest(scenario=scenario):
                 api = copy.deepcopy(original)
                 commands = []
+                post_toggle_reads = []
 
                 def state(name="notification-api"):
-                    return copy.deepcopy(worker if name == "notification-worker" else api)
+                    if name == "notification-worker":
+                        return copy.deepcopy(worker)
+                    if name == "notification-api":
+                        return copy.deepcopy(api)
+                    caller = copy.deepcopy(original)
+                    props = caller["properties"]
+                    props.update(latestRevisionName=name + "--current", latestReadyRevisionName=name + "--current")
+                    props["template"]["containers"] = [{"name": name, "image": image.replace("notification-api@", name + "@")}]
+                    return caller
+
+                def az(*args):
+                    name = args[args.index("-n") + 1]
+                    revision = state(name)["properties"]["latestRevisionName"]
+                    if args[2] == "list":
+                        return [revision]
+                    digest = state(name)["properties"]["template"]["containers"][0]["image"]
+                    result = {"name": revision, "active": True, "health": "Healthy", "running": "Running",
+                              "provisioned": "Provisioned", "images": [digest]}
+                    if name == "notification-api" and commands == ["disable"]:
+                        post_toggle_reads.append(revision)
+                        if scenario == "never-ready" or (scenario == "transient" and len(post_toggle_reads) == 1):
+                            result.update(health="Unknown", running="Processing")
+                        if scenario == "image-drift":
+                            result["images"] = [digest[:-1] + "c"]
+                    return result
 
                 def command(args):
                     self.assertEqual(args[0:3], ["az", "containerapp", "dapr"])
@@ -166,22 +191,25 @@ class StatusReleaseTests(unittest.TestCase):
                     commands.append(action)
                     if action == "disable":
                         api["properties"]["configuration"]["dapr"] = {"enabled": False}
-                        if bad_readback:
+                        if scenario == "config-drift":
                             api["properties"]["template"]["scale"]["minReplicas"] = 2
                     else:
                         self.assertEqual(args[args.index("--dapr-app-port") + 1], "8081")
                         api["properties"]["configuration"]["dapr"] = copy.deepcopy(DAPR_CONFIG)
 
                 with (patch.dict(os.environ, inputs), patch("engagement_status_release.app_state", side_effect=state),
-                      patch("engagement_status_release.require_serving", return_value=image),
+                      patch("engagement_status_release.az", side_effect=az), patch("time.sleep") as sleep,
                       patch("engagement_status_release.require_caller_pins"), patch("engagement_status_release.command", side_effect=command)):
-                    if bad_readback:
-                        with self.assertRaisesRegex(ValueError, "readback"):
+                    failures = {"never-ready": "not healthy yet", "config-drift": "configuration readback",
+                                "image-drift": "readback identity"}
+                    if scenario in failures:
+                        with self.assertRaisesRegex(ValueError, failures[scenario]):
                             retire_dapr()
                     else:
                         retire_dapr()
-                self.assertEqual(commands, ["disable", "enable"] if bad_readback else ["disable"])
-                self.assertEqual(api["properties"]["configuration"]["dapr"]["enabled"], bad_readback)
+                self.assertEqual(sleep.call_count, {"transient": 1, "never-ready": 11}.get(scenario, 0))
+                self.assertEqual(commands, ["disable", "enable"] if scenario in failures else ["disable"])
+                self.assertEqual(api["properties"]["configuration"]["dapr"]["enabled"], scenario in failures)
 
     def test_disable_preview_accepts_only_exact_provider_ingress_placeholder(self):
         live = build_transition(fixture(), "enable", VERSION, "status-enable")
