@@ -75,7 +75,7 @@ class StatusReleaseTests(unittest.TestCase):
             "changeType": "Modify", "resourceId": APP_ID, "before": live, "after": after,
         }]}
         require_preview(preview, live, desired)
-        for key, value in [("targetPort", 8081), ("traffic", [{"weight": 100}])]:
+        for key, value in [("targetPort", 8081), ("targetPort", None), ("traffic", [{"weight": 100}]), ("traffic", [])]:
             placeholder[key] = value
             with self.assertRaises(ValueError):
                 require_preview(preview, live, desired)

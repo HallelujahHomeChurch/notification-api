@@ -176,10 +176,11 @@ def require_preview(preview, live, candidate):
     current = comparable(live)
     after = comparable(change["after"])
     after_cfg = after["properties"]["configuration"]
+    provider_ingress = change["after"]["properties"]["configuration"].get("ingress")
     # Provider what-if retains only these defaults when the API request sets ingress to null.
     if (live["properties"]["configuration"].get("ingress")
             and candidate["properties"]["configuration"].get("ingress") is None
-            and after_cfg.get("ingress") == {"allowInsecure": False, "external": False, "transport": "Auto"}):
+            and provider_ingress == {"allowInsecure": False, "external": False, "transport": "Auto"}):
         after_cfg.pop("ingress")
     # Azure omits its automatically assigned numeric suffix in before payloads.
     suffix = current["properties"]["template"].get("revisionSuffix", "")
