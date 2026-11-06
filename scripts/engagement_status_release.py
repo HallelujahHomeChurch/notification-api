@@ -69,6 +69,11 @@ def container(app):
     return item
 
 
+def same_secret_binding(entry, expected):
+    return (isinstance(entry.get("identity"), str)
+            and dict(entry, identity=entry["identity"].lower()) == dict(expected, identity=expected["identity"].lower()))
+
+
 def binding(app):
     cfg = app["properties"]["configuration"]
     secrets = [item for item in cfg.get("secrets", []) if item["name"] == SECRET]
@@ -77,7 +82,7 @@ def binding(app):
     if secrets:
         entry, = secrets
         version = entry.get("keyVaultUrl", "").removeprefix(VAULT_URI)
-        if not VERSION.fullmatch(version) or entry != {"name": SECRET, "identity": identity(app), "keyVaultUrl": VAULT_URI + version}:
+        if not VERSION.fullmatch(version) or not same_secret_binding(entry, {"name": SECRET, "identity": identity(app), "keyVaultUrl": VAULT_URI + version}):
             raise ValueError("unexpected status secret binding")
     ingress = cfg.get("ingress")
     if ingress:
@@ -109,7 +114,7 @@ def write_binding(app, status_enabled, *, deployed=False):
             expected = {"name": secret_name, "identity": identity(app),
                         "keyVaultUrl": VAULT_SECRETS_URI + secret_name + "/" + requested}
             expected_env = [{"name": env_name, "secretRef": secret_name}]
-            if (not requested or bindings != [expected]
+            if (not requested or len(bindings) != 1 or not same_secret_binding(bindings[0], expected)
                     or ((entries or deployed) and entries != expected_env)):
                 raise ValueError("unexpected Notification private write binding")
 
@@ -308,7 +313,14 @@ def comparable(app):
         if isinstance(value, list):
             return [compact(item) for item in value]
         return value
-    return compact(runtime(app))
+    result = runtime(app)
+    owner, = result["identity"]["userAssignedIdentities"]
+    result["identity"]["userAssignedIdentities"] = {owner.lower(): {}}
+    configuration = result["properties"]["configuration"]
+    for item in configuration.get("secrets", []) + configuration.get("registries", []):
+        if isinstance(item.get("identity"), str):
+            item["identity"] = item["identity"].lower()
+    return compact(result)
 
 
 def require_preview(preview, live, candidate):
@@ -330,7 +342,8 @@ def require_preview(preview, live, candidate):
     if suffix == "" and "revisionSuffix" in current["properties"]["template"] and "revisionSuffix" not in before["properties"]["template"]:
         before["properties"]["template"]["revisionSuffix"] = suffix
     if (change["changeType"] != "Modify" or change["resourceId"].lower() != live["id"].lower()
-            or identity(change["before"]) != identity(live) or identity(change["after"]) != identity(candidate)
+            or identity(change["before"]).lower() != identity(live).lower()
+            or identity(change["after"]).lower() != identity(candidate).lower()
             or before != current or after != comparable(candidate)):
         raise ValueError("unexpected provider what-if runtime delta")
 
@@ -364,6 +377,48 @@ def require_source(image, run_id, commit):
         command(["gh", "run", "download", run_id, "-R", repo, "-n", f"notification-release-plan-{source}", "-D", work])
         if (Path(work) / "image-ref.txt").read_text().strip() != image:
             raise ValueError("owner release image does not match the serving digest")
+
+
+def resolve_release_source():
+    repo = "HallelujahHomeChurch/notification-api"
+    commit = os.environ["GITHUB_SHA"]
+    run_id = os.environ["GITHUB_RUN_ID"]
+    attempt = os.environ["GITHUB_RUN_ATTEMPT"]
+    recovery = os.environ.get("RECOVERY_RUN", "")
+    digest = os.environ.get("RECOVERY_IMAGE_DIGEST", "")
+    if recovery or digest:
+        if (os.environ["GITHUB_REPOSITORY"] != repo or os.environ["GITHUB_REF"] != "refs/heads/main"
+                or os.environ["GITHUB_EVENT_NAME"] != "workflow_dispatch" or recovery == run_id
+                or not re.fullmatch(r"[1-9][0-9]*", recovery) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)):
+            raise ValueError("recovery requires a previous owner run and exact published digest")
+        api = f"repos/{repo}/actions/runs/{recovery}"
+        info = json.loads(command(["gh", "api", api]))
+        source = info["head_sha"]
+        if (info["path"] != ".github/workflows/release.yml" or info["head_branch"] != "main"
+                or info["event"] not in ("push", "workflow_dispatch") or info["conclusion"] != "failure"
+                or info["status"] != "completed" or info["head_repository"]["full_name"] != repo
+                or not re.fullmatch(r"[0-9a-f]{40}", source) or type(info["run_attempt"]) is not int or info["run_attempt"] < 1):
+            raise ValueError("recovery source is not an exact failed production owner release")
+        attempt = str(info["run_attempt"])
+        jobs = json.loads(command(["gh", "api", f"{api}/attempts/{attempt}/jobs?per_page=100"]))["jobs"]
+        by_name = {job["name"]: job for job in jobs}
+        plan = by_name["Build and plan"]
+        steps = {step["name"]: step["conclusion"] for step in plan["steps"]}
+        if (len(by_name) != len(jobs) or by_name["Verify"]["conclusion"] != "success"
+                or plan["conclusion"] != "failure" or steps.get("Verify published image identity") != "success"
+                or steps.get("Read current release state") != "failure" or by_name["Migrate and deploy"]["conclusion"] != "skipped"):
+            raise ValueError("original run did not stop after verified image publication and before deployment")
+        command(["git", "merge-base", "--is-ancestor", source, commit])
+        changed = command(["git", "diff", "--name-only", source, commit, "--"]).decode().splitlines()
+        if set(changed) - {".github/workflows/release.yml", "scripts/engagement_status_release.py",
+                           "scripts/test-engagement-status-release.py", "scripts/release-static.test.sh"}:
+            raise ValueError("runtime or deployment source changed after the recovered image was built")
+        commit, run_id = source, recovery
+    if (not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[1-9][0-9]*", run_id)
+            or not re.fullmatch(r"[1-9][0-9]*", attempt)):
+        raise ValueError("invalid release provenance")
+    with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+        output.write(f"commit={commit}\nrun={run_id}\nimage_artifact=notification-image-{commit}-{attempt}\n")
 
 
 def transition():
@@ -463,8 +518,10 @@ def main():
         transition()
     elif sys.argv[1:] == ["retire-dapr"]:
         retire_dapr()
+    elif sys.argv[1:] == ["release-source"]:
+        resolve_release_source()
     else:
-        raise ValueError("usage: engagement_status_release.py capture|verify-writes|transition|retire-dapr")
+        raise ValueError("usage: engagement_status_release.py capture|verify-writes|transition|retire-dapr|release-source")
 
 
 if __name__ == "__main__":
