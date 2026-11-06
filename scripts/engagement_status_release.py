@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 APP = "notification-api"
 GROUP = "alive"
@@ -37,6 +38,14 @@ PLAIN_ENV = {
     "NOTIFICATION_ALLOWED_CALLERS", "NOTIFICATION_ALLOW_DEV_CALLER_HEADER",
     "NOTIFICATION_TEMPLATE_DAILY_LIMIT", "NOTIFICATIONS_DISABLED",
 }
+
+
+class RetirementReadbackError(ValueError):
+    """A fixed, safe-to-log retirement verification error."""
+
+
+class ServingPending(RetirementReadbackError):
+    """The exact revision is still settling."""
 
 
 def command(args):
@@ -147,25 +156,28 @@ def require_serving(app, name, expected):
     props = app["properties"]
     item, = props["template"]["containers"]
     image = item["image"]
+    ready = props.get("latestReadyRevisionName")
     if (not re.fullmatch(re.escape(name) + r"--[a-z0-9-]+", expected)
-            or props["latestRevisionName"] != expected or props["latestReadyRevisionName"] != expected
+            or props["latestRevisionName"] != expected or ready not in (None, "", expected)
             or item["name"] != name
             or not re.fullmatch(r"alive\.azurecr\.io/alive/" + re.escape(name) + r"@sha256:[0-9a-f]{64}", image)):
-        raise ValueError("exact Notification serving revision or image did not match")
+        raise RetirementReadbackError("exact Notification serving revision or image did not match")
     ingress = props["configuration"].get("ingress")
     if ingress:
         traffic, = ingress["traffic"]
         if traffic.get("weight") != 100 or not (traffic.get("latestRevision") is True or traffic.get("revisionName") == expected):
-            raise ValueError("exact Notification revision does not hold all traffic")
+            raise RetirementReadbackError("exact Notification revision does not hold all traffic")
     revision = az("containerapp", "revision", "show", "-g", GROUP, "-n", name, "--revision", expected,
                   "--query", "{name:name,active:properties.active,health:properties.healthState,running:properties.runningState,provisioned:properties.provisioningState,images:properties.template.containers[].image}")
-    if (revision != {"name": expected, "active": True, "health": "Healthy", "running": "Running",
-                     "provisioned": "Provisioned", "images": [image]}):
-        raise ValueError("exact Notification serving revision is not healthy")
+    if revision.get("name") != expected or revision.get("images") != [image]:
+        raise RetirementReadbackError("exact Notification revision readback identity did not match")
+    if (ready != expected or revision != {"name": expected, "active": True, "health": "Healthy", "running": "Running",
+                                           "provisioned": "Provisioned", "images": [image]}):
+        raise ServingPending("exact Notification serving revision is not healthy yet")
     revisions = az("containerapp", "revision", "list", "-g", GROUP, "-n", name, "--all",
                    "--query", "[?properties.active || properties.replicas > `0`].name")
     if revisions != [expected]:
-        raise ValueError("prior Notification callers or API replicas have not drained")
+        raise ServingPending("prior Notification callers or API replicas have not drained")
     return image
 
 
@@ -210,13 +222,24 @@ def retire_dapr():
     if enabled:
         if app_state()["properties"]["latestRevisionName"] != expected:
             raise ValueError("Notification API changed before retirement")
+        expected_snapshot = without_dapr(live)
         try:
             command(["az", "containerapp", "dapr", "disable", "-g", GROUP, "-n", APP, "--only-show-errors", "-o", "none"])
-            current = app_state()
-            if (dapr_enabled(current) or without_dapr(current) != without_dapr(live)
-                    or require_private_transport(current) != pins
-                    or require_serving(current, APP, expected) != image):
-                raise ValueError("Notification API retirement readback did not match")
+            # ACA can restart the same revision after an application-level Dapr change.
+            max_attempts = 12
+            for attempt in range(1, max_attempts + 1):
+                current = app_state()
+                if (dapr_enabled(current) or without_dapr(current) != expected_snapshot
+                        or require_private_transport(current) != pins):
+                    raise RetirementReadbackError("Notification API retirement configuration readback did not match")
+                try:
+                    if require_serving(current, APP, expected) != image:
+                        raise RetirementReadbackError("Notification API retirement image readback did not match")
+                    break
+                except ServingPending:
+                    if attempt == max_attempts:
+                        raise
+                    time.sleep(5)
             verify_consumers()
             current_worker = app_state("notification-worker")["properties"]
             if (current_worker["latestRevisionName"] != worker_revision
@@ -225,12 +248,13 @@ def retire_dapr():
                 raise ValueError("Notification Worker changed during API-only retirement")
         except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
             current = app_state()
-            if current["properties"]["latestRevisionName"] == expected and not dapr_enabled(current):
+            if (current["properties"]["latestRevisionName"] == expected
+                    and container(current)["image"] == image and not dapr_enabled(current)):
                 command(["az", "containerapp", "dapr", "enable", "-g", GROUP, "-n", APP,
                          "--dapr-app-id", APP, "--dapr-app-port", "8081", "--dapr-app-protocol", "http",
                          "--dapr-log-level", "warn", "--only-show-errors", "-o", "none"])
                 if not dapr_enabled(app_state()):
-                    raise ValueError("Notification API Dapr rollback could not be verified")
+                    raise RetirementReadbackError("Notification API Dapr rollback could not be verified")
             raise
     print(f"Notification API sidecar disabled on {expected} ({image}); Account and Engagement HTTPS pins verified")
 
@@ -527,6 +551,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except RetirementReadbackError as error:
+        print(f"Notification API retirement verification failed: {error}", file=sys.stderr)
+        sys.exit(1)
     except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
         print("Notification status release rejected by identity, state, or provider verification", file=sys.stderr)
         sys.exit(1)
