@@ -82,12 +82,30 @@ do
   verify_secret "$secret"
 done
 
-verify_assignments "$api_principal" \
-  "${vault_id}/secrets/notification-database-url|${role_id}" \
-  "${vault_id}/secrets/notification-data-encryption-key|${role_id}" \
-  "${vault_id}/secrets/notification-hash-key|${role_id}" \
-  "${vault_id}/secrets/notification-encryption-keys-json|${role_id}" \
+api_assignments=(
+  "${vault_id}/secrets/notification-database-url|${role_id}"
+  "${vault_id}/secrets/notification-data-encryption-key|${role_id}"
+  "${vault_id}/secrets/notification-hash-key|${role_id}"
+  "${vault_id}/secrets/notification-encryption-keys-json|${role_id}"
   "${vault_id}/secrets/notification-hash-keys-json|${role_id}"
+)
+status_scope="${vault_id}/secrets/notification-engagement-status-token"
+if status_enabled="$(az resource show --ids "$status_scope" --api-version 2024-11-01 \
+  --query properties.attributes.enabled -o tsv --only-show-errors 2>/dev/null)"; then
+  if [[ "$status_enabled" != true ]]; then
+    echo "Notification status secret is disabled" >&2
+    exit 1
+  fi
+  api_assignments+=("${status_scope}|${role_id}")
+else
+  status_result=$?
+  if [[ "$status_result" != 3 ]]; then
+    echo "Unable to verify Notification status secret metadata" >&2
+    exit 1
+  fi
+fi
+
+verify_assignments "$api_principal" "${api_assignments[@]}"
 verify_assignments "$worker_principal" \
   "${vault_id}/secrets/notification-database-url|${role_id}" \
   "${vault_id}/secrets/notification-data-encryption-key|${role_id}" \

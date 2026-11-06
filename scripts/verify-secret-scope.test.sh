@@ -45,6 +45,12 @@ case "$1 $2" in
     esac
     ;;
   "resource show")
+    if [[ "$*" == *notification-engagement-status-token* ]]; then
+      case "${MOCK_STATUS_SECRET:-absent}" in
+        absent) exit 3 ;;
+        disabled) echo false; exit ;;
+      esac
+    fi
     echo true
     ;;
   "role assignment")
@@ -60,6 +66,9 @@ case "$1 $2" in
     case "$principal" in
       api)
         secrets=(notification-database-url notification-data-encryption-key notification-hash-key notification-encryption-keys-json notification-hash-keys-json)
+        if [[ "${MOCK_STATUS_ROLE:-false}" == true ]]; then
+          secrets+=(notification-engagement-status-token)
+        fi
         ;;
       worker)
 		secrets=(notification-database-url notification-data-encryption-key notification-encryption-keys-json notification-smtp-username notification-smtp-password notification-vapid-private-key)
@@ -92,5 +101,15 @@ if PATH="$tmp_dir:$PATH" MOCK_EXTRA_ROLE=true RESOURCE_GROUP=alive \
   echo "secret preflight accepted an extra secret role" >&2
   exit 1
 fi
+
+PATH="$tmp_dir:$PATH" MOCK_STATUS_SECRET=enabled MOCK_STATUS_ROLE=true RESOURCE_GROUP=alive \
+  NOTIFICATION_VAULT_NAME=alive-notification-test "$repo_root/scripts/verify-secret-scope.sh" >/dev/null
+for state in absent disabled; do
+  if PATH="$tmp_dir:$PATH" MOCK_STATUS_SECRET="$state" MOCK_STATUS_ROLE=true RESOURCE_GROUP=alive \
+    NOTIFICATION_VAULT_NAME=alive-notification-test "$repo_root/scripts/verify-secret-scope.sh" >/dev/null 2>&1; then
+    echo "secret preflight accepted a status grant without an enabled secret" >&2
+    exit 1
+  fi
+done
 
 echo "secret scope self-test passed"
