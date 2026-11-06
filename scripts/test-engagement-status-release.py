@@ -22,6 +22,7 @@ def fixture():
         "identity": {"type": "UserAssigned", "userAssignedIdentities": {IDENTITY: {}}},
         "properties": {
             "latestRevisionName": REVISION, "latestReadyRevisionName": REVISION,
+            "provisioningState": "Succeeded",
             "managedEnvironmentId": "/alive-env", "workloadProfileName": "Consumption",
             "configuration": {
                 "ingress": None, "secrets": [], "activeRevisionsMode": "Single",
@@ -136,7 +137,8 @@ class StatusReleaseTests(unittest.TestCase):
 
     def test_retire_changes_only_api_and_restores_exact_dapr_after_failed_readback(self):
         original = build_transition(fixture(), "enable", VERSION, "status-enable")
-        original["properties"].update(latestRevisionName=REVISION, latestReadyRevisionName=REVISION)
+        original["properties"].update(latestRevisionName=REVISION, latestReadyRevisionName=REVISION,
+                                      provisioningState="Succeeded")
         cfg = original["properties"]["configuration"]
         cfg["ingress"]["fqdn"] = HOST
         cfg["dapr"] = copy.deepcopy(DAPR_CONFIG)
@@ -151,17 +153,27 @@ class StatusReleaseTests(unittest.TestCase):
                                  "configuration": {"dapr": {"enabled": False}}}}
         inputs = dict(versions, GITHUB_REF="refs/heads/main", GITHUB_REPOSITORY="HallelujahHomeChurch/notification-api",
                       RETIRE_DAPR_REVISIONS=REVISION + " account-api--current engagement-api--current")
-        for scenario in ("ready", "transient", "never-ready", "config-drift", "image-drift"):
+        for scenario in ("ready", "transient", "mode-lag", "provisioning-lag", "never-ready",
+                         "config-drift", "pin-drift", "image-drift"):
             with self.subTest(scenario=scenario):
                 api = copy.deepcopy(original)
                 commands = []
                 post_toggle_reads = []
+                mode_reads = []
 
                 def state(name="notification-api"):
                     if name == "notification-worker":
                         return copy.deepcopy(worker)
                     if name == "notification-api":
-                        return copy.deepcopy(api)
+                        snapshot = copy.deepcopy(api)
+                        if commands == ["disable"]:
+                            mode_reads.append(name)
+                            if len(mode_reads) == 1 and scenario == "mode-lag":
+                                snapshot["properties"]["configuration"]["dapr"] = copy.deepcopy(DAPR_CONFIG)
+                            if len(mode_reads) == 1 and scenario == "provisioning-lag":
+                                snapshot["properties"]["provisioningState"] = "InProgress"
+                                snapshot["properties"]["template"]["scale"]["minReplicas"] = 2
+                        return snapshot
                     caller = copy.deepcopy(original)
                     props = caller["properties"]
                     props.update(latestRevisionName=name + "--current", latestReadyRevisionName=name + "--current")
@@ -193,6 +205,8 @@ class StatusReleaseTests(unittest.TestCase):
                         api["properties"]["configuration"]["dapr"] = {"enabled": False}
                         if scenario == "config-drift":
                             api["properties"]["template"]["scale"]["minReplicas"] = 2
+                        if scenario == "pin-drift":
+                            api["properties"]["configuration"]["ingress"]["fqdn"] = "fixture.invalid"
                     else:
                         self.assertEqual(args[args.index("--dapr-app-port") + 1], "8081")
                         api["properties"]["configuration"]["dapr"] = copy.deepcopy(DAPR_CONFIG)
@@ -200,14 +214,16 @@ class StatusReleaseTests(unittest.TestCase):
                 with (patch.dict(os.environ, inputs), patch("engagement_status_release.app_state", side_effect=state),
                       patch("engagement_status_release.az", side_effect=az), patch("time.sleep") as sleep,
                       patch("engagement_status_release.require_caller_pins"), patch("engagement_status_release.command", side_effect=command)):
-                    failures = {"never-ready": "not healthy yet", "config-drift": "configuration readback",
-                                "image-drift": "readback identity"}
+                    failures = {"never-ready": "not healthy yet", "config-drift": r"properties\.template\.scale\.minReplicas",
+                                "pin-drift": "private HTTPS readback", "image-drift": "readback identity"}
                     if scenario in failures:
-                        with self.assertRaisesRegex(ValueError, failures[scenario]):
+                        with self.assertRaisesRegex(ValueError, failures[scenario]) as error:
                             retire_dapr()
+                        self.assertNotIn("fixture.invalid", str(error.exception))
                     else:
                         retire_dapr()
-                self.assertEqual(sleep.call_count, {"transient": 1, "never-ready": 11}.get(scenario, 0))
+                self.assertEqual(sleep.call_count, {"transient": 1, "mode-lag": 1, "provisioning-lag": 1,
+                                                    "never-ready": 11}.get(scenario, 0))
                 self.assertEqual(commands, ["disable", "enable"] if scenario in failures else ["disable"])
                 self.assertEqual(api["properties"]["configuration"]["dapr"]["enabled"], scenario in failures)
 

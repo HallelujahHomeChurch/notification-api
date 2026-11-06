@@ -48,6 +48,32 @@ class ServingPending(RetirementReadbackError):
     """The exact revision is still settling."""
 
 
+def changed_snapshot_paths(before, after, prefix=""):
+    if before == after:
+        return set()
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return {prefix}
+    safe_fields = {
+        "type", "apiVersion", "name", "location", "identity", "userAssignedIdentities", "tags",
+        "properties", "managedEnvironmentId", "workloadProfileName", "configuration", "template",
+        "ingress", "secrets", "registries", "activeRevisionsMode", "identitySettings",
+        "scale", "minReplicas", "maxReplicas", "rules", "pollingInterval", "cooldownPeriod",
+        "containers", "initContainers", "volumes", "revisionSuffix",
+    }
+    paths = set()
+    missing = object()
+    for key in before.keys() | after.keys():
+        old, new = before.get(key, missing), after.get(key, missing)
+        if old == new:
+            continue
+        if key not in safe_fields:
+            paths.add(prefix + ".*")
+            continue
+        path = f"{prefix}.{key}" if prefix else key
+        paths.update(changed_snapshot_paths(old, new, path))
+    return paths
+
+
 def command(args):
     result = subprocess.run(args, capture_output=True, check=False, timeout=600)
     if result.returncode:
@@ -229,10 +255,29 @@ def retire_dapr():
             max_attempts = 12
             for attempt in range(1, max_attempts + 1):
                 current = app_state()
-                if (dapr_enabled(current) or without_dapr(current) != expected_snapshot
-                        or require_private_transport(current) != pins):
-                    raise RetirementReadbackError("Notification API retirement configuration readback did not match")
                 try:
+                    props = current["properties"]
+                    if props["latestRevisionName"] != expected or container(current)["image"] != image:
+                        raise RetirementReadbackError("Notification API retirement identity readback did not match")
+                    provisioning = props.get("provisioningState")
+                    if provisioning == "InProgress":
+                        raise ServingPending("Notification API retirement provisioning is still in progress")
+                    if provisioning != "Succeeded":
+                        raise RetirementReadbackError("Notification API retirement provisioning did not succeed")
+                    current_snapshot = without_dapr(current)
+                    if current_snapshot != expected_snapshot:
+                        paths = sorted(changed_snapshot_paths(expected_snapshot, current_snapshot))
+                        raise RetirementReadbackError(
+                            f"Notification API retirement configuration readback differs at {len(paths)} path(s): "
+                            + ", ".join(paths[:8]))
+                    try:
+                        current_pins = require_private_transport(current)
+                    except (ValueError, KeyError, TypeError) as error:
+                        raise RetirementReadbackError("Notification API private HTTPS readback did not match") from error
+                    if current_pins != pins:
+                        raise RetirementReadbackError("Notification API private HTTPS readback did not match")
+                    if dapr_enabled(current):
+                        raise ServingPending("Notification API Dapr mode has not settled to disabled")
                     if require_serving(current, APP, expected) != image:
                         raise RetirementReadbackError("Notification API retirement image readback did not match")
                     break
