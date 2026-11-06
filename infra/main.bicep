@@ -12,6 +12,8 @@ param deployRuntime bool = true
 @allowed(['all', 'worker', 'api'])
 param runtimePhase string = 'all'
 param workerEligibilityVersion string = ''
+param workerDaprEnabled bool = false
+param workerRevisionSuffix string = ''
 param engagementStatusEnabled bool = false
 param engagementStatusVersion string = ''
 param provisionPermissions bool = true
@@ -339,7 +341,13 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && 
     workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
-      dapr: { enabled: false }
+      dapr: workerDaprEnabled ? {
+        enabled: true
+        appId: 'notification-worker'
+        appPort: 8081
+        appProtocol: 'http'
+        logLevel: 'warn'
+      } : { enabled: false }
       registries: [
         {
           server: registry.properties.loginServer
@@ -367,6 +375,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && 
       ] : [])
     }
     template: {
+      revisionSuffix: empty(workerRevisionSuffix) ? null : workerRevisionSuffix
       containers: [
         {
           name: 'notification-worker'

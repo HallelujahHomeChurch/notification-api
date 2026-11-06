@@ -533,9 +533,15 @@ jobs:
             --name "RecommendedAlertRules-AG-1" \
             --only-show-errors \
             --output none
-          previous_worker_dapr="$(az containerapp show -g "${RESOURCE_GROUP}" -n "${WORKER_APP_NAME}" \
-            --query properties.configuration.dapr.enabled -o tsv --only-show-errors)"
-          [[ "${previous_worker_dapr}" == true || "${previous_worker_dapr}" == false ]]
+          previous_worker_dapr_config="$(az containerapp show -g "${RESOURCE_GROUP}" -n "${WORKER_APP_NAME}" \
+            --query properties.configuration.dapr -o json --only-show-errors)"
+          previous_worker_dapr="$(jq -r '.enabled' <<< "${previous_worker_dapr_config}")"
+          if [[ "${previous_worker_dapr}" == true ]]; then
+            jq -e '.appId == "notification-worker" and .appPort == 8081 and .appProtocol == "http" and .logLevel == "warn"' \
+              <<< "${previous_worker_dapr_config}" >/dev/null
+          else
+            [[ "${previous_worker_dapr}" == false ]]
+          fi
           {
             echo "PREVIOUS_WORKER_DAPR=${previous_worker_dapr}"
             echo "PREVIOUS_API_REVISION=${previous_api_revision}"
@@ -691,7 +697,7 @@ jobs:
           echo "state=verification_unavailable" >> "$GITHUB_OUTPUT"
           wait_for_revision() {
             local app_name="$1" previous="$PREVIOUS_API_REVISION"
-            [[ "$app_name" != "$WORKER_APP_NAME" ]] || previous="$PREVIOUS_WORKER_REVISION"
+            [[ "$app_name" != "$WORKER_APP_NAME" ]] || previous="${2:-$PREVIOUS_WORKER_REVISION}"
             python3 scripts/verify-aca-revision.py "$RESOURCE_GROUP" "$app_name" "$IMAGE_REF" "$previous"
           }
 
@@ -703,7 +709,7 @@ jobs:
           echo "state=verification_unavailable" >> "$GITHUB_OUTPUT"
           deploy_phase() {
             az deployment group create \
-              --name "notification-$1-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --name "notification-$3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               --resource-group "${RESOURCE_GROUP}" \
               --template-file infra/main.bicep \
               --parameters \
@@ -711,6 +717,8 @@ jobs:
                 notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
                 deployRuntime=true \
                 runtimePhase="$1" \
+                workerDaprEnabled="$2" \
+                workerRevisionSuffix="$3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
                 workerEligibilityVersion="${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION}" \
                 engagementStatusEnabled="${ENGAGEMENT_STATUS_ENABLED}" \
                 engagementStatusVersion="${ENGAGEMENT_STATUS_VERSION}" \
@@ -728,10 +736,11 @@ jobs:
               --only-show-errors \
               --output none
           }
-          deploy_phase worker
+          deploy_phase worker "${PREVIOUS_WORKER_DAPR}" worker-reader
           wait_for_revision "${WORKER_APP_NAME}"
+          reader_revision="${WORKER_APP_NAME}--worker-reader-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           [[ "$(az containerapp show -g "${RESOURCE_GROUP}" -n "${WORKER_APP_NAME}" \
-            --query properties.configuration.dapr.enabled -o tsv --only-show-errors)" == false ]]
+            --query properties.latestReadyRevisionName -o tsv --only-show-errors)" == "${reader_revision}" ]]
           for attempt in {1..60}; do
             echo "state=verification_unavailable" >> "$GITHUB_OUTPUT"
             old_replicas="$(az containerapp replica list \
@@ -745,11 +754,21 @@ jobs:
             [[ "${attempt}" != "60" ]] || { echo "Previous worker has not drained" >&2; exit 1; }
             sleep 10
           done
+          if [[ "${PREVIOUS_WORKER_DAPR}" == true ]]; then
+            deploy_phase worker false worker-sidecar-off
+            wait_for_revision "${WORKER_APP_NAME}" "${reader_revision}"
+            expected_worker="${WORKER_APP_NAME}--worker-sidecar-off-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          else
+            expected_worker="${reader_revision}"
+          fi
+          worker_runtime="$(az containerapp show -g "${RESOURCE_GROUP}" -n "${WORKER_APP_NAME}" \
+            --query "join('|', [properties.latestReadyRevisionName, to_string(properties.configuration.dapr.enabled)])" -o tsv --only-show-errors)"
+          [[ "${worker_runtime}" == "${expected_worker}|false" ]]
           echo "WORKER_READER_READY=true" >> "${GITHUB_ENV}"
 
           echo "state=verification_unavailable" >> "$GITHUB_OUTPUT"
           echo "API_RUNTIME_DEPLOY_ATTEMPTED=true" >> "${GITHUB_ENV}"
-          deploy_phase api
+          deploy_phase api false api
 
 
       - name: Verify runtime Dapr boundaries
@@ -829,6 +848,9 @@ jobs:
                 --only-show-errors --output none || exit 1
             fi
             rollback "${WORKER_APP_NAME}" "${PREVIOUS_WORKER_REVISION}" "${PREVIOUS_WORKER_IMAGE}" || rollback_status=1
+            restored_dapr="$(az containerapp show -g "${RESOURCE_GROUP}" -n "${WORKER_APP_NAME}" \
+              --query properties.configuration.dapr.enabled -o tsv --only-show-errors)"
+            [[ "${restored_dapr}" == "${PREVIOUS_WORKER_DAPR}" ]] || rollback_status=1
           else
             echo "Keeping compatible worker reader to settle persisted template versions"
           fi
