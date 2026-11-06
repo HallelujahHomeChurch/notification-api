@@ -90,6 +90,22 @@ The release workflow performs:
 Routine CI passes `provisionPermissions=false`. Initial ACR and Service Bus role
 bootstrap remains an explicit administrator operation.
 
+## Engagement status-only release
+
+The regular production release preserves the deployed private status binding.
+Use the same owner workflow on main for a status-only transition, with
+`status_transition`, `status_expected_revision`, `status_source_release_run`,
+and, for enable, `status_version`. Run with `status_reviewed_plan` empty to
+obtain the Provider what-if fingerprint. Review the API-only delta before
+dispatching the same inputs with that exact fingerprint. Restore every active
+Engagement revision to Dapr before disabling the Notification ingress.
+
+Bootstrap the dedicated secret and its two exact API identity reader
+assignments with the reviewed `engagement-status-secret-access.bicep` template
+using the existing administrator procedure. Use a 32-byte random credential
+encoded as hex and submit the secure parameter through standard input. Supply
+the pinned version ID to both owners after verifying role scope.
+
 ## Capacity and readiness
 
 API and worker replicas each have capacity for two PostgreSQL connections.
