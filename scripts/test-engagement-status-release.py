@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import copy
+from pathlib import Path
 import unittest
 
 from engagement_status_release import INGRESS, PROBE, SECRET, build_transition, binding, require_preview
@@ -41,6 +42,8 @@ class StatusReleaseTests(unittest.TestCase):
         self.assertEqual(enabled["properties"]["configuration"]["ingress"], INGRESS)
         self.assertEqual(enabled["properties"]["template"]["containers"][0]["probes"][-1], PROBE)
         self.assertEqual(binding(enabled), (True, VERSION))
+        enabled["properties"]["configuration"]["ingress"]["transport"] = "Auto"
+        self.assertEqual(binding(enabled), (True, VERSION))
         self.assertEqual(enabled["properties"]["configuration"]["dapr"], app["properties"]["configuration"]["dapr"])
         disabled = build_transition(enabled, "disable", "", "status-disable")
         self.assertEqual(binding(disabled), (False, VERSION))
@@ -60,6 +63,33 @@ class StatusReleaseTests(unittest.TestCase):
         app["properties"]["configuration"]["ingress"] = {"external": True, "targetPort": 8081}
         with self.assertRaises(ValueError):
             binding(app)
+
+    def test_disable_preview_accepts_only_exact_provider_ingress_placeholder(self):
+        live = build_transition(fixture(), "enable", VERSION, "status-enable")
+        live["id"] = APP_ID
+        desired = build_transition(live, "disable", "", "status-disable")
+        after = copy.deepcopy(desired)
+        placeholder = {"allowInsecure": False, "external": False, "transport": "Auto"}
+        after["properties"]["configuration"]["ingress"] = placeholder
+        preview = {"status": "Succeeded", "changes": [{
+            "changeType": "Modify", "resourceId": APP_ID, "before": live, "after": after,
+        }]}
+        require_preview(preview, live, desired)
+        for key, value in [("targetPort", 8081), ("targetPort", None), ("traffic", [{"weight": 100}]), ("traffic", [])]:
+            placeholder[key] = value
+            with self.assertRaises(ValueError):
+                require_preview(preview, live, desired)
+            del placeholder[key]
+
+    def test_status_controls_are_excluded_after_runtime_script_glob(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/release.yml").read_text()
+        push = workflow.split("  workflow_dispatch:", 1)[0]
+        self.assertNotIn("- .github/workflows/release.yml", push)
+        runtime_scripts = push.index("- scripts/**")
+        for path in ("engagement_status_release.py", "test-engagement-status-release.py"):
+            self.assertGreater(push.index(f"- '!scripts/{path}'"), runtime_scripts)
+        for path in ("cmd/**", "internal/**", "infra/**"):
+            self.assertIn(f"- {path}", push)
 
     def test_preview_rejects_other_scope_and_unrelated_drift(self):
         app = fixture()

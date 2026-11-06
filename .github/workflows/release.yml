@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
     paths:
-      - .github/workflows/release.yml
       - Dockerfile
       - go.mod
       - go.sum
@@ -12,6 +11,8 @@ on:
       - internal/**
       - infra/**
       - scripts/**
+      - '!scripts/engagement_status_release.py'
+      - '!scripts/test-engagement-status-release.py'
       - docs/data-governance.yaml
   workflow_dispatch:
     inputs:

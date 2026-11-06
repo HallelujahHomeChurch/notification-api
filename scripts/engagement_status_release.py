@@ -74,7 +74,8 @@ def binding(app):
             raise ValueError("unexpected status secret binding")
     ingress = cfg.get("ingress")
     if ingress:
-        if any(ingress.get(key) != value for key, value in INGRESS.items() if key != "traffic"):
+        if (str(ingress.get("transport", "")).lower() != INGRESS["transport"]
+                or any(ingress.get(key) != value for key, value in INGRESS.items() if key not in ("traffic", "transport"))):
             raise ValueError("unexpected Notification ingress")
         if (ingress.get("fqdn", HOST) != HOST or ingress.get("additionalPortMappings")
                 or ingress.get("customDomains") or ingress.get("ipSecurityRestrictions")
@@ -173,13 +174,21 @@ def require_preview(preview, live, candidate):
     change, = [item for item in preview["changes"] if item["changeType"] not in ("Ignore", "NoChange")]
     before = comparable(change["before"])
     current = comparable(live)
+    after = comparable(change["after"])
+    after_cfg = after["properties"]["configuration"]
+    provider_ingress = change["after"]["properties"]["configuration"].get("ingress")
+    # Provider what-if retains only these defaults when the API request sets ingress to null.
+    if (live["properties"]["configuration"].get("ingress")
+            and candidate["properties"]["configuration"].get("ingress") is None
+            and provider_ingress == {"allowInsecure": False, "external": False, "transport": "Auto"}):
+        after_cfg.pop("ingress")
     # Azure omits its automatically assigned numeric suffix in before payloads.
     suffix = current["properties"]["template"].get("revisionSuffix", "")
     if suffix == "" and "revisionSuffix" in current["properties"]["template"] and "revisionSuffix" not in before["properties"]["template"]:
         before["properties"]["template"]["revisionSuffix"] = suffix
     if (change["changeType"] != "Modify" or change["resourceId"].lower() != live["id"].lower()
             or identity(change["before"]) != identity(live) or identity(change["after"]) != identity(candidate)
-            or before != current or comparable(change["after"]) != comparable(candidate)):
+            or before != current or after != comparable(candidate)):
         raise ValueError("unexpected provider what-if runtime delta")
 
 
