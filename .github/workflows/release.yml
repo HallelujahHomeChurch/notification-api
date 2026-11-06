@@ -849,8 +849,11 @@ jobs:
             fi
             rollback "${WORKER_APP_NAME}" "${PREVIOUS_WORKER_REVISION}" "${PREVIOUS_WORKER_IMAGE}" || rollback_status=1
             restored_dapr="$(az containerapp show -g "${RESOURCE_GROUP}" -n "${WORKER_APP_NAME}" \
-              --query properties.configuration.dapr.enabled -o tsv --only-show-errors)"
-            [[ "${restored_dapr}" == "${PREVIOUS_WORKER_DAPR}" ]] || rollback_status=1
+              --query properties.configuration.dapr -o json --only-show-errors)"
+            jq -e --argjson enabled "${PREVIOUS_WORKER_DAPR}" '
+              .enabled == $enabled and
+              (if $enabled then .appId == "notification-worker" and .appPort == 8081 else true end)
+            ' <<< "${restored_dapr}" >/dev/null || rollback_status=1
           else
             echo "Keeping compatible worker reader to settle persisted template versions"
           fi
