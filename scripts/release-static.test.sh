@@ -82,7 +82,7 @@ assert_contains "${workflow}" 'uses: actions/checkout@[0-9a-f]{40}[[:space:]]+# 
 assert_contains "${workflow}" 'uses: actions/setup-go@[0-9a-f]{40}[[:space:]]+# v7\.0\.0' "setup-go must use a full SHA with the approved version comment"
 assert_contains "${workflow}" 'uses: azure/login@[0-9a-f]{40}[[:space:]]+# v3\.0\.0' "azure-login must use a full SHA with the approved version comment"
 assert_not_contains "${workflow}" 'uses: (actions/checkout|actions/setup-go|azure/login)@v[0-9]' "release actions must not use mutable tags"
-assert_contains "${workflow}" 'IMAGE_TAG=main-\$\{GITHUB_SHA::7\}' "immutable short-SHA tag is missing"
+assert_contains "${workflow}" 'IMAGE_TAG=main-\$\{SOURCE_COMMIT::7\}' "immutable short-SHA source tag is missing"
 assert_not_contains "${workflow}" 'IMAGE_REPOSITORY}:latest|alive/notification-api:latest' "latest image tag must not be published"
 assert_contains "${workflow}" 'az acr repository show' "ACR digest must be resolved with a supported Azure CLI command"
 assert_contains "${workflow}" 'image_ref="\$\{ACR_LOGIN_SERVER\}/\$\{IMAGE_REPOSITORY\}@\$\{image_digest\}"' "digest image reference is missing"
@@ -239,14 +239,14 @@ done
 
 assert_contains "${workflow}" '(?s)  deploy:\n.*?outputs:\n      commit: \$\{\{ steps\.release_outputs\.outputs\.commit \}\}\n      image: \$\{\{ steps\.release_outputs\.outputs\.image \}\}' "deploy must expose the production commit and image"
 assert_contains "${workflow}" '(?s)  plan:\n.*?Validate release configuration.*?\[\[ "\$GITHUB_REF" == "refs/heads/main" \]\]' "release planning must reject non-main refs before Azure login"
-assert_contains "${workflow}" '(?s)  publish_openapi:\n.*?needs: deploy\n.*?environment: production\n.*?contents: read\n      id-token: write' "docs publication must depend on the production deploy and use production OIDC"
+assert_contains "${workflow}" '(?s)  publish_openapi:\n.*?needs: \[deploy, plan\]\n.*?environment: production\n.*?contents: read\n      id-token: write' "docs publication must depend on the production deploy and use production OIDC"
 assert_contains "${workflow}" 'CONTAINER:[[:space:]]*api-docs-notification-api' "docs publication must use the notification container"
 assert_contains "${workflow}" 'RELEASE_COMMIT:[[:space:]]*\$\{\{ needs\.deploy\.outputs\.commit \}\}' "docs publication must consume the deployed commit"
 assert_contains "${workflow}" 'RELEASE_IMAGE:[[:space:]]*\$\{\{ needs\.deploy\.outputs\.image \}\}' "docs publication must consume the deployed image"
 assert_contains "${workflow}" 'inputs\.fail_openapi_before_pointer && github\.run_attempt == 1' "failure injection must apply only to the first workflow attempt"
 
 publish_job="$(sed -n '/^  publish_openapi:/,$p' "${workflow}")"
-printf '%s\n' "${publish_job}" | grep -q 'specs/${GITHUB_SHA}/openapi.yaml' || fail "immutable spec path is missing"
+printf '%s\n' "${publish_job}" | grep -q 'specs/${RELEASE_COMMIT}/openapi.yaml' || fail "immutable spec path is missing"
 printf '%s\n' "${publish_job}" | grep -q -- '--overwrite false' || fail "immutable spec upload must reject overwrite"
 printf '%s\n' "${publish_job}" | grep -q -- '--name current.json' || fail "current pointer upload is missing"
 printf '%s\n' "${publish_job}" | grep -q -- '--overwrite true' || fail "current pointer must be replaceable"
@@ -290,8 +290,10 @@ printf '%s\n' "${download_step}" | grep -Fq 'name: data-governance-${{ needs.dep
   fail "publication must download the deployed commit artifact"
 printf '%s\n' "${download_step}" | grep -Fq 'path: .artifacts/data-governance/export' || fail "governance download path is wrong"
 printf '%s\n' "${download_step}" | grep -Fq 'digest-mismatch: error' || fail "governance digest mismatch must fail publication"
-if printf '%s\n' "${download_step}" | grep -Eq 'github-token:|repository:|run-id:|pattern:|artifact-ids:'; then
-  fail "governance publication must consume the named artifact from this workflow run"
+printf '%s\n' "${download_step}" | grep -Fq 'run-id: ${{ needs.plan.outputs.source_run }}' ||
+  fail "governance publication must use the verified source run"
+if printf '%s\n' "${download_step}" | grep -Eq 'repository:|pattern:|artifact-ids:'; then
+  fail "governance publication must consume the named artifact from this repository"
 fi
 printf '%s\n' "${publish_job}" | grep -Fq 'name: Publish verified governance manifest' || fail "governance publication step is missing"
 printf '%s\n' "${publish_job}" | grep -Fq 'run: bash scripts/publish-data-governance.sh' || fail "governance publisher is not invoked"
@@ -476,7 +478,10 @@ assert release.count('docker build --platform linux/amd64 -t notification-api:ve
 assert 'image_artifact_id: ${{ steps.image_artifact.outputs.artifact-id }}' in verify
 assert 'artifact-ids: ${{ needs.verify.outputs.image_artifact_id }}' in plan
 assert 'digest-mismatch: error' in plan
-assert 'run-id:' not in plan and 'github-token:' not in plan
+assert "if: inputs.recovery_run == ''" in plan
+assert "if: inputs.recovery_run != ''" in plan
+assert 'run-id: ${{ steps.source.outputs.run }}' in plan
+assert '[[ -z "$RECOVERY_RUN" || "$image_digest" == "$RECOVERY_IMAGE_DIGEST" ]]' in plan
 assert 'needs: verify' in plan
 assert 'sh scripts/scan-image.sh notification-api:verify' in verify
 assert 'scan-image.sh' not in plan

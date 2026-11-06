@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import copy
+import json
 import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from engagement_status_release import DAPR_CONFIG, HOST, INGRESS, PROBE, SECRET, VAULT_SECRETS_URI, WRITE_SCOPES, build_transition, binding, require_preview, require_private_transport, require_caller_pins, require_serving, retire_dapr, write_binding
+from engagement_status_release import DAPR_CONFIG, HOST, INGRESS, PROBE, SECRET, VAULT_SECRETS_URI, WRITE_SCOPES, build_transition, binding, require_preview, require_private_transport, require_caller_pins, require_serving, resolve_release_source, retire_dapr, write_binding
 
 
 APP_ID = "/subscriptions/sub/resourceGroups/alive/providers/Microsoft.App/containerApps/notification-api"
@@ -85,6 +87,15 @@ class StatusReleaseTests(unittest.TestCase):
             build_transition(app, "enable", VERSION, "status-enable")
         app = fixture()
         app["properties"]["configuration"]["ingress"] = {"external": True, "targetPort": 8081}
+        with self.assertRaises(ValueError):
+            binding(app)
+
+    def test_binding_accepts_arm_identity_casing_but_rejects_other_fields(self):
+        app = build_transition(fixture(), "enable", VERSION, "status-enable")
+        secrets = app["properties"]["configuration"]["secrets"]
+        secrets[0]["identity"] = IDENTITY.lower()
+        self.assertEqual(binding(app), (True, VERSION))
+        secrets[0]["value"] = None
         with self.assertRaises(ValueError):
             binding(app)
 
@@ -193,13 +204,43 @@ class StatusReleaseTests(unittest.TestCase):
         push = workflow.split("  workflow_dispatch:", 1)[0]
         self.assertNotIn("- .github/workflows/release.yml", push)
         runtime_scripts = push.index("- scripts/**")
-        for path in ("engagement_status_release.py", "test-engagement-status-release.py"):
+        for path in ("engagement_status_release.py", "test-engagement-status-release.py", "release-static.test.sh"):
             self.assertGreater(push.index(f"- '!scripts/{path}'"), runtime_scripts)
         for path in ("cmd/**", "internal/**", "infra/**"):
             self.assertIn(f"- {path}", push)
         self.assertIn("inputs.status_transition == '' && inputs.retire_dapr_revisions == ''", workflow)
         self.assertIn("python3 scripts/engagement_status_release.py retire-dapr", workflow)
         self.assertEqual(workflow.count('apiDaprEnabled="${API_DAPR_ENABLED}"'), 3)
+
+    def test_recovery_requires_exact_predeployment_failure_and_tooling_only_diff(self):
+        repo = "HallelujahHomeChurch/notification-api"
+        source, current = "a" * 40, "b" * 40
+        run = dict(head_sha=source, run_attempt=1, head_branch="main", event="push", status="completed",
+                   conclusion="failure", path=".github/workflows/release.yml", head_repository={"full_name": repo})
+        jobs = {"jobs": [{"name": "Verify", "conclusion": "success"},
+                         {"name": "Build and plan", "conclusion": "failure", "steps": [
+                             {"name": "Verify published image identity", "conclusion": "success"},
+                             {"name": "Read current release state", "conclusion": "failure"}]},
+                         {"name": "Migrate and deploy", "conclusion": "skipped"}]}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            env = dict(GITHUB_REPOSITORY=repo, GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="workflow_dispatch",
+                       GITHUB_SHA=current, GITHUB_RUN_ID="2", GITHUB_RUN_ATTEMPT="1", GITHUB_OUTPUT=str(output),
+                       RECOVERY_RUN="1", RECOVERY_IMAGE_DIGEST="sha256:" + "c" * 64)
+            evidence = [json.dumps(run).encode(), json.dumps(jobs).encode()]
+            with (patch.dict(os.environ, env),
+                  patch("engagement_status_release.command", side_effect=evidence + [b"", b".github/workflows/release.yml\n"])):
+                resolve_release_source()
+            self.assertEqual(output.read_text(), f"commit={source}\nrun=1\nimage_artifact=notification-image-{source}-1\n")
+            with (patch.dict(os.environ, env),
+                  patch("engagement_status_release.command", side_effect=evidence + [b"", b"cmd/notification/main.go\n"])):
+                with self.assertRaisesRegex(ValueError, "source changed"):
+                    resolve_release_source()
+            jobs["jobs"][2]["conclusion"] = "failure"
+            with (patch.dict(os.environ, env),
+                  patch("engagement_status_release.command", side_effect=[evidence[0], json.dumps(jobs).encode()])):
+                with self.assertRaisesRegex(ValueError, "before deployment"):
+                    resolve_release_source()
 
     def test_preview_rejects_other_scope_and_unrelated_drift(self):
         app = fixture()
