@@ -106,13 +106,30 @@ else
 fi
 
 verify_assignments "$api_principal" "${api_assignments[@]}"
-verify_assignments "$worker_principal" \
-  "${vault_id}/secrets/notification-database-url|${role_id}" \
-  "${vault_id}/secrets/notification-data-encryption-key|${role_id}" \
-  "${vault_id}/secrets/notification-encryption-keys-json|${role_id}" \
-  "${vault_id}/secrets/notification-smtp-username|${role_id}" \
-  "${vault_id}/secrets/notification-smtp-password|${role_id}" \
+worker_assignments=(
+  "${vault_id}/secrets/notification-database-url|${role_id}"
+  "${vault_id}/secrets/notification-data-encryption-key|${role_id}"
+  "${vault_id}/secrets/notification-encryption-keys-json|${role_id}"
+  "${vault_id}/secrets/notification-smtp-username|${role_id}"
+  "${vault_id}/secrets/notification-smtp-password|${role_id}"
   "${vault_id}/secrets/notification-vapid-private-key|${role_id}"
+)
+if [[ -n "${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION:-}" ]]; then
+  if [[ ! "${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION}" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "Invalid Notification worker eligibility credential version" >&2
+    exit 1
+  fi
+  eligibility_scope="${vault_id}/secrets/notification-worker-eligibility-token"
+  eligibility_uri="$(az resource show --ids "$eligibility_scope" --api-version 2024-11-01 \
+    --query 'properties.secretUriWithVersion' -o tsv --only-show-errors)"
+  if [[ "$eligibility_uri" != "https://${NOTIFICATION_VAULT_NAME}.vault.azure.net/secrets/notification-worker-eligibility-token/${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION}" ]]; then
+    echo "Notification worker eligibility credential version did not match" >&2
+    exit 1
+  fi
+  verify_secret notification-worker-eligibility-token
+  worker_assignments+=("${eligibility_scope}|${role_id}")
+fi
+verify_assignments "$worker_principal" "${worker_assignments[@]}"
 verify_assignments "$migrate_principal" \
   "${vault_id}/secrets/notification-database-url|${role_id}" \
   "${vault_id}/secrets/notification-migrate-database-url|${role_id}"

@@ -45,6 +45,10 @@ case "$1 $2" in
     esac
     ;;
   "resource show")
+    if [[ "$*" == *notification-worker-eligibility-token* && "$*" == *properties.secretUriWithVersion* ]]; then
+      echo "https://alive-notification-test.vault.azure.net/secrets/notification-worker-eligibility-token/${MOCK_WORKER_SECRET_VERSION:-missing}"
+      exit 0
+    fi
     if [[ "$*" == *notification-engagement-status-token* ]]; then
       case "${MOCK_STATUS_SECRET:-absent}" in
         absent) exit 3 ;;
@@ -72,6 +76,9 @@ case "$1 $2" in
         ;;
       worker)
 		secrets=(notification-database-url notification-data-encryption-key notification-encryption-keys-json notification-smtp-username notification-smtp-password notification-vapid-private-key)
+        if [[ "${MOCK_WORKER_ROLE:-false}" == true ]]; then
+          secrets+=(notification-worker-eligibility-token)
+        fi
         ;;
       migrate)
         secrets=(notification-database-url notification-migrate-database-url)
@@ -111,5 +118,16 @@ for state in absent disabled; do
     exit 1
   fi
 done
+
+version=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+PATH="$tmp_dir:$PATH" MOCK_WORKER_SECRET_VERSION="$version" MOCK_WORKER_ROLE=true \
+  NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION="$version" RESOURCE_GROUP=alive \
+  NOTIFICATION_VAULT_NAME=alive-notification-test "$repo_root/scripts/verify-secret-scope.sh" >/dev/null
+if PATH="$tmp_dir:$PATH" MOCK_WORKER_SECRET_VERSION=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb MOCK_WORKER_ROLE=true \
+  NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION="$version" RESOURCE_GROUP=alive \
+  NOTIFICATION_VAULT_NAME=alive-notification-test "$repo_root/scripts/verify-secret-scope.sh" >/dev/null 2>&1; then
+  echo "secret preflight accepted a different worker credential version" >&2
+  exit 1
+fi
 
 echo "secret scope self-test passed"

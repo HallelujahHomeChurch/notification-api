@@ -9,6 +9,9 @@ param legacyVaultName string = 'alive-vault'
 @maxLength(71)
 param imageDigest string
 param deployRuntime bool = true
+@allowed(['all', 'worker', 'api'])
+param runtimePhase string = 'all'
+param workerEligibilityVersion string = ''
 param engagementStatusEnabled bool = false
 param engagementStatusVersion string = ''
 param provisionPermissions bool = true
@@ -110,7 +113,7 @@ resource emailDomain 'Microsoft.Communication/emailServices/domains@2023-03-31' 
   name: smtpFromParts[1]
 }
 
-resource emailSender 'Microsoft.Communication/emailServices/domains/senderUsernames@2023-03-31' = {
+resource emailSender 'Microsoft.Communication/emailServices/domains/senderUsernames@2023-03-31' = if (runtimePhase != 'worker') {
   parent: emailDomain
   name: smtpFromParts[0]
   properties: {
@@ -199,7 +202,7 @@ var engagementStatusSecrets = empty(engagementStatusVersion) ? [] : [
   }
 ]
 
-resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
+resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && runtimePhase != 'worker') {
   name: 'notification-api'
   location: location
   identity: {
@@ -322,7 +325,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   ]
 }
 
-resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
+resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && runtimePhase != 'api') {
   name: 'notification-worker'
   location: location
   identity: {
@@ -336,13 +339,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
     workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
-      dapr: {
-        enabled: true
-        appId: 'notification-worker'
-        appPort: 8081
-        appProtocol: 'http'
-        logLevel: 'warn'
-      }
+      dapr: { enabled: false }
       registries: [
         {
           server: registry.properties.loginServer
@@ -356,6 +353,12 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         { name: 'data-encryption-key-v2', keyVaultUrl: encryptionSecretUrl, identity: workerIdentity.id }
         { name: 'encryption-keys-json-v2', keyVaultUrl: encryptionKeysSecretUrl, identity: workerIdentity.id }
         { name: 'vapid-private-key', keyVaultUrl: vapidPrivateKeySecretUrl, identity: workerIdentity.id }
+      ], empty(workerEligibilityVersion) ? [] : [
+        {
+          name: 'notification-worker-eligibility-token'
+          keyVaultUrl: '${vault.properties.vaultUri}secrets/notification-worker-eligibility-token/${workerEligibilityVersion}'
+          identity: workerIdentity.id
+        }
       ], smtpAuthenticationEnabled ? [
         { name: 'smtp-username', keyVaultUrl: legacySMTPUsernameSecretUrl, identity: workerIdentity.id }
         { name: 'smtp-password', keyVaultUrl: legacySMTPPasswordSecretUrl, identity: workerIdentity.id }
@@ -381,6 +384,8 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'VAPID_PUBLIC_KEY', value: vapidPublicKey }
             { name: 'VAPID_PRIVATE_KEY', secretRef: 'vapid-private-key' }
             { name: 'VAPID_SUBJECT', value: vapidSubject }
+          ], empty(workerEligibilityVersion) ? [] : [
+            { name: 'NOTIFICATION_WORKER_ELIGIBILITY_TOKEN', secretRef: 'notification-worker-eligibility-token' }
           ], smtpAuthenticationEnabled ? [
             { name: 'SMTP_USERNAME', secretRef: 'smtp-username-v2' }
             { name: 'SMTP_PASSWORD', secretRef: 'smtp-password-v2' }
@@ -433,7 +438,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   ]
 }
 
-resource migrate 'Microsoft.App/jobs@2024-03-01' = {
+resource migrate 'Microsoft.App/jobs@2024-03-01' = if (runtimePhase != 'worker') {
   name: 'notification-migrate'
   location: location
   identity: {
