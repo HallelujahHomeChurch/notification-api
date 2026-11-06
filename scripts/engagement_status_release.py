@@ -14,7 +14,8 @@ APP = "notification-api"
 GROUP = "alive"
 SECRET = "notification-engagement-status-token"
 ENV = "NOTIFICATION_ENGAGEMENT_STATUS_TOKEN"
-VAULT_URI = f"https://alive-notify-r56q6e5qwh5.vault.azure.net/secrets/{SECRET}/"
+VAULT_SECRETS_URI = "https://alive-notify-r56q6e5qwh5.vault.azure.net/secrets/"
+VAULT_URI = VAULT_SECRETS_URI + SECRET + "/"
 HOST = "notification-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io"
 INGRESS = {"external": False, "allowInsecure": False, "targetPort": 8082, "transport": "auto",
            "traffic": [{"latestRevision": True, "weight": 100}]}
@@ -23,6 +24,10 @@ PROBE = {"type": "Startup", "tcpSocket": {"port": 8082}, "initialDelaySeconds": 
 ENV_REF = {"name": ENV, "secretRef": SECRET}
 IMAGE = re.compile(r"alive\.azurecr\.io/alive/notification-api@sha256:[0-9a-f]{64}")
 VERSION = re.compile(r"[0-9a-f]{32}")
+WRITE_SCOPES = (
+    ("NOTIFICATION_ACCOUNT_PRIVATE_TOKEN", "notification-account-private-token", "NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION"),
+    ("NOTIFICATION_ENGAGEMENT_SEND_TOKEN", "notification-engagement-send-token", "NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION"),
+)
 PLAIN_ENV = {
     "ENVIRONMENT", "PORT", "QUEUE_DRIVER", "SERVICEBUS_NAMESPACE", "SERVICEBUS_QUEUE_NAME",
     "SHUTDOWN_TIMEOUT_SECONDS", "DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME",
@@ -89,6 +94,24 @@ def binding(app):
     return bool(env), version
 
 
+def write_binding(app, status_enabled, *, deployed=False):
+    env = container(app).get("env", [])
+    secrets = app["properties"]["configuration"].get("secrets", [])
+    for env_name, secret_name, version_var in WRITE_SCOPES:
+        requested = os.environ.get(version_var, "")
+        if requested and (not status_enabled or not VERSION.fullmatch(requested)):
+            raise ValueError("private writes require the active HTTPS listener and a pinned secret version")
+        entries = [entry for entry in env if entry["name"] == env_name]
+        bindings = [entry for entry in secrets if entry["name"] == secret_name]
+        if entries or bindings or (deployed and requested):
+            expected = {"name": secret_name, "identity": identity(app),
+                        "keyVaultUrl": VAULT_SECRETS_URI + secret_name + "/" + requested}
+            expected_env = [{"name": env_name, "secretRef": secret_name}]
+            if (not requested or bindings != [expected]
+                    or ((entries or deployed) and entries != expected_env)):
+                raise ValueError("unexpected Notification private write binding")
+
+
 def runtime(app):
     props = app["properties"]
     cfg = props["configuration"]
@@ -142,6 +165,8 @@ def build_transition(app, transition, requested_version, suffix):
         version = requested_version
     elif transition != "disable" or not active or requested_version:
         raise ValueError("disable requires enabled status and no supplied version")
+    elif any(entry["name"] in {scope[0] for scope in WRITE_SCOPES} for entry in container(app).get("env", [])):
+        raise ValueError("retire private write bindings before disabling HTTPS ingress")
     result = runtime(app)
     cfg = result["properties"]["configuration"]
     item = container(result)
@@ -300,17 +325,21 @@ def plan_transition(live, candidate, suffix, apply=False):
 
 
 def main():
-    if sys.argv[1:] == ["capture"]:
+    if sys.argv[1:] in (["capture"], ["verify-writes"]):
         live = app_state()
         if live["properties"]["latestRevisionName"] != live["properties"]["latestReadyRevisionName"]:
             raise ValueError("Notification status requires an exact settled revision")
         enabled, version = binding(live)
+        deployed = sys.argv[1:] == ["verify-writes"]
+        write_binding(live, enabled, deployed=deployed)
+        if deployed:
+            return
         with open(os.environ["GITHUB_ENV"], "a") as output:
             output.write(f"ENGAGEMENT_STATUS_ENABLED={str(enabled).lower()}\nENGAGEMENT_STATUS_VERSION={version}\n")
     elif sys.argv[1:] == ["transition"]:
         transition()
     else:
-        raise ValueError("usage: engagement_status_release.py capture|transition")
+        raise ValueError("usage: engagement_status_release.py capture|verify-writes|transition")
 
 
 if __name__ == "__main__":

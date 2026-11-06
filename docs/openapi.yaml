@@ -3,7 +3,7 @@ info:
   title: HHC Notification API
   version: 1.0.0
   description: |
-    Private Dapr-invoked notification API. Callers create notification intents;
+    Private service-to-service notification API. Callers create notification intents;
     notification-api owns durable provider delivery and status. Campaign and
     consent state remain owned by engagement-api. Email delivery is at-least-once.
     This API is not browser-callable, and catalog access grants no API authorization.
@@ -12,7 +12,7 @@ servers:
     description: Dapr sidecar invocation base available to authorized service callers only.
 tags:
   - name: Private
-    description: Service-to-service operations invoked through Dapr.
+    description: Service-to-service operations authenticated through Dapr or private HTTPS.
   - name: Operations
     description: Process health and readiness operations.
 x-hhc-service: notification-api
@@ -63,8 +63,14 @@ paths:
       operationId: cleanupDeletedAccountNotifications
       summary: Remove attributed Notification payloads for manual Account deletion
       description: Tombstones attributed target and payload data without creating or advancing a DSR request.
+      servers:
+        - url: /v1.0/invoke/notification-api/method
+          description: Dapr invocation.
+        - url: https://notification-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io
+          description: Credential-scoped private HTTPS listener.
       security:
         - daprCaller: []
+        - accountPrivate: []
       requestBody:
         required: true
         content:
@@ -87,7 +93,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UnauthorizedErrorResponse' }
         '403':
-          description: Caller is not account-api.
+          description: Caller is not account-api or the private HTTPS credential is missing or invalid.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ForbiddenErrorResponse' }
@@ -107,8 +113,15 @@ paths:
         Creates one caller-scoped notification intent. Repeating the same
         Idempotency-Key and request returns the original intent; reusing the key
         for different content returns a conflict. Provider delivery is asynchronous.
+      servers:
+        - url: /v1.0/invoke/notification-api/method
+          description: Dapr invocation.
+        - url: https://notification-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io
+          description: Credential-scoped private HTTPS listener.
       security:
         - daprCaller: []
+        - accountPrivate: []
+        - engagementSend: []
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -135,7 +148,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UnauthorizedErrorResponse' }
         '403':
-          description: Caller or requested template is not allowed.
+          description: Caller or requested template is not allowed, or the private HTTPS credential is missing or invalid.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ForbiddenErrorResponse' }
@@ -170,8 +183,14 @@ paths:
       x-hhc-callers: [account-api, engagement-api]
       operationId: getNotificationStatus
       summary: Get caller-scoped durable delivery status
+      servers:
+        - url: /v1.0/invoke/notification-api/method
+          description: Dapr invocation.
+        - url: https://notification-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io
+          description: Credential-scoped private HTTPS listener.
       security:
         - daprCaller: []
+        - engagementStatus: []
       parameters:
         - name: messageId
           in: path
@@ -193,7 +212,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UnauthorizedErrorResponse' }
         '403':
-          description: Caller is not allowed.
+          description: Caller is not allowed or the private HTTPS credential is missing or invalid.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ForbiddenErrorResponse' }
@@ -214,6 +233,21 @@ components:
       in: header
       name: Dapr-Caller-App-Id
       description: Caller identity injected by Dapr and checked against the runtime allowlist.
+    accountPrivate:
+      type: apiKey
+      in: header
+      name: X-HHC-Notification-Account-Token
+      description: Account-only credential for enqueue and cleanup over private HTTPS.
+    engagementSend:
+      type: apiKey
+      in: header
+      name: X-HHC-Notification-Engagement-Send-Token
+      description: Engagement-only credential for enqueue over private HTTPS.
+    engagementStatus:
+      type: apiKey
+      in: header
+      name: X-HHC-Notification-Engagement-Token
+      description: Engagement-only credential for status reads over private HTTPS.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key

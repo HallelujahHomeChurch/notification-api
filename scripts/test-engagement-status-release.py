@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import copy
+import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
-from engagement_status_release import INGRESS, PROBE, SECRET, build_transition, binding, require_preview
+from engagement_status_release import INGRESS, PROBE, SECRET, VAULT_SECRETS_URI, WRITE_SCOPES, build_transition, binding, require_preview, write_binding
 
 
 APP_ID = "/subscriptions/sub/resourceGroups/alive/providers/Microsoft.App/containerApps/notification-api"
@@ -49,6 +51,28 @@ class StatusReleaseTests(unittest.TestCase):
         self.assertEqual(binding(disabled), (False, VERSION))
         self.assertIsNone(disabled["properties"]["configuration"]["ingress"])
         self.assertEqual(disabled["properties"]["template"]["containers"][0]["probes"], [{"type": "Readiness"}])
+
+    def test_private_writes_require_existing_ingress_and_exact_credential_binding(self):
+        app = build_transition(fixture(), "enable", VERSION, "status-enable")
+        env_name, secret_name, version_var = WRITE_SCOPES[0]
+        with patch.dict(os.environ, {version_var: VERSION}):
+            write_binding(app, True)
+            with self.assertRaises(ValueError):
+                write_binding(app, False)
+            with self.assertRaises(ValueError):
+                write_binding(app, True, deployed=True)
+            app["properties"]["template"]["containers"][0]["env"].append({"name": env_name, "secretRef": secret_name})
+            secret = {"name": secret_name, "identity": IDENTITY,
+                      "keyVaultUrl": VAULT_SECRETS_URI + secret_name + "/" + VERSION}
+            app["properties"]["configuration"]["secrets"].append(secret)
+            write_binding(app, True, deployed=True)
+            with self.assertRaises(ValueError):
+                build_transition(app, "disable", "", "status-disable")
+            secret["identity"] = "/wrong-identity"
+            with self.assertRaises(ValueError):
+                write_binding(app, True)
+        with self.assertRaises(ValueError):
+            write_binding(app, True)
 
     def test_binding_and_snapshot_fail_closed(self):
         app = fixture()

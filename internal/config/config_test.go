@@ -482,7 +482,7 @@ func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		"SES_FEEDBACK_DLQ_URL", "SES_FEEDBACK_QUEUE_URL", "SES_FEEDBACK_TOPIC_ARN", "EMAIL_PROVIDER", "SES_REGION", "SES_ROLE_ARN", "SES_ENTRA_TOKEN_SCOPE", "SES_CONFIGURATION_SET", "SES_FROM", "AZURE_CLIENT_ID",
-		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_WORKER_ELIGIBILITY_TOKEN", "NOTIFICATION_ALLOWED_CALLERS", "NOTIFICATION_ENGAGEMENT_STATUS_TOKEN",
+		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_WORKER_ELIGIBILITY_TOKEN", "NOTIFICATION_ALLOWED_CALLERS", "NOTIFICATION_ENGAGEMENT_STATUS_TOKEN", "NOTIFICATION_ACCOUNT_PRIVATE_TOKEN", "NOTIFICATION_ENGAGEMENT_SEND_TOKEN",
 		"NOTIFICATION_ALLOW_DEV_CALLER_HEADER", "NOTIFICATION_DATA_ENCRYPTION_KEY", "NOTIFICATION_HASH_KEY",
 		"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "NOTIFICATION_ENCRYPTION_KEYS_JSON",
 		"NOTIFICATION_ACTIVE_HASH_KEY_ID", "NOTIFICATION_HASH_KEYS_JSON",
@@ -564,6 +564,39 @@ func TestEngagementStatusListenerConfiguration(t *testing.T) {
 		cfg.EngagementStatusToken = invalid
 		if err := cfg.Validate("api"); err == nil {
 			t.Fatal("malformed status credential accepted")
+		}
+	}
+}
+
+func TestPrivateAPICredentialsAreOptionalAndDistinct(t *testing.T) {
+	setProductionEnv(t)
+	t.Setenv("NOTIFICATION_ALLOWED_CALLERS", "account-api,engagement-api")
+	account := strings.Repeat("a", 64)
+	send := strings.Repeat("b", 64)
+	status := strings.Repeat("c", 64)
+	t.Setenv("NOTIFICATION_ACCOUNT_PRIVATE_TOKEN", account)
+	t.Setenv("NOTIFICATION_ENGAGEMENT_SEND_TOKEN", send)
+	t.Setenv("NOTIFICATION_ENGAGEMENT_STATUS_TOKEN", status)
+	cfg, err := Load()
+	if err != nil || cfg.AccountPrivateToken != account || cfg.EngagementSendToken != send {
+		t.Fatal("private write credentials did not load")
+	}
+	if err := cfg.Validate("api"); err != nil {
+		t.Fatal(err)
+	}
+	for _, edit := range []func(*Config){
+		func(c *Config) { c.AccountPrivateToken = strings.ToUpper(send) },
+		func(c *Config) { c.AccountPrivateToken = status },
+		func(c *Config) { c.EngagementSendToken = status },
+		func(c *Config) { c.EngagementSendToken = send + " " },
+		func(c *Config) { c.AllowedCallers = []string{"engagement-api"} },
+		func(c *Config) { c.AllowedCallers = []string{"account-api"} },
+		func(c *Config) { c.Port = "8082" },
+	} {
+		invalid := cfg
+		edit(&invalid)
+		if err := invalid.Validate("api"); err == nil {
+			t.Fatal("invalid private API credentials, caller scope or port accepted")
 		}
 	}
 }

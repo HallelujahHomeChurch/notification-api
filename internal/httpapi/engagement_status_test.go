@@ -22,7 +22,7 @@ func TestEngagementStatusListener(t *testing.T) {
 		}
 		return service.Result{MessageID: id, Status: "failed", FailureCode: "example", SafeToRetry: true}, nil
 	}}
-	direct := NewEngagementStatusHandler(svc, token)
+	direct := NewPrivateHandler(svc, nil, PrivateCredentials{EngagementStatus: token})
 	dapr := New(svc, nil, []string{"engagement-api"}, false)
 	for _, tt := range []struct {
 		name, method, path string

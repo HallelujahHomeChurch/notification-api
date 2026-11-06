@@ -49,6 +49,12 @@ case "$1 $2" in
       echo "https://alive-notification-test.vault.azure.net/secrets/notification-worker-eligibility-token/${MOCK_WORKER_SECRET_VERSION:-missing}"
       exit 0
     fi
+    for secret in notification-account-private-token notification-engagement-send-token; do
+      if [[ "$*" == *"$secret"* && "$*" == *properties.secretUriWithVersion* ]]; then
+        echo "https://alive-notification-test.vault.azure.net/secrets/$secret/${MOCK_WRITE_SECRET_VERSION:-missing}"
+        exit 0
+      fi
+    done
     if [[ "$*" == *notification-engagement-status-token* ]]; then
       case "${MOCK_STATUS_SECRET:-absent}" in
         absent) exit 3 ;;
@@ -70,6 +76,9 @@ case "$1 $2" in
     case "$principal" in
       api)
         secrets=(notification-database-url notification-data-encryption-key notification-hash-key notification-encryption-keys-json notification-hash-keys-json)
+        if [[ "${MOCK_WRITE_ROLE:-false}" == true ]]; then
+          secrets+=(notification-account-private-token notification-engagement-send-token)
+        fi
         if [[ "${MOCK_STATUS_ROLE:-false}" == true ]]; then
           secrets+=(notification-engagement-status-token)
         fi
@@ -130,4 +139,13 @@ if PATH="$tmp_dir:$PATH" MOCK_WORKER_SECRET_VERSION=bbbbbbbbbbbbbbbbbbbbbbbbbbbb
   exit 1
 fi
 
+PATH="$tmp_dir:$PATH" MOCK_WRITE_SECRET_VERSION="$version" MOCK_WRITE_ROLE=true \
+  NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION="$version" NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION="$version" \
+  RESOURCE_GROUP=alive NOTIFICATION_VAULT_NAME=alive-notification-test "$repo_root/scripts/verify-secret-scope.sh" >/dev/null
+if PATH="$tmp_dir:$PATH" MOCK_WRITE_SECRET_VERSION="$version" MOCK_WRITE_ROLE=false \
+  NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION="$version" NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION="$version" \
+  RESOURCE_GROUP=alive NOTIFICATION_VAULT_NAME=alive-notification-test "$repo_root/scripts/verify-secret-scope.sh" >/dev/null 2>&1; then
+  echo "secret preflight accepted private writes without scoped reader roles" >&2
+  exit 1
+fi
 echo "secret scope self-test passed"

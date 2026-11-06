@@ -16,6 +16,8 @@ param workerDaprEnabled bool = false
 param workerRevisionSuffix string = ''
 param engagementStatusEnabled bool = false
 param engagementStatusVersion string = ''
+param accountPrivateVersion string = ''
+param engagementSendVersion string = ''
 param provisionPermissions bool = true
 param serviceBusNamespaceName string = 'alive-notifications-${uniqueString(subscription().id, resourceGroup().id)}'
 param queueName string = 'notifications-email'
@@ -204,6 +206,24 @@ var engagementStatusSecrets = empty(engagementStatusVersion) ? [] : [
   }
 ]
 
+var privateWriteCredentials = [
+  { name: 'notification-account-private-token', env: 'NOTIFICATION_ACCOUNT_PRIVATE_TOKEN', version: accountPrivateVersion }
+  { name: 'notification-engagement-send-token', env: 'NOTIFICATION_ENGAGEMENT_SEND_TOKEN', version: engagementSendVersion }
+]
+var privateWriteSecrets = [
+  for credential in filter(privateWriteCredentials, credential => !empty(credential.version)): {
+    name: credential.name
+    keyVaultUrl: 'https://${vault.name}${az.environment().suffixes.keyvaultDns}/secrets/${credential.name}/${credential.version}'
+    identity: apiIdentity.id
+  }
+]
+var privateWriteEnvironment = [
+  for credential in filter(privateWriteCredentials, credential => !empty(credential.version)): {
+    name: credential.env
+    secretRef: credential.name
+  }
+]
+
 resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && runtimePhase != 'worker') {
   name: 'notification-api'
   location: location
@@ -247,7 +267,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && run
         { name: 'hash-key-v2', keyVaultUrl: hashSecretUrl, identity: apiIdentity.id }
         { name: 'encryption-keys-json-v2', keyVaultUrl: encryptionKeysSecretUrl, identity: apiIdentity.id }
         { name: 'hash-keys-json-v2', keyVaultUrl: hashKeysSecretUrl, identity: apiIdentity.id }
-      ], engagementStatusSecrets)
+      ], engagementStatusSecrets, privateWriteSecrets)
     }
     template: {
       containers: [
@@ -270,7 +290,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && run
             { name: 'NOTIFICATIONS_DISABLED', value: toLower(string(notificationsDisabled)) }
           ], engagementStatusEnabled ? [
             { name: 'NOTIFICATION_ENGAGEMENT_STATUS_TOKEN', secretRef: engagementStatusSecretName }
-          ] : [])
+          ] : [], privateWriteEnvironment)
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
