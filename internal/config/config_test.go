@@ -478,7 +478,7 @@ func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		"SES_FEEDBACK_DLQ_URL", "SES_FEEDBACK_QUEUE_URL", "SES_FEEDBACK_TOPIC_ARN", "EMAIL_PROVIDER", "SES_REGION", "SES_ROLE_ARN", "SES_ENTRA_TOKEN_SCOPE", "SES_CONFIGURATION_SET", "SES_FROM", "AZURE_CLIENT_ID",
-		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_ALLOWED_CALLERS",
+		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_ALLOWED_CALLERS", "NOTIFICATION_ENGAGEMENT_STATUS_TOKEN",
 		"NOTIFICATION_ALLOW_DEV_CALLER_HEADER", "NOTIFICATION_DATA_ENCRYPTION_KEY", "NOTIFICATION_HASH_KEY",
 		"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "NOTIFICATION_ENCRYPTION_KEYS_JSON",
 		"NOTIFICATION_ACTIVE_HASH_KEY_ID", "NOTIFICATION_HASH_KEYS_JSON",
@@ -528,5 +528,37 @@ func TestSESWorkerConfigDoesNotRequireSMTP(t *testing.T) {
 	cfg.EmailProvider = "unrecognized"
 	if err := cfg.Validate("worker"); err == nil {
 		t.Fatal("unknown provider accepted")
+	}
+}
+
+func TestEngagementStatusListenerConfiguration(t *testing.T) {
+	setProductionEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.EngagementStatusToken != "" {
+		t.Fatal("status listener must default to disabled")
+	}
+	token := strings.Repeat("a", 64)
+	t.Setenv("NOTIFICATION_ENGAGEMENT_STATUS_TOKEN", token)
+	cfg, err = Load()
+	if err != nil || cfg.EngagementStatusToken != token {
+		t.Fatal("status credential was not loaded")
+	}
+	if err := cfg.Validate("api"); err == nil {
+		t.Fatal("status listener accepted a disabled Engagement caller")
+	}
+	cfg.AllowedCallers = append(cfg.AllowedCallers, "engagement-api")
+	if err := cfg.Validate("api"); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Port = "8082"
+	if err := cfg.Validate("api"); err == nil {
+		t.Fatal("status listener overlaps the Dapr listener")
+	}
+	cfg.Port = "8081"
+	for _, invalid := range []string{token[:63], token + " ", strings.Repeat("g", 64)} {
+		cfg.EngagementStatusToken = invalid
+		if err := cfg.Validate("api"); err == nil {
+			t.Fatal("malformed status credential accepted")
+		}
 	}
 }

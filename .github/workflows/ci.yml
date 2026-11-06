@@ -86,6 +86,7 @@ jobs:
             go test ./internal/governance -run '^TestDataGovernanceExport$' -count=1
           bash scripts/test-publish-data-governance.sh
           go vet ./...
+          python3 scripts/test-engagement-status-release.py
           bash scripts/release-static.test.sh
           bash scripts/test-release-image-artifact.sh
       - name: Build image

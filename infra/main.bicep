@@ -9,6 +9,8 @@ param legacyVaultName string = 'alive-vault'
 @maxLength(71)
 param imageDigest string
 param deployRuntime bool = true
+param engagementStatusEnabled bool = false
+param engagementStatusVersion string = ''
 param provisionPermissions bool = true
 param serviceBusNamespaceName string = 'alive-notifications-${uniqueString(subscription().id, resourceGroup().id)}'
 param queueName string = 'notifications-email'
@@ -188,6 +190,15 @@ resource workerServiceBusReceiver 'Microsoft.Authorization/roleAssignments@2022-
   }
 }
 
+var engagementStatusSecretName = 'notification-engagement-status-token'
+var engagementStatusSecrets = empty(engagementStatusVersion) ? [] : [
+  {
+    name: engagementStatusSecretName
+    keyVaultUrl: '${vault.properties.vaultUri}secrets/${engagementStatusSecretName}/${engagementStatusVersion}'
+    identity: apiIdentity.id
+  }
+]
+
 resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
   name: 'notification-api'
   location: location
@@ -202,6 +213,13 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
     workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
+      ingress: engagementStatusEnabled ? {
+        external: false
+        allowInsecure: false
+        targetPort: 8082
+        transport: 'auto'
+        traffic: [{ latestRevision: true, weight: 100 }]
+      } : null
       dapr: {
         enabled: true
         appId: 'notification-api'
@@ -215,7 +233,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
           identity: apiIdentity.id
         }
       ]
-      secrets: [
+      secrets: concat([
         { name: 'database-url', keyVaultUrl: legacyDatabaseSecretUrl, identity: apiIdentity.id }
         { name: 'data-encryption-key', keyVaultUrl: legacyEncryptionSecretUrl, identity: apiIdentity.id }
         { name: 'hash-key', keyVaultUrl: legacyHashSecretUrl, identity: apiIdentity.id }
@@ -224,7 +242,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
         { name: 'hash-key-v2', keyVaultUrl: hashSecretUrl, identity: apiIdentity.id }
         { name: 'encryption-keys-json-v2', keyVaultUrl: encryptionKeysSecretUrl, identity: apiIdentity.id }
         { name: 'hash-keys-json-v2', keyVaultUrl: hashKeysSecretUrl, identity: apiIdentity.id }
-      ]
+      ], engagementStatusSecrets)
     }
     template: {
       containers: [
@@ -245,12 +263,14 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
             { name: 'NOTIFICATION_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'NOTIFICATION_TEMPLATE_DAILY_LIMIT', value: '${notificationTemplateDailyLimit}' }
             { name: 'NOTIFICATIONS_DISABLED', value: toLower(string(notificationsDisabled)) }
-          ])
+          ], engagementStatusEnabled ? [
+            { name: 'NOTIFICATION_ENGAGEMENT_STATUS_TOKEN', secretRef: engagementStatusSecretName }
+          ] : [])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
           }
-          probes: [
+          probes: concat([
             {
               type: 'Liveness'
               httpGet: { path: '/health', port: 8081 }
@@ -263,7 +283,17 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime) {
               initialDelaySeconds: 10
               periodSeconds: 10
             }
-          ]
+          ], engagementStatusEnabled ? [
+            {
+              type: 'Startup'
+              tcpSocket: { port: 8082 }
+              initialDelaySeconds: 1
+              periodSeconds: 1
+              timeoutSeconds: 3
+              failureThreshold: 240
+              successThreshold: 1
+            }
+          ] : [])
         }
       ]
       scale: {

@@ -15,6 +15,21 @@ on:
       - docs/data-governance.yaml
   workflow_dispatch:
     inputs:
+      status_transition:
+        description: Notification private status listener transition (enable or disable)
+        type: string
+      status_version:
+        description: Pinned Key Vault secret version for enable
+        type: string
+      status_expected_revision:
+        description: Exact serving Notification API revision
+        type: string
+      status_source_release_run:
+        description: Successful original owner release for the serving image
+        type: string
+      status_reviewed_plan:
+        description: Exact reviewed preview fingerprint, empty for preview
+        type: string
       fail_openapi_before_pointer:
         description: Test last-good API docs pointer preservation
         required: false
@@ -29,8 +44,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  status_configuration:
+    if: ${{ inputs.status_transition != '' && vars.PRODUCTION_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_TRANSITION: ${{ inputs.status_transition }}
+      STATUS_VERSION: ${{ inputs.status_version }}
+      STATUS_EXPECTED_REVISION: ${{ inputs.status_expected_revision }}
+      STATUS_SOURCE_RELEASE_RUN: ${{ inputs.status_source_release_run }}
+      STATUS_REVIEWED_PLAN: ${{ inputs.status_reviewed_plan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate owner workflow
+        run: |
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          python3 scripts/test-engagement-status-release.py
+      - uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - run: az extension add --name containerapp --upgrade --yes
+      - run: python3 scripts/engagement_status_release.py transition
+
   verify:
     name: Verify
+    if: ${{ inputs.status_transition == '' }}
     outputs:
       image_artifact_id: ${{ steps.image_artifact.outputs.artifact-id }}
     runs-on: ubuntu-latest
@@ -267,6 +316,7 @@ jobs:
               ;;
           esac
           echo "NOTIFICATIONS_DISABLED=${notifications_disabled}" >> "${GITHUB_ENV}"
+          python3 scripts/engagement_status_release.py capture
 
       - name: Produce complete what-if plan
         shell: bash
@@ -289,6 +339,8 @@ jobs:
               imageDigest="${IMAGE_DIGEST}" \
               notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
               deployRuntime=true \
+              engagementStatusEnabled="${ENGAGEMENT_STATUS_ENABLED}" \
+              engagementStatusVersion="${ENGAGEMENT_STATUS_VERSION}" \
               provisionPermissions=false \
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
@@ -480,6 +532,7 @@ jobs:
             echo "PREVIOUS_WORKER_IMAGE=${previous_worker_image}"
             echo "NOTIFICATIONS_DISABLED=${notifications_disabled}"
           } >> "${GITHUB_ENV}"
+          python3 scripts/engagement_status_release.py capture
 
       - name: Re-run complete what-if
         shell: bash
@@ -501,6 +554,8 @@ jobs:
               imageDigest="${IMAGE_DIGEST}" \
               notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
               deployRuntime=true \
+              engagementStatusEnabled="${ENGAGEMENT_STATUS_ENABLED}" \
+              engagementStatusVersion="${ENGAGEMENT_STATUS_VERSION}" \
               provisionPermissions=false \
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
@@ -636,6 +691,8 @@ jobs:
               imageDigest="${IMAGE_DIGEST}" \
               notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
               deployRuntime=true \
+              engagementStatusEnabled="${ENGAGEMENT_STATUS_ENABLED}" \
+              engagementStatusVersion="${ENGAGEMENT_STATUS_VERSION}" \
               provisionPermissions=false \
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \

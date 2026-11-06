@@ -54,7 +54,7 @@ assert_contains "${workflow}" '(?s)  plan:\n.*?    needs: verify\n.*?    permiss
 assert_contains "${workflow}" '(?s)  deploy:\n.*?    needs: plan\n.*?    environment: production\n.*?    permissions:\n      contents: read\n      id-token: write' "deploy must depend on plan, require production approval, and receive fresh OIDC"
 grep -Fq 'if: ${{ vars.PRODUCTION_DEPLOY_ENABLED == '\''true'\'' }}' "${workflow}" ||
   fail "deploy must remain disabled until the protected production gate is configured"
-[[ "$(grep -Ec 'id-token:[[:space:]]*write' "${workflow}")" == "3" ]] || fail "plan, deploy, and docs publication must each receive OIDC"
+[[ "$(grep -Ec 'id-token:[[:space:]]*write' "${workflow}")" == "4" ]] || fail "status configuration, plan, deploy, and docs publication must each receive OIDC"
 assert_contains "${workflow}" 'group:[[:space:]]*notification-production' "production concurrency group is missing"
 assert_contains "${workflow}" 'cancel-in-progress:[[:space:]]*false' "production releases must not cancel in progress"
 assert_contains "${workflow}" '(?s)paths:\n.*?- docs/data-governance\.yaml' "data-governance changes must trigger production release"
