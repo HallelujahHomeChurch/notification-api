@@ -430,7 +430,7 @@ jobs:
   deploy:
     name: Migrate and deploy
     needs: plan
-    if: ${{ vars.PRODUCTION_DEPLOY_ENABLED == 'true' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && vars.PRODUCTION_DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: production
@@ -930,6 +930,7 @@ jobs:
 
   publish_openapi:
     needs: [deploy, plan]
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
     environment: production
     permissions:
