@@ -241,7 +241,13 @@ def retire_dapr():
 
     def without_dapr(app):
         snapshot = comparable(app)
-        snapshot["properties"]["configuration"].pop("dapr")
+        config = snapshot["properties"]["configuration"]
+        config.pop("dapr")
+        secrets = config.get("secrets", [])
+        if len({entry["name"] for entry in secrets}) != len(secrets):
+            raise RetirementReadbackError("Notification API retirement readback has duplicate secret names")
+        # The app-level Dapr PUT can reorder named secret references.
+        secrets.sort(key=lambda entry: entry["name"])
         return snapshot
 
     verify_consumers()
