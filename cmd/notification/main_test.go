@@ -255,6 +255,7 @@ func TestBuildWorkerRejectsInvalidWebPushBeforeDatabase(t *testing.T) {
 
 func testConfig() (config.Config, error) {
 	return config.Config{
+		WorkerEligibilityToken:     strings.Repeat("a", 64),
 		Environment:                config.EnvironmentDevelopment,
 		ShutdownTimeout:            time.Second,
 		DatabaseURL:                "postgres://notification:password@localhost:5432/notification",

@@ -42,6 +42,7 @@ type Config struct {
 	DBConnMaxLifetime          time.Duration
 	AllowedCallers             []string
 	EngagementStatusToken      string
+	WorkerEligibilityToken     string
 	AllowDevCallerHeader       bool
 	ActiveEncryptionKeyID      string
 	EncryptionKeys             map[string][]byte
@@ -160,6 +161,7 @@ func Load() (Config, error) {
 		AllowedCallers:             parseCallers(os.Getenv("NOTIFICATION_ALLOWED_CALLERS")),
 		AllowDevCallerHeader:       allowDevCallerHeader,
 		EngagementStatusToken:      os.Getenv("NOTIFICATION_ENGAGEMENT_STATUS_TOKEN"),
+		WorkerEligibilityToken:     os.Getenv("NOTIFICATION_WORKER_ELIGIBILITY_TOKEN"),
 		ActiveEncryptionKeyID:      activeEncryptionKeyID,
 		EncryptionKeys:             encryptionKeys,
 		DataEncryptionKey:          dataEncryptionKey,
@@ -243,6 +245,10 @@ func (c Config) Validate(mode string) error {
 		}
 		return nil
 	case "worker":
+		key, err := hex.DecodeString(c.WorkerEligibilityToken)
+		if err != nil || len(key) != 32 {
+			return fmt.Errorf("NOTIFICATION_WORKER_ELIGIBILITY_TOKEN must encode 32 bytes as hex")
+		}
 		if err := c.validateEncryptionAndServiceBus(); err != nil {
 			return err
 		}

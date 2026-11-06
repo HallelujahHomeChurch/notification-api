@@ -353,6 +353,7 @@ func TestLoadRejectsNonPositiveTemplateDailyLimit(t *testing.T) {
 
 func TestValidateModeRequirements(t *testing.T) {
 	base := Config{
+		WorkerEligibilityToken:     strings.Repeat("a", 64),
 		Environment:                EnvironmentDevelopment,
 		DatabaseURL:                "postgres://notification:password@localhost:5432/notification",
 		AllowedCallers:             []string{"account-api"},
@@ -400,6 +401,8 @@ func TestValidateModeRequirements(t *testing.T) {
 		{name: "api needs hash", mode: "api", edit: func(c *Config) { c.HashKey = nil }},
 		{name: "api needs callers", mode: "api", edit: func(c *Config) { c.AllowedCallers = nil }},
 		{name: "api needs service bus", mode: "api", edit: func(c *Config) { c.QueueDriver = "memory" }},
+		{name: "worker needs eligibility token", mode: "worker", edit: func(c *Config) { c.WorkerEligibilityToken = "" }},
+		{name: "worker rejects malformed eligibility token", mode: "worker", edit: func(c *Config) { c.WorkerEligibilityToken = strings.Repeat("g", 64) }},
 		{name: "worker needs encryption", mode: "worker", edit: func(c *Config) { c.DataEncryptionKey = nil }},
 		{name: "worker needs service bus", mode: "worker", edit: func(c *Config) { c.QueueDriver = "memory" }},
 		{name: "worker needs smtp", mode: "worker", edit: func(c *Config) { c.SMTPAddr = "" }},
@@ -438,17 +441,18 @@ func TestValidateProductionRestrictionsApplyToEveryMode(t *testing.T) {
 
 func validProductionModeConfig(mode string) Config {
 	cfg := Config{
-		Environment:         EnvironmentProduction,
-		DatabaseURL:         "postgres://notification:password@localhost:5432/notification",
-		DataEncryptionKey:   make([]byte, 32),
-		QueueDriver:         "servicebus",
-		ServiceBusNamespace: "notification.servicebus.windows.net",
-		ServiceBusQueueName: "notifications-email",
-		SMTPAddr:            "smtp.example.test:587",
-		SMTPFrom:            "noreply@alive.org.tw",
-		VAPIDPublicKey:      "public-key",
-		VAPIDPrivateKey:     "private-key",
-		VAPIDSubject:        "mailto:support@alive.org.tw",
+		WorkerEligibilityToken: strings.Repeat("a", 64),
+		Environment:            EnvironmentProduction,
+		DatabaseURL:            "postgres://notification:password@localhost:5432/notification",
+		DataEncryptionKey:      make([]byte, 32),
+		QueueDriver:            "servicebus",
+		ServiceBusNamespace:    "notification.servicebus.windows.net",
+		ServiceBusQueueName:    "notifications-email",
+		SMTPAddr:               "smtp.example.test:587",
+		SMTPFrom:               "noreply@alive.org.tw",
+		VAPIDPublicKey:         "public-key",
+		VAPIDPrivateKey:        "private-key",
+		VAPIDSubject:           "mailto:support@alive.org.tw",
 	}
 	if mode == "api" {
 		cfg.AllowedCallers = []string{"account-api"}
@@ -478,7 +482,7 @@ func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		"SES_FEEDBACK_DLQ_URL", "SES_FEEDBACK_QUEUE_URL", "SES_FEEDBACK_TOPIC_ARN", "EMAIL_PROVIDER", "SES_REGION", "SES_ROLE_ARN", "SES_ENTRA_TOKEN_SCOPE", "SES_CONFIGURATION_SET", "SES_FROM", "AZURE_CLIENT_ID",
-		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_ALLOWED_CALLERS", "NOTIFICATION_ENGAGEMENT_STATUS_TOKEN",
+		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_WORKER_ELIGIBILITY_TOKEN", "NOTIFICATION_ALLOWED_CALLERS", "NOTIFICATION_ENGAGEMENT_STATUS_TOKEN",
 		"NOTIFICATION_ALLOW_DEV_CALLER_HEADER", "NOTIFICATION_DATA_ENCRYPTION_KEY", "NOTIFICATION_HASH_KEY",
 		"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "NOTIFICATION_ENCRYPTION_KEYS_JSON",
 		"NOTIFICATION_ACTIVE_HASH_KEY_ID", "NOTIFICATION_HASH_KEYS_JSON",
@@ -509,7 +513,8 @@ func TestSESWorkerConfigDoesNotRequireSMTP(t *testing.T) {
 	for key, value := range map[string]string{
 		"DATABASE_URL": "postgres://localhost/notification_test", "NOTIFICATION_DATA_ENCRYPTION_KEY": base64.StdEncoding.EncodeToString(make([]byte, 32)),
 		"SERVICEBUS_NAMESPACE": "test.servicebus.windows.net", "VAPID_PUBLIC_KEY": "public", "VAPID_PRIVATE_KEY": "private", "VAPID_SUBJECT": "mailto:test@example.test",
-		"EMAIL_PROVIDER": "ses", "SES_REGION": "ap-northeast-1", "SES_ROLE_ARN": "arn:aws:iam::123456789012:role/sender", "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
+		"NOTIFICATION_WORKER_ELIGIBILITY_TOKEN": strings.Repeat("a", 64),
+		"EMAIL_PROVIDER":                        "ses", "SES_REGION": "ap-northeast-1", "SES_ROLE_ARN": "arn:aws:iam::123456789012:role/sender", "AZURE_CLIENT_ID": "11111111-1111-1111-1111-111111111111",
 		"SES_ENTRA_TOKEN_SCOPE": "api://test/.default", "SES_CONFIGURATION_SET": "events", "SES_FROM": "sender@example.test",
 	} {
 		t.Setenv(key, value)

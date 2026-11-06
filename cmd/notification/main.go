@@ -318,7 +318,7 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 	}
 	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
 		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
-	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New("http://127.0.0.1:3500/v1.0/invoke/engagement-api/method"))
+	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New(cfg.WorkerEligibilityToken))
 
 	return workerComponents{
 		monitor:  monitorDependencies(db),
@@ -461,7 +461,7 @@ func writeStatus(w http.ResponseWriter, status int, value string) {
 
 func monitorDependencies(db *sql.DB) process {
 	return func(ctx context.Context) error {
-		dependencyhealth.Run(ctx, dependencyhealth.Check{Name: "db", Ping: db.PingContext}, dependencyhealth.Dapr(os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN")))
+		dependencyhealth.Run(ctx, dependencyhealth.Check{Name: "db", Ping: db.PingContext})
 		return nil
 	}
 }

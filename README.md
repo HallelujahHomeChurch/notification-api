@@ -48,7 +48,9 @@ Configuration is validated per command:
 
 - `migrate`: `DATABASE_URL`
 - `api`: database, encryption/hash keys, allowed callers, and Service Bus
-- `worker`: database, encryption key, Service Bus, SMTP, and VAPID settings
+- `worker`: database, encryption key, Service Bus, SMTP, VAPID settings, and the
+  dedicated 32-byte hex `NOTIFICATION_WORKER_ELIGIBILITY_TOKEN` for the
+  Engagement eligibility HTTPS request
 
 Production always rejects the development caller header and Service Bus
 connection strings; managed identity uses `SERVICEBUS_NAMESPACE`.
