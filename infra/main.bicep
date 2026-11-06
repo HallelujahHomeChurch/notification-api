@@ -13,6 +13,7 @@ param deployRuntime bool = true
 param runtimePhase string = 'all'
 param workerEligibilityVersion string = ''
 param workerDaprEnabled bool = false
+param apiDaprEnabled bool = true
 param workerRevisionSuffix string = ''
 param engagementStatusEnabled bool = false
 param engagementStatusVersion string = ''
@@ -245,13 +246,13 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && run
         transport: 'auto'
         traffic: [{ latestRevision: true, weight: 100 }]
       } : null
-      dapr: {
+      dapr: apiDaprEnabled ? {
         enabled: true
         appId: 'notification-api'
         appPort: 8081
         appProtocol: 'http'
         logLevel: 'warn'
-      }
+      } : { enabled: false }
       registries: [
         {
           server: registry.properties.loginServer

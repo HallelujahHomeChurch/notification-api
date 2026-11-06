@@ -28,6 +28,8 @@ WRITE_SCOPES = (
     ("NOTIFICATION_ACCOUNT_PRIVATE_TOKEN", "notification-account-private-token", "NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION"),
     ("NOTIFICATION_ENGAGEMENT_SEND_TOKEN", "notification-engagement-send-token", "NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION"),
 )
+DAPR_CONFIG = {"enabled": True, "appId": APP, "appPort": 8081, "appProtocol": "http",
+               "logLevel": "warn", "enableApiLogging": False}
 PLAIN_ENV = {
     "ENVIRONMENT", "PORT", "QUEUE_DRIVER", "SERVICEBUS_NAMESPACE", "SERVICEBUS_QUEUE_NAME",
     "SHUTDOWN_TIMEOUT_SECONDS", "DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME",
@@ -110,6 +112,122 @@ def write_binding(app, status_enabled, *, deployed=False):
             if (not requested or bindings != [expected]
                     or ((entries or deployed) and entries != expected_env)):
                 raise ValueError("unexpected Notification private write binding")
+
+
+def require_private_transport(app):
+    enabled, status_version = binding(app)
+    write_binding(app, enabled, deployed=True)
+    if (not enabled or app["properties"]["configuration"]["ingress"].get("fqdn") != HOST
+            or any(not os.environ.get(var) for _, _, var in WRITE_SCOPES)):
+        raise ValueError("retirement requires every scoped HTTPS binding")
+    writes = [(env, secret, VAULT_SECRETS_URI + secret + "/" + os.environ[var])
+              for env, secret, var in WRITE_SCOPES]
+    return writes + [(ENV, SECRET, VAULT_URI + status_version)]
+
+
+def require_caller_pins(app, name, pins):
+    item, = app["properties"]["template"]["containers"]
+    if item["name"] != name:
+        raise ValueError("unexpected Notification consumer container")
+    identities = {key.lower() for key in app["identity"]["userAssignedIdentities"]}
+    for env_name, secret_name, uri in pins:
+        env, = [entry for entry in item["env"] if entry["name"] == env_name]
+        secret, = [entry for entry in app["properties"]["configuration"]["secrets"] if entry["name"] == secret_name]
+        if (env.get("secretRef") != secret_name or env.get("value") is not None
+                or secret.get("keyVaultUrl") != uri or secret["identity"].lower() not in identities):
+            raise ValueError("Notification consumer credential pin does not match")
+
+
+def require_serving(app, name, expected):
+    props = app["properties"]
+    item, = props["template"]["containers"]
+    image = item["image"]
+    if (not re.fullmatch(re.escape(name) + r"--[a-z0-9-]+", expected)
+            or props["latestRevisionName"] != expected or props["latestReadyRevisionName"] != expected
+            or item["name"] != name
+            or not re.fullmatch(r"alive\.azurecr\.io/alive/" + re.escape(name) + r"@sha256:[0-9a-f]{64}", image)):
+        raise ValueError("exact Notification serving revision or image did not match")
+    ingress = props["configuration"].get("ingress")
+    if ingress:
+        traffic, = ingress["traffic"]
+        if traffic.get("weight") != 100 or not (traffic.get("latestRevision") is True or traffic.get("revisionName") == expected):
+            raise ValueError("exact Notification revision does not hold all traffic")
+    revision = az("containerapp", "revision", "show", "-g", GROUP, "-n", name, "--revision", expected,
+                  "--query", "{name:name,active:properties.active,health:properties.healthState,running:properties.runningState,provisioned:properties.provisioningState,images:properties.template.containers[].image}")
+    if (revision != {"name": expected, "active": True, "health": "Healthy", "running": "Running",
+                     "provisioned": "Provisioned", "images": [image]}):
+        raise ValueError("exact Notification serving revision is not healthy")
+    revisions = az("containerapp", "revision", "list", "-g", GROUP, "-n", name, "--all",
+                   "--query", "[?properties.active || properties.replicas > `0`].name")
+    if revisions != [expected]:
+        raise ValueError("prior Notification callers or API replicas have not drained")
+    return image
+
+
+def dapr_enabled(app):
+    config = app["properties"]["configuration"]["dapr"]
+    enabled = config["enabled"]
+    if type(enabled) is not bool or (enabled and {key: value for key, value in config.items() if value is not None} != DAPR_CONFIG):
+        raise ValueError("unexpected Notification API Dapr configuration")
+    return enabled
+
+
+def retire_dapr():
+    if os.environ["GITHUB_REF"] != "refs/heads/main" or os.environ["GITHUB_REPOSITORY"] != "HallelujahHomeChurch/notification-api":
+        raise ValueError("retirement requires the production owner workflow")
+    expected, account_revision, engagement_revision = os.environ["RETIRE_DAPR_REVISIONS"].split()
+    live = app_state()
+    enabled = dapr_enabled(live)
+    pins = require_private_transport(live)
+    account_pin, engagement_pin, status_pin = pins
+    image = require_serving(live, APP, expected)
+    worker = app_state("notification-worker")["properties"]
+    worker_revision = worker["latestReadyRevisionName"]
+    if (worker["configuration"]["dapr"]["enabled"] is not False
+            or not re.fullmatch(r"notification-worker--[a-z0-9-]+", worker_revision or "")
+            or worker_revision != worker["latestRevisionName"]):
+        raise ValueError("Notification Worker must remain healthy with Dapr disabled")
+
+    def verify_consumers():
+        for name, revision, scopes in (
+                ("account-api", account_revision, (account_pin,)),
+                ("engagement-api", engagement_revision, (engagement_pin, status_pin))):
+            caller = app_state(name)
+            require_serving(caller, name, revision)
+            require_caller_pins(caller, name, scopes)
+
+    def without_dapr(app):
+        snapshot = comparable(app)
+        snapshot["properties"]["configuration"].pop("dapr")
+        return snapshot
+
+    verify_consumers()
+    if enabled:
+        if app_state()["properties"]["latestRevisionName"] != expected:
+            raise ValueError("Notification API changed before retirement")
+        try:
+            command(["az", "containerapp", "dapr", "disable", "-g", GROUP, "-n", APP, "--only-show-errors", "-o", "none"])
+            current = app_state()
+            if (dapr_enabled(current) or without_dapr(current) != without_dapr(live)
+                    or require_private_transport(current) != pins
+                    or require_serving(current, APP, expected) != image):
+                raise ValueError("Notification API retirement readback did not match")
+            verify_consumers()
+            current_worker = app_state("notification-worker")["properties"]
+            if (current_worker["latestRevisionName"] != worker_revision
+                    or current_worker["latestReadyRevisionName"] != worker_revision
+                    or current_worker["configuration"]["dapr"]["enabled"] is not False):
+                raise ValueError("Notification Worker changed during API-only retirement")
+        except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
+            current = app_state()
+            if current["properties"]["latestRevisionName"] == expected and not dapr_enabled(current):
+                command(["az", "containerapp", "dapr", "enable", "-g", GROUP, "-n", APP,
+                         "--dapr-app-id", APP, "--dapr-app-port", "8081", "--dapr-app-protocol", "http",
+                         "--dapr-log-level", "warn", "--only-show-errors", "-o", "none"])
+                if not dapr_enabled(app_state()):
+                    raise ValueError("Notification API Dapr rollback could not be verified")
+            raise
+    print(f"Notification API sidecar disabled on {expected} ({image}); Account and Engagement HTTPS pins verified")
 
 
 def runtime(app):
@@ -330,21 +448,28 @@ def main():
         if live["properties"]["latestRevisionName"] != live["properties"]["latestReadyRevisionName"]:
             raise ValueError("Notification status requires an exact settled revision")
         enabled, version = binding(live)
+        api_dapr = dapr_enabled(live)
         deployed = sys.argv[1:] == ["verify-writes"]
-        write_binding(live, enabled, deployed=deployed)
+        if api_dapr:
+            write_binding(live, enabled, deployed=deployed)
+        else:
+            require_private_transport(live)
         if deployed:
             return
         with open(os.environ["GITHUB_ENV"], "a") as output:
             output.write(f"ENGAGEMENT_STATUS_ENABLED={str(enabled).lower()}\nENGAGEMENT_STATUS_VERSION={version}\n")
+            output.write(f"API_DAPR_ENABLED={str(api_dapr).lower()}\n")
     elif sys.argv[1:] == ["transition"]:
         transition()
+    elif sys.argv[1:] == ["retire-dapr"]:
+        retire_dapr()
     else:
-        raise ValueError("usage: engagement_status_release.py capture|verify-writes|transition")
+        raise ValueError("usage: engagement_status_release.py capture|verify-writes|transition|retire-dapr")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
         print("Notification status release rejected by identity, state, or provider verification", file=sys.stderr)
         sys.exit(1)

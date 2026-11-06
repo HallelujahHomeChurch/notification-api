@@ -92,6 +92,14 @@ bootstrap remains an explicit administrator operation.
 
 ## Engagement status-only release
 
+After Account and Engagement both use the pinned Notification HTTPS bindings,
+dispatch the existing production workflow with `retire_dapr_revisions` set to
+the exact serving Notification API, Account and Engagement revision names,
+separated by spaces. This changes only the API's sidecar configuration using
+the existing image. It verifies the same three HTTPS bindings and listener
+before and after, checks older consumer replicas are drained and preserves
+the Worker. Routine releases preserve the observed API Dapr state.
+
 The regular production release preserves the deployed private status binding.
 Use the same owner workflow on main for a status-only transition, with
 `status_transition`, `status_expected_revision`, `status_source_release_run`,
