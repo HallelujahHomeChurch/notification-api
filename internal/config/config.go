@@ -42,6 +42,8 @@ type Config struct {
 	DBConnMaxLifetime          time.Duration
 	AllowedCallers             []string
 	EngagementStatusToken      string
+	AccountPrivateToken        string
+	EngagementSendToken        string
 	WorkerEligibilityToken     string
 	AllowDevCallerHeader       bool
 	ActiveEncryptionKeyID      string
@@ -161,6 +163,8 @@ func Load() (Config, error) {
 		AllowedCallers:             parseCallers(os.Getenv("NOTIFICATION_ALLOWED_CALLERS")),
 		AllowDevCallerHeader:       allowDevCallerHeader,
 		EngagementStatusToken:      os.Getenv("NOTIFICATION_ENGAGEMENT_STATUS_TOKEN"),
+		AccountPrivateToken:        os.Getenv("NOTIFICATION_ACCOUNT_PRIVATE_TOKEN"),
+		EngagementSendToken:        os.Getenv("NOTIFICATION_ENGAGEMENT_SEND_TOKEN"),
 		WorkerEligibilityToken:     os.Getenv("NOTIFICATION_WORKER_ELIGIBILITY_TOKEN"),
 		ActiveEncryptionKeyID:      activeEncryptionKeyID,
 		EncryptionKeys:             encryptionKeys,
@@ -227,17 +231,31 @@ func (c Config) Validate(mode string) error {
 		if len(c.HashKey) < 32 {
 			return fmt.Errorf("NOTIFICATION_HASH_KEY must contain at least 32 bytes")
 		}
-		if c.EngagementStatusToken != "" {
-			key, err := hex.DecodeString(c.EngagementStatusToken)
+		seenCredentials := make(map[string]bool, 3)
+		for _, scope := range []struct{ name, token, caller string }{
+			{"NOTIFICATION_ENGAGEMENT_STATUS_TOKEN", c.EngagementStatusToken, "engagement-api"},
+			{"NOTIFICATION_ACCOUNT_PRIVATE_TOKEN", c.AccountPrivateToken, "account-api"},
+			{"NOTIFICATION_ENGAGEMENT_SEND_TOKEN", c.EngagementSendToken, "engagement-api"},
+		} {
+			if scope.token == "" {
+				continue
+			}
+			key, err := hex.DecodeString(scope.token)
 			if err != nil || len(key) != 32 {
-				return fmt.Errorf("NOTIFICATION_ENGAGEMENT_STATUS_TOKEN must encode 32 bytes as hex")
+				return fmt.Errorf("%s must encode 32 bytes as hex", scope.name)
 			}
-			if !slices.Contains(c.AllowedCallers, "engagement-api") {
-				return fmt.Errorf("Engagement status requires engagement-api in NOTIFICATION_ALLOWED_CALLERS")
+			if seenCredentials[string(key)] {
+				return fmt.Errorf("private notification API credentials must be distinct")
 			}
+			seenCredentials[string(key)] = true
+			if !slices.Contains(c.AllowedCallers, scope.caller) {
+				return fmt.Errorf("%s requires %s in NOTIFICATION_ALLOWED_CALLERS", scope.name, scope.caller)
+			}
+		}
+		if len(seenCredentials) != 0 {
 			port, err := strconv.Atoi(c.Port)
 			if err != nil || port < 1 || port > 65535 || port == EngagementStatusPort {
-				return fmt.Errorf("Engagement status requires a valid PORT distinct from %d", EngagementStatusPort)
+				return fmt.Errorf("private notification API requires a valid PORT distinct from %d", EngagementStatusPort)
 			}
 		}
 		if len(c.AllowedCallers) == 0 {

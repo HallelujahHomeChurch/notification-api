@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import copy
+import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
-from engagement_status_release import INGRESS, PROBE, SECRET, build_transition, binding, require_preview
+from engagement_status_release import DAPR_CONFIG, HOST, INGRESS, PROBE, SECRET, VAULT_SECRETS_URI, WRITE_SCOPES, build_transition, binding, require_preview, require_private_transport, require_caller_pins, require_serving, retire_dapr, write_binding
 
 
 APP_ID = "/subscriptions/sub/resourceGroups/alive/providers/Microsoft.App/containerApps/notification-api"
@@ -50,6 +52,28 @@ class StatusReleaseTests(unittest.TestCase):
         self.assertIsNone(disabled["properties"]["configuration"]["ingress"])
         self.assertEqual(disabled["properties"]["template"]["containers"][0]["probes"], [{"type": "Readiness"}])
 
+    def test_private_writes_require_existing_ingress_and_exact_credential_binding(self):
+        app = build_transition(fixture(), "enable", VERSION, "status-enable")
+        env_name, secret_name, version_var = WRITE_SCOPES[0]
+        with patch.dict(os.environ, {version_var: VERSION}):
+            write_binding(app, True)
+            with self.assertRaises(ValueError):
+                write_binding(app, False)
+            with self.assertRaises(ValueError):
+                write_binding(app, True, deployed=True)
+            app["properties"]["template"]["containers"][0]["env"].append({"name": env_name, "secretRef": secret_name})
+            secret = {"name": secret_name, "identity": IDENTITY,
+                      "keyVaultUrl": VAULT_SECRETS_URI + secret_name + "/" + VERSION}
+            app["properties"]["configuration"]["secrets"].append(secret)
+            write_binding(app, True, deployed=True)
+            with self.assertRaises(ValueError):
+                build_transition(app, "disable", "", "status-disable")
+            secret["identity"] = "/wrong-identity"
+            with self.assertRaises(ValueError):
+                write_binding(app, True)
+        with self.assertRaises(ValueError):
+            write_binding(app, True)
+
     def test_binding_and_snapshot_fail_closed(self):
         app = fixture()
         app["properties"]["configuration"]["secrets"] = [{"name": SECRET, "value": "plaintext"}]
@@ -63,6 +87,89 @@ class StatusReleaseTests(unittest.TestCase):
         app["properties"]["configuration"]["ingress"] = {"external": True, "targetPort": 8081}
         with self.assertRaises(ValueError):
             binding(app)
+
+    def test_retire_requires_every_private_scope_and_matching_consumer_pins(self):
+        app = build_transition(fixture(), "enable", VERSION, "status-enable")
+        app["properties"]["configuration"]["ingress"]["fqdn"] = HOST
+        with self.assertRaises(ValueError):
+            require_private_transport(app)
+        with patch.dict(os.environ, {scope[2]: VERSION for scope in WRITE_SCOPES}):
+            cfg = app["properties"]["configuration"]
+            env = app["properties"]["template"]["containers"][0]["env"]
+            for env_name, secret_name, _ in WRITE_SCOPES:
+                env.append({"name": env_name, "secretRef": secret_name})
+                cfg["secrets"].append({"name": secret_name, "identity": IDENTITY,
+                                       "keyVaultUrl": VAULT_SECRETS_URI + secret_name + "/" + VERSION})
+            pins = require_private_transport(app)
+            self.assertEqual(len(pins), 3)
+            consumer = copy.deepcopy(app)
+            consumer["name"] = "account-api"
+            consumer["properties"]["template"]["containers"][0]["name"] = "account-api"
+            require_caller_pins(consumer, "account-api", pins[:1])
+            next(entry for entry in consumer["properties"]["configuration"]["secrets"] if entry["name"] == pins[0][1])["keyVaultUrl"] += "wrong"
+            with self.assertRaises(ValueError):
+                require_caller_pins(consumer, "account-api", pins[:1])
+
+    def test_retire_checks_exact_replica_drain(self):
+        app = build_transition(fixture(), "enable", VERSION, "status-enable")
+        app["properties"].update(latestRevisionName=REVISION, latestReadyRevisionName=REVISION)
+        image = app["properties"]["template"]["containers"][0]["image"]
+        ready = {"name": REVISION, "active": True, "health": "Healthy", "running": "Running",
+                 "provisioned": "Provisioned", "images": [image]}
+        with patch("engagement_status_release.az", side_effect=[ready, [REVISION]]):
+            self.assertEqual(require_serving(app, "notification-api", REVISION), image)
+        with patch("engagement_status_release.az", side_effect=[ready, [REVISION, "notification-api--old"]]):
+            with self.assertRaisesRegex(ValueError, "not drained"):
+                require_serving(app, "notification-api", REVISION)
+
+    def test_retire_changes_only_api_and_restores_exact_dapr_after_failed_readback(self):
+        original = build_transition(fixture(), "enable", VERSION, "status-enable")
+        original["properties"].update(latestRevisionName=REVISION, latestReadyRevisionName=REVISION)
+        cfg = original["properties"]["configuration"]
+        cfg["ingress"]["fqdn"] = HOST
+        cfg["dapr"] = copy.deepcopy(DAPR_CONFIG)
+        env = original["properties"]["template"]["containers"][0]["env"]
+        image = original["properties"]["template"]["containers"][0]["image"]
+        versions = {scope[2]: VERSION for scope in WRITE_SCOPES}
+        for env_name, secret_name, _ in WRITE_SCOPES:
+            env.append({"name": env_name, "secretRef": secret_name})
+            cfg["secrets"].append({"name": secret_name, "identity": IDENTITY,
+                                   "keyVaultUrl": VAULT_SECRETS_URI + secret_name + "/" + VERSION})
+        worker = {"properties": {"latestRevisionName": "notification-worker--ready", "latestReadyRevisionName": "notification-worker--ready",
+                                 "configuration": {"dapr": {"enabled": False}}}}
+        inputs = dict(versions, GITHUB_REF="refs/heads/main", GITHUB_REPOSITORY="HallelujahHomeChurch/notification-api",
+                      RETIRE_DAPR_REVISIONS=REVISION + " account-api--current engagement-api--current")
+        for bad_readback in (False, True):
+            with self.subTest(bad_readback=bad_readback):
+                api = copy.deepcopy(original)
+                commands = []
+
+                def state(name="notification-api"):
+                    return copy.deepcopy(worker if name == "notification-worker" else api)
+
+                def command(args):
+                    self.assertEqual(args[0:3], ["az", "containerapp", "dapr"])
+                    self.assertEqual(args[args.index("-n") + 1], "notification-api")
+                    action = args[3]
+                    commands.append(action)
+                    if action == "disable":
+                        api["properties"]["configuration"]["dapr"] = {"enabled": False}
+                        if bad_readback:
+                            api["properties"]["template"]["scale"]["minReplicas"] = 2
+                    else:
+                        self.assertEqual(args[args.index("--dapr-app-port") + 1], "8081")
+                        api["properties"]["configuration"]["dapr"] = copy.deepcopy(DAPR_CONFIG)
+
+                with (patch.dict(os.environ, inputs), patch("engagement_status_release.app_state", side_effect=state),
+                      patch("engagement_status_release.require_serving", return_value=image),
+                      patch("engagement_status_release.require_caller_pins"), patch("engagement_status_release.command", side_effect=command)):
+                    if bad_readback:
+                        with self.assertRaisesRegex(ValueError, "readback"):
+                            retire_dapr()
+                    else:
+                        retire_dapr()
+                self.assertEqual(commands, ["disable", "enable"] if bad_readback else ["disable"])
+                self.assertEqual(api["properties"]["configuration"]["dapr"]["enabled"], bad_readback)
 
     def test_disable_preview_accepts_only_exact_provider_ingress_placeholder(self):
         live = build_transition(fixture(), "enable", VERSION, "status-enable")
@@ -90,6 +197,9 @@ class StatusReleaseTests(unittest.TestCase):
             self.assertGreater(push.index(f"- '!scripts/{path}'"), runtime_scripts)
         for path in ("cmd/**", "internal/**", "infra/**"):
             self.assertIn(f"- {path}", push)
+        self.assertIn("inputs.status_transition == '' && inputs.retire_dapr_revisions == ''", workflow)
+        self.assertIn("python3 scripts/engagement_status_release.py retire-dapr", workflow)
+        self.assertEqual(workflow.count('apiDaprEnabled="${API_DAPR_ENABLED}"'), 3)
 
     def test_preview_rejects_other_scope_and_unrelated_drift(self):
         app = fixture()

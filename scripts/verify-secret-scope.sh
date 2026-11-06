@@ -105,6 +105,28 @@ else
   fi
 fi
 
+verify_private_write() {
+  local secret="$1"
+  local version="$2"
+  [[ -n "$version" ]] || return 0
+
+  if [[ ! "$version" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "Invalid pinned version for $secret" >&2
+    exit 1
+  fi
+  local scope="${vault_id}/secrets/${secret}" uri
+  uri="$(az resource show --ids "$scope" --api-version 2024-11-01 \
+    --query properties.secretUriWithVersion -o tsv --only-show-errors)"
+  if [[ "$uri" != "https://${NOTIFICATION_VAULT_NAME}.vault.azure.net/secrets/${secret}/${version}" ]]; then
+    echo "Private write credential version did not match for $secret" >&2
+    exit 1
+  fi
+  verify_secret "$secret"
+  api_assignments+=("${scope}|${role_id}")
+}
+
+verify_private_write notification-account-private-token "${NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION:-}"
+verify_private_write notification-engagement-send-token "${NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION:-}"
 verify_assignments "$api_principal" "${api_assignments[@]}"
 worker_assignments=(
   "${vault_id}/secrets/notification-database-url|${role_id}"

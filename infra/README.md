@@ -92,6 +92,14 @@ bootstrap remains an explicit administrator operation.
 
 ## Engagement status-only release
 
+After Account and Engagement both use the pinned Notification HTTPS bindings,
+dispatch the existing production workflow with `retire_dapr_revisions` set to
+the exact serving Notification API, Account and Engagement revision names,
+separated by spaces. This changes only the API's sidecar configuration using
+the existing image. It verifies the same three HTTPS bindings and listener
+before and after, checks older consumer replicas are drained and preserves
+the Worker. Routine releases preserve the observed API Dapr state.
+
 The regular production release preserves the deployed private status binding.
 Use the same owner workflow on main for a status-only transition, with
 `status_transition`, `status_expected_revision`, `status_source_release_run`,
@@ -105,6 +113,24 @@ assignments with the reviewed `engagement-status-secret-access.bicep` template
 using the existing administrator procedure. Use a 32-byte random credential
 encoded as hex and submit the secure parameter through standard input. Supply
 the pinned version ID to both owners after verifying role scope.
+
+## Private HTTPS writes
+
+The current owner release also admits Account enqueue and cleanup and
+Engagement enqueue on the same private HTTPS listener when their individual
+credentials are configured. The existing Dapr listener keeps serving callers
+through the transition. Each credential grants access only to its documented
+method and paths.
+
+Before the one normal production release, use the existing administrator
+procedure to preview and apply `private-write-secret-access.bicep`. Generate
+two independent 32-byte random credentials encoded as hex. Submit the secure
+parameters through standard input and verify the four secret-level reader
+assignments. Set the reviewed version IDs in
+`NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION` and
+`NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION` for Notification and the
+corresponding owner CD. Deploy Notification first and verify its pinned
+bindings and serving revision before deploying either caller.
 
 ## Capacity and readiness
 

@@ -31,6 +31,9 @@ on:
       status_reviewed_plan:
         description: Exact reviewed preview fingerprint, empty for preview
         type: string
+      retire_dapr_revisions:
+        description: Exact serving Notification API, Account and Engagement HTTPS revisions, in that order separated by spaces
+        type: string
       fail_openapi_before_pointer:
         description: Test last-good API docs pointer preservation
         required: false
@@ -46,7 +49,7 @@ concurrency:
 
 jobs:
   status_configuration:
-    if: ${{ inputs.status_transition != '' && vars.PRODUCTION_DEPLOY_ENABLED == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.status_transition != '' || inputs.retire_dapr_revisions != '') && vars.PRODUCTION_DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
@@ -61,6 +64,9 @@ jobs:
       STATUS_EXPECTED_REVISION: ${{ inputs.status_expected_revision }}
       STATUS_SOURCE_RELEASE_RUN: ${{ inputs.status_source_release_run }}
       STATUS_REVIEWED_PLAN: ${{ inputs.status_reviewed_plan }}
+      RETIRE_DAPR_REVISIONS: ${{ inputs.retire_dapr_revisions }}
+      NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION: ${{ vars.NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION }}
+      NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION: ${{ vars.NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,6 +75,7 @@ jobs:
       - name: Validate owner workflow
         run: |
           [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ -z "$RETIRE_DAPR_REVISIONS" || -z "$STATUS_TRANSITION$STATUS_VERSION$STATUS_EXPECTED_REVISION$STATUS_SOURCE_RELEASE_RUN$STATUS_REVIEWED_PLAN" ]]
           python3 scripts/test-engagement-status-release.py
       - uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
@@ -76,11 +83,17 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - run: az extension add --name containerapp --upgrade --yes
-      - run: python3 scripts/engagement_status_release.py transition
+      - name: Apply the requested owner configuration action
+        run: |
+          if [[ -n "$RETIRE_DAPR_REVISIONS" ]]; then
+            python3 scripts/engagement_status_release.py retire-dapr
+          else
+            python3 scripts/engagement_status_release.py transition
+          fi
 
   verify:
     name: Verify
-    if: ${{ inputs.status_transition == '' }}
+    if: ${{ inputs.status_transition == '' && inputs.retire_dapr_revisions == '' }}
     outputs:
       image_artifact_id: ${{ steps.image_artifact.outputs.artifact-id }}
     runs-on: ubuntu-latest
@@ -183,6 +196,8 @@ jobs:
       VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
       NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION: ${{ vars.NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION }}
+      NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION: ${{ vars.NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION }}
+      NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION: ${{ vars.NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -344,8 +359,11 @@ jobs:
               notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
               deployRuntime=true \
               workerEligibilityVersion="${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION}" \
+              apiDaprEnabled="${API_DAPR_ENABLED}" \
               engagementStatusEnabled="${ENGAGEMENT_STATUS_ENABLED}" \
               engagementStatusVersion="${ENGAGEMENT_STATUS_VERSION}" \
+              accountPrivateVersion="${NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION}" \
+              engagementSendVersion="${NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION}" \
               provisionPermissions=false \
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
@@ -401,6 +419,8 @@ jobs:
       VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
       NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION: ${{ vars.NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION }}
+      NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION: ${{ vars.NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION }}
+      NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION: ${{ vars.NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -573,8 +593,11 @@ jobs:
               notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
               deployRuntime=true \
               workerEligibilityVersion="${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION}" \
+              apiDaprEnabled="${API_DAPR_ENABLED}" \
               engagementStatusEnabled="${ENGAGEMENT_STATUS_ENABLED}" \
               engagementStatusVersion="${ENGAGEMENT_STATUS_VERSION}" \
+              accountPrivateVersion="${NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION}" \
+              engagementSendVersion="${NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION}" \
               provisionPermissions=false \
               smtpAddr="${SMTP_ADDR}" \
               smtpFrom="${SMTP_FROM}" \
@@ -720,8 +743,11 @@ jobs:
                 workerDaprEnabled="$2" \
                 workerRevisionSuffix="$3-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
                 workerEligibilityVersion="${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION}" \
+                apiDaprEnabled="${API_DAPR_ENABLED}" \
                 engagementStatusEnabled="${ENGAGEMENT_STATUS_ENABLED}" \
                 engagementStatusVersion="${ENGAGEMENT_STATUS_VERSION}" \
+                accountPrivateVersion="${NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION}" \
+                engagementSendVersion="${NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION}" \
                 provisionPermissions=false \
                 smtpAddr="${SMTP_ADDR}" \
                 smtpFrom="${SMTP_FROM}" \
@@ -779,7 +805,9 @@ jobs:
           [[ "${worker_dapr}" == false ]] || { echo "Worker Dapr must be disabled" >&2; exit 1; }
           api_dapr="$(az containerapp show -g "${RESOURCE_GROUP}" -n "${API_APP_NAME}" \
             --query properties.configuration.dapr -o json --only-show-errors)"
-          jq -e '.enabled == true and .appId == "notification-api" and .appPort == 8081' <<< "${api_dapr}" >/dev/null
+          jq -e --argjson enabled "${API_DAPR_ENABLED}" '
+            .enabled == $enabled and (if $enabled then .appId == "notification-api" and .appPort == 8081 else true end)
+          ' <<< "${api_dapr}" >/dev/null
 
       - name: Verify ACA revisions
         id: smoke_runtime
@@ -787,6 +815,7 @@ jobs:
         run: |
           python3 scripts/verify-aca-revision.py "$RESOURCE_GROUP" "$API_APP_NAME" "$IMAGE_REF" "$PREVIOUS_API_REVISION"
           python3 scripts/verify-aca-revision.py "$RESOURCE_GROUP" "$WORKER_APP_NAME" "$IMAGE_REF" "$PREVIOUS_WORKER_REVISION"
+          python3 scripts/engagement_status_release.py verify-writes
 
       - name: Capture healthy release
         id: release_outputs

@@ -40,7 +40,7 @@ type process func(context.Context) error
 type closeFunc func(context.Context) error
 
 type apiComponents struct {
-	status    process
+	private   process
 	monitor   process
 	http      process
 	outbox    process
@@ -114,8 +114,8 @@ func (a app) run(ctx context.Context, args []string) error {
 			return err
 		}
 		processes := []process{components.http, components.outbox, components.retention}
-		if components.status != nil {
-			processes = append(processes, components.status)
+		if components.private != nil {
+			processes = append(processes, components.private)
 		}
 		if components.monitor != nil {
 			processes = append(processes, components.monitor)
@@ -225,23 +225,26 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 			{Window: 24 * time.Hour, Maximum: cfg.TemplateDailyLimit, TemplateWide: true},
 		},
 	})
+	cleanup := accountcleanup.New(db, cfg.HashKeys)
 	handler := httpapi.New(
 		notificationService,
 		db,
 		cfg.AllowedCallers,
 		cfg.AllowDevCallerHeader,
-		accountcleanup.New(db, cfg.HashKeys),
+		cleanup,
 	)
 	dispatcher := outbox.New(db, publisher)
 	retentionWorker := retention.New(db)
-	var engagementStatus process
-	if cfg.EngagementStatusToken != "" {
-		statusHandler := httpapi.NewEngagementStatusHandler(notificationService, cfg.EngagementStatusToken)
-		engagementStatus = httpProcess(strconv.Itoa(config.EngagementStatusPort), statusHandler, cfg.ShutdownTimeout)
+	var private process
+	if cfg.EngagementStatusToken != "" || cfg.AccountPrivateToken != "" || cfg.EngagementSendToken != "" {
+		privateHandler := httpapi.NewPrivateHandler(notificationService, cleanup, httpapi.PrivateCredentials{
+			Account: cfg.AccountPrivateToken, EngagementSend: cfg.EngagementSendToken, EngagementStatus: cfg.EngagementStatusToken,
+		})
+		private = httpProcess(strconv.Itoa(config.EngagementStatusPort), privateHandler, cfg.ShutdownTimeout)
 	}
 
 	return apiComponents{
-		status:    engagementStatus,
+		private:   private,
 		monitor:   monitorAPDependencies(db),
 		http:      httpProcess(cfg.Port, handler, cfg.ShutdownTimeout),
 		outbox:    dispatcher.Run,
