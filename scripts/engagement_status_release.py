@@ -74,7 +74,8 @@ def binding(app):
             raise ValueError("unexpected status secret binding")
     ingress = cfg.get("ingress")
     if ingress:
-        if any(ingress.get(key) != value for key, value in INGRESS.items() if key != "traffic"):
+        if (str(ingress.get("transport", "")).lower() != INGRESS["transport"]
+                or any(ingress.get(key) != value for key, value in INGRESS.items() if key not in ("traffic", "transport"))):
             raise ValueError("unexpected Notification ingress")
         if (ingress.get("fqdn", HOST) != HOST or ingress.get("additionalPortMappings")
                 or ingress.get("customDomains") or ingress.get("ipSecurityRestrictions")

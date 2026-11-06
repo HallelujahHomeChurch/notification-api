@@ -41,6 +41,8 @@ class StatusReleaseTests(unittest.TestCase):
         self.assertEqual(enabled["properties"]["configuration"]["ingress"], INGRESS)
         self.assertEqual(enabled["properties"]["template"]["containers"][0]["probes"][-1], PROBE)
         self.assertEqual(binding(enabled), (True, VERSION))
+        enabled["properties"]["configuration"]["ingress"]["transport"] = "Auto"
+        self.assertEqual(binding(enabled), (True, VERSION))
         self.assertEqual(enabled["properties"]["configuration"]["dapr"], app["properties"]["configuration"]["dapr"])
         disabled = build_transition(enabled, "disable", "", "status-disable")
         self.assertEqual(binding(disabled), (False, VERSION))
