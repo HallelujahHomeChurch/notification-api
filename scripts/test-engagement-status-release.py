@@ -54,6 +54,7 @@ class StatusReleaseTests(unittest.TestCase):
         self.assertIsNone(disabled["properties"]["configuration"]["ingress"])
         self.assertEqual(disabled["properties"]["template"]["containers"][0]["probes"], [{"type": "Readiness"}])
 
+    @patch.dict(os.environ, {version_var: "" for _, _, version_var in WRITE_SCOPES})
     def test_private_writes_require_existing_ingress_and_exact_credential_binding(self):
         app = build_transition(fixture(), "enable", VERSION, "status-enable")
         env_name, secret_name, version_var = WRITE_SCOPES[0]

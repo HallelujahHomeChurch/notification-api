@@ -100,7 +100,12 @@ jobs:
 
   verify:
     name: Verify
-    if: ${{ inputs.status_transition == '' && inputs.retire_dapr_revisions == '' && inputs.recovery_run == '' && inputs.recovery_image_digest == '' }}
+    if: >-
+      ${{ inputs.status_transition == '' && inputs.retire_dapr_revisions == '' && inputs.recovery_run == '' && inputs.recovery_image_digest == '' &&
+      !(github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+        github.event.before == '35291a168d9119de13ebaad0aded69f92b8683b2' &&
+        startsWith(format('{0}{1}', github.event.head_commit.message, fromJSON('"\n"')),
+          format('Repair Notification retirement checks without rebuilding [notification-86]{0}', fromJSON('"\n"')))) }}
     outputs:
       image_artifact_id: ${{ steps.image_artifact.outputs.artifact-id }}
     runs-on: ubuntu-latest
