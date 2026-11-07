@@ -262,10 +262,8 @@ emits an initial sample, outcome changes and a five-minute heartbeat (including
 unchanged failures). It emits
 `dependency_health` with `dependency`, `outcome` and `elapsed_ms`; no raw errors,
 DSNs, tokens or response bodies are logged. Outcomes are `ok`, `deadline`,
-`cancelled`, `unavailable` and `not_configured`. DB is monitored in every serving
-mode; Account additionally monitors Redis. Dapr outbound health is sampled only
-when the injected `DAPR_HTTP_PORT` is configured, using `DAPR_API_TOKEN` when set;
-it does not prove downstream applications are available. Redirects are rejected.
+`cancelled` and `unavailable`. DB is monitored in every serving mode.
+The retired Dapr sidecar is no longer probed.
 
 Keep `LOG_LEVEL=info` to retain baseline/recovery heartbeats; dependency failures
 are Warn. `dependency_monitor_stopped` records the worker exit. Alert on a missing
