@@ -1,5 +1,12 @@
 targetScope = 'resourceGroup'
 
+// One env source for both image releases and config-only updates.
+var runtimeOverrides = loadJsonContent('runtime-env.json').resources
+var configuredEnv = toObject(items(runtimeOverrides), resource => resource.key, resource => map(
+  filter(items(resource.value), entry => entry.value != null), entry => union({name: entry.key}, entry.value)
+))
+
+
 param location string = resourceGroup().location
 param containerAppEnvironmentName string = 'alive-env'
 param containerRegistryName string = 'alive'
@@ -276,7 +283,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && run
           name: 'notification-api'
           image: imageReference
           args: ['api']
-          env: concat(commonEnvironment, [
+          env: concat(filter(concat(commonEnvironment, [
             { name: 'AZURE_CLIENT_ID', value: apiIdentity.properties.clientId }
             { name: 'DATABASE_URL', secretRef: 'database-url-v2' }
             { name: 'NOTIFICATION_DATA_ENCRYPTION_KEY', secretRef: 'data-encryption-key-v2' }
@@ -291,7 +298,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && run
             { name: 'NOTIFICATIONS_DISABLED', value: toLower(string(notificationsDisabled)) }
           ], engagementStatusEnabled ? [
             { name: 'NOTIFICATION_ENGAGEMENT_STATUS_TOKEN', secretRef: engagementStatusSecretName }
-          ] : [], privateWriteEnvironment)
+          ] : [], privateWriteEnvironment), entry => !contains(runtimeOverrides['notification-api'], entry.name)), configuredEnv['notification-api'])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -402,7 +409,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && 
           name: 'notification-worker'
           image: imageReference
           args: ['worker']
-          env: concat(commonEnvironment, [
+          env: concat(filter(concat(commonEnvironment, [
             { name: 'AZURE_CLIENT_ID', value: workerIdentity.properties.clientId }
             { name: 'DATABASE_URL', secretRef: 'database-url-v2' }
             { name: 'NOTIFICATION_DATA_ENCRYPTION_KEY', secretRef: 'data-encryption-key-v2' }
@@ -419,7 +426,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && 
           ], smtpAuthenticationEnabled ? [
             { name: 'SMTP_USERNAME', secretRef: 'smtp-username-v2' }
             { name: 'SMTP_PASSWORD', secretRef: 'smtp-password-v2' }
-          ] : [], sesFeedbackEnvironment)
+          ] : [], sesFeedbackEnvironment), entry => !contains(runtimeOverrides['notification-worker'], entry.name)), configuredEnv['notification-worker'])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -506,14 +513,14 @@ resource migrate 'Microsoft.App/jobs@2024-03-01' = if (runtimePhase != 'worker')
           name: 'notification-migrate'
           image: imageReference
           args: ['migrate']
-          env: [
+          env: concat(filter([
             { name: 'ENVIRONMENT', value: 'production' }
             { name: 'AZURE_CLIENT_ID', value: migrateIdentity.properties.clientId }
             { name: 'DATABASE_URL', secretRef: 'database-url-v2' }
             { name: 'DB_MAX_OPEN_CONNS', value: '1' }
             { name: 'DB_MAX_IDLE_CONNS', value: '1' }
             { name: 'DB_CONN_MAX_LIFETIME', value: '30m' }
-          ]
+          ], entry => !contains(runtimeOverrides['notification-migrate'], entry.name)), configuredEnv['notification-migrate'])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'

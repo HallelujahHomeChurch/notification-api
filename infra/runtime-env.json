@@ -1,0 +1,7 @@
+{
+  "resources": {
+    "notification-api": {},
+    "notification-migrate": {},
+    "notification-worker": {}
+  }
+}
