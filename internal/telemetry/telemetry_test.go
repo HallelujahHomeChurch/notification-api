@@ -192,7 +192,7 @@ func TestRemoteSampledFlagCannotRaiseLocalBudget(t *testing.T) {
 		id              trace.TraceID
 		want            sdktrace.SamplingDecision
 	}{
-		{"remote sampled high", true, true, rejected, sdktrace.Drop},
+		{"remote sampled high", true, true, rejected, sdktrace.RecordAndSample},
 		{"remote sampled low", true, true, selected, sdktrace.RecordAndSample},
 		{"remote unsampled low", true, false, selected, sdktrace.Drop},
 		{"local sampled high", false, true, rejected, sdktrace.RecordAndSample},

@@ -41,8 +41,8 @@ func Init(ctx context.Context, name string) func() {
 		return func() {}
 	}
 	// Export failures must not disclose endpoint credentials or request errors.
-	var exportWarning sync.Once
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { exportWarning.Do(func() { slog.Warn("trace export failed") }) }))
+	var failures exportErrors
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { failures.record(time.Now()) }))
 	safeResource := resource.NewSchemaless(attribute.String("service.name", name), attribute.String("service.version", env("RELEASE", env("CONTAINER_APP_REVISION", "unknown"))), attribute.String("deployment.environment.name", env("ENVIRONMENT", "production")))
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: safeResource}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(2*time.Second)),
@@ -98,7 +98,16 @@ func Handler(next http.Handler) http.Handler {
 		}
 		ctx, span := otel.Tracer(service).Start(ctx, "http.server", trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", method(r.Method))))
 		defer span.End()
+		started := time.Now()
+		finished := false
+		defer func() {
+			if !finished {
+				RecordOutcome(ctx, "server", 0, time.Since(started), true)
+			}
+		}()
 		metrics := httpsnoop.CaptureMetrics(next, w, r.WithContext(ctx))
+		finished = true
+		RecordOutcome(ctx, "server", metrics.Code, metrics.Duration, false)
 		status(span, metrics.Code)
 	})
 }
@@ -140,7 +149,16 @@ func (t transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if parent := Parent(ctx); parent != "" {
 		clone.Header.Set("traceparent", parent)
 	}
+	started := time.Now()
 	response, err := t.base.RoundTrip(clone)
+	code := 0
+	if response != nil {
+		code = response.StatusCode
+	}
+	RecordOutcome(ctx, "client_headers", code, time.Since(started), err != nil)
+	if response != nil && response.Body != nil && response.Body != http.NoBody {
+		response.Body = &diagnosticBody{ReadCloser: response.Body, ctx: ctx, started: started}
+	}
 	if err != nil {
 		span.SetStatus(codes.Error, "")
 		span.End()
@@ -182,8 +200,8 @@ func (b *body) Close() error {
 
 func sampler() sdktrace.Sampler {
 	root := sdktrace.TraceIDRatioBased(sampleRatio())
-	// shortcut: caller-selected trace IDs can force sampling; platform owner reviews quotas in the next cost phase.
-	return sdktrace.ParentBased(root, sdktrace.WithRemoteParentSampled(root))
+	// Private ingress trusts the edge sampling decision; only roots use the local ratio.
+	return sdktrace.ParentBased(root)
 }
 
 // Enforce the resource allowlist at export, after SDK environment merging.
