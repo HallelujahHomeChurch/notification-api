@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
@@ -52,7 +53,7 @@ func newServiceBus(sender messageSender, close func(context.Context) error) *Ser
 	return &ServiceBus{sender: sender, close: close}
 }
 
-func (q *ServiceBus) Publish(ctx context.Context, messageID, deliveryID string) error {
+func (q *ServiceBus) Publish(ctx context.Context, messageID, deliveryID string) (resultErr error) {
 	if messageID == "" {
 		return errors.New("message ID is required")
 	}
@@ -66,7 +67,8 @@ func (q *ServiceBus) Publish(ctx context.Context, messageID, deliveryID string) 
 		return fmt.Errorf("encode service bus message: %w", err)
 	}
 	ctx, span := otel.Tracer("notification-api").Start(ctx, "queue.publish", trace.WithSpanKind(trace.SpanKindProducer))
-	defer span.End()
+	started := time.Now()
+	defer func() { telemetry.RecordOutcome(ctx, "queue", 0, time.Since(started), resultErr != nil); span.End() }()
 	properties := map[string]any{}
 	if parent := telemetry.Parent(ctx); parent != "" {
 		properties["traceparent"] = parent

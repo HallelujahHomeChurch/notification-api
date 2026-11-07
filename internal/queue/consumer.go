@@ -112,7 +112,7 @@ func (c *ServiceBusConsumer) Run(ctx context.Context, handle Handler) error {
 	}
 }
 
-func (c *ServiceBusConsumer) handle(ctx context.Context, message *serviceBusMessage, handle Handler) error {
+func (c *ServiceBusConsumer) handle(ctx context.Context, message *serviceBusMessage, handle Handler) (resultErr error) {
 	// Durable work starts a new trace linked only to validated transport metadata.
 	options := []trace.SpanStartOption{trace.WithNewRoot(), trace.WithSpanKind(trace.SpanKindConsumer)}
 	if parent, ok := message.message.ApplicationProperties["traceparent"].(string); ok {
@@ -122,7 +122,8 @@ func (c *ServiceBusConsumer) handle(ctx context.Context, message *serviceBusMess
 		}
 	}
 	ctx, span := otel.Tracer("notification-api").Start(ctx, "queue.process", options...)
-	defer span.End()
+	started := time.Now()
+	defer func() { telemetry.RecordOutcome(ctx, "queue", 0, time.Since(started), resultErr != nil); span.End() }()
 	handlerCtx, cancel := context.WithCancel(ctx)
 	result := make(chan error, 1)
 	go func() { result <- handle(handlerCtx, message) }()

@@ -1,7 +1,11 @@
 package queue
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"
@@ -64,5 +68,21 @@ func TestConsumerRejectsMalformedLink(t *testing.T) {
 		if len(span.Links) != 0 {
 			t.Fatal("invalid parent linked")
 		}
+	}
+}
+
+func TestUnsampledQueueFailureKeepsSafeEvidence(t *testing.T) {
+	old := otel.GetTracerProvider()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
+	otel.SetTracerProvider(provider)
+	defer func() { _ = provider.Shutdown(context.Background()); otel.SetTracerProvider(old) }()
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(oldLogger)
+	message := &serviceBusMessage{message: &azservicebus.ReceivedMessage{}}
+	err := newServiceBusConsumer(nil, nil).handle(context.Background(), message, func(context.Context, BrokerMessage) error { return errors.New("private payload") })
+	if err == nil || !strings.Contains(logs.String(), `"phase":"queue"`) || !strings.Contains(logs.String(), `"sampled":false`) || strings.Contains(logs.String(), "private payload") {
+		t.Fatalf("unsafe or missing queue evidence: %s", logs.String())
 	}
 }

@@ -3,12 +3,16 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"github.com/HallelujahHomeChurch/notification-api/internal/dbphase"
+	"github.com/HallelujahHomeChurch/notification-api/internal/telemetry"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func Open(cfg config.Config) (*sql.DB, error) {
+func Open(cfg config.Config) (*sql.DB, error)        { return open(cfg, false) }
+func OpenRuntime(cfg config.Config) (*sql.DB, error) { return open(cfg, true) }
+func open(cfg config.Config, runtime bool) (*sql.DB, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
@@ -24,7 +28,13 @@ func Open(cfg config.Config) (*sql.DB, error) {
 	if cfg.DBConnMaxLifetime <= 0 {
 		return nil, fmt.Errorf("DB_CONN_MAX_LIFETIME must be positive")
 	}
-	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	var db *sql.DB
+	var err error
+	if runtime {
+		db, err = dbphase.OpenURL(cfg.DatabaseURL, telemetry.RecordDatabaseOutcome)
+	} else {
+		db, err = sql.Open("pgx", cfg.DatabaseURL)
+	}
 	if err != nil {
 		return nil, err
 	}

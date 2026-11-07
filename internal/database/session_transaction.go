@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // A native pgx transaction has no sql.Tx auto-rollback goroutine racing session
@@ -23,7 +22,7 @@ type SessionTransaction struct {
 func BeginSessionTransaction(ctx context.Context, conn *sql.Conn) (*SessionTransaction, error) {
 	var tx pgx.Tx
 	err := conn.Raw(func(raw any) error {
-		native, ok := raw.(*stdlib.Conn)
+		native, ok := raw.(interface{ Conn() *pgx.Conn })
 		if !ok {
 			return errors.New("session transaction requires pgx")
 		}
