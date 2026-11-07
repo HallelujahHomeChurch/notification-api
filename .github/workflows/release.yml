@@ -15,6 +15,7 @@ on:
       - '!scripts/test-engagement-status-release.py'
       - '!scripts/release-static.test.sh'
       - docs/data-governance.yaml
+      - '!infra/runtime-env.json'
   workflow_dispatch:
     inputs:
       status_transition:
@@ -53,6 +54,7 @@ permissions:
 concurrency:
   group: notification-production
   cancel-in-progress: false
+  queue: max
 
 jobs:
   status_configuration:
@@ -222,6 +224,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Load latest merged runtime configuration
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/runtime_env.py refresh
       - name: Load production release settings
         shell: bash
         run: |
@@ -470,6 +476,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Load latest merged runtime configuration
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/runtime_env.py refresh
       - name: Load production release settings
         shell: bash
         run: |
