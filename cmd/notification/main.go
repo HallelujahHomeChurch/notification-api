@@ -18,6 +18,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
+	"github.com/HallelujahHomeChurch/notification-api/internal/dbphase"
 	"github.com/HallelujahHomeChurch/notification-api/internal/dependencyhealth"
 	"github.com/HallelujahHomeChurch/notification-api/internal/eligibilityclient"
 	"github.com/HallelujahHomeChurch/notification-api/internal/httpapi"
@@ -244,6 +245,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		private = httpProcess(strconv.Itoa(config.EngagementStatusPort), privateHandler, cfg.ShutdownTimeout)
 	}
 
+	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
 	return apiComponents{
 		private:   private,
 		monitor:   monitorAPDependencies(db),
@@ -251,6 +253,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		outbox:    dispatcher.Run,
 		retention: retentionWorker.Run,
 		close: func(ctx context.Context) error {
+			stopPoolStats()
 			return errors.Join(publisher.Close(ctx), db.Close())
 		},
 	}, nil
@@ -324,6 +327,7 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
 	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New(cfg.WorkerEligibilityToken))
 
+	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
 	return workerComponents{
 		monitor:  monitorDependencies(db),
 		feedback: feedbackProcess,
@@ -332,6 +336,7 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 			return consumer.Run(ctx, deliveryWorker.Process)
 		},
 		close: func(ctx context.Context) error {
+			stopPoolStats()
 			return errors.Join(consumer.Close(ctx), db.Close())
 		},
 	}, nil
@@ -353,7 +358,7 @@ func runMigrations(ctx context.Context, cfg config.Config) error {
 }
 
 func openDatabase(ctx context.Context, cfg config.Config) (*sql.DB, error) {
-	db, err := database.Open(cfg)
+	db, err := database.OpenRuntime(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
