@@ -4,7 +4,6 @@ package telemetry
 import (
 	"context"
 	"io"
-	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -30,32 +29,38 @@ const service = "notification-api"
 var parentPattern = regexp.MustCompile(`^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$`)
 
 func Init(ctx context.Context, name string) func() {
-	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" {
+	return configureExporter(ctx, name, func(ctx context.Context) (sdktrace.SpanExporter, error) { return otlptracegrpc.New(ctx) })
+}
+
+func configureExporter(ctx context.Context, name string, create func(context.Context) (sdktrace.SpanExporter, error)) func() {
+	if strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) == "" {
+		exporterState("disabled_missing_endpoint")
 		return func() {}
 	}
 	initCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	exporter, err := otlptracegrpc.New(initCtx)
+	exporter, err := create(initCtx)
 	if err != nil {
-		slog.Warn("trace exporter initialization failed")
+		exporterState("initialization_failed")
 		return func() {}
 	}
 	// Export failures must not disclose endpoint credentials or request errors.
 	var failures exportErrors
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { failures.record(time.Now()) }))
 	safeResource := resource.NewSchemaless(attribute.String("service.name", name), attribute.String("service.version", env("RELEASE", env("CONTAINER_APP_REVISION", "unknown"))), attribute.String("deployment.environment.name", env("ENVIRONMENT", "production")))
+	progress := new(exportProgress)
 	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: safeResource}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(2*time.Second)),
+		sdktrace.WithBatcher(resourceExporter{SpanExporter: exporter, resource: safeResource, progress: progress}, sdktrace.WithMaxQueueSize(512), sdktrace.WithMaxExportBatchSize(128), sdktrace.WithExportTimeout(2*time.Second)),
 		sdktrace.WithResource(safeResource),
 		sdktrace.WithSampler(sampler()),
 	)
 	otel.SetTracerProvider(provider)
+	exporterState("initialized")
 	return func() {
 		shutdownCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
 		defer stop()
-		if provider.Shutdown(shutdownCtx) != nil {
-			slog.Warn("trace exporter shutdown failed")
-		}
+		err := provider.Shutdown(shutdownCtx)
+		progress.summary(shutdownCtx, err == nil)
 	}
 }
 
@@ -208,6 +213,7 @@ func sampler() sdktrace.Sampler {
 // Enforce the resource allowlist at export, after SDK environment merging.
 type resourceExporter struct {
 	sdktrace.SpanExporter
+	progress *exportProgress
 	resource *resource.Resource
 }
 
@@ -216,7 +222,9 @@ func (e resourceExporter) ExportSpans(ctx context.Context, spans []sdktrace.Read
 	for i, span := range spans {
 		safe[i] = resourceSpan{ReadOnlySpan: span, resource: e.resource}
 	}
-	return e.SpanExporter.ExportSpans(ctx, safe)
+	err := e.SpanExporter.ExportSpans(ctx, safe)
+	e.progress.record(time.Now(), len(safe), err != nil)
+	return err
 }
 
 type resourceSpan struct {
