@@ -16,6 +16,7 @@ on:
       - '!scripts/release-static.test.sh'
       - docs/data-governance.yaml
       - '!infra/runtime-env.json'
+      - '!**/*.md'
   workflow_dispatch:
     inputs:
       status_transition:

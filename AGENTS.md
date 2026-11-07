@@ -48,3 +48,5 @@ retain the normal verification/release policy. Keep managed keys; use explicit
 `null` for removal and existing `secretRef` bindings for secrets. `RELEASE` remains
 immutable image identity. Local deployment fixtures require an executable Azure
 mock/blocker and an empty `AZURE_CONFIG_DIR`; never use real cloud credentials.
+
+Markdown-only PRs retain the branch-required verify classification check. Do not remove branch protection.
