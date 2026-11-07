@@ -13,6 +13,7 @@ import (
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/HallelujahHomeChurch/notification-api/internal/queue"
+	"github.com/HallelujahHomeChurch/notification-api/internal/telemetry"
 	"github.com/HallelujahHomeChurch/notification-api/internal/templates"
 	"github.com/google/uuid"
 )
@@ -287,7 +288,9 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		cancel()
 		return fmt.Errorf("provider for channel %q is not configured", claimed.Channel)
 	}
+	providerStarted := time.Now()
 	receipt, providerErr := provider.Send(providerCtx, payload)
+	telemetry.RecordOutcome(providerCtx, "provider", 0, time.Since(providerStarted), providerErr != nil)
 	cancel()
 	if claimed.Channel == "email" && w.email != nil {
 		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)

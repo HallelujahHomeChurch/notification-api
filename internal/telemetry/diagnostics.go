@@ -20,7 +20,7 @@ func RecordOutcome(ctx context.Context, phase string, code int, elapsed time.Dur
 		return
 	}
 	switch phase {
-	case "server", "client_headers", "client_body", "worker", "queue":
+	case "server", "client_headers", "client_body", "worker", "queue", "provider":
 	default:
 		phase = "operation"
 	}
