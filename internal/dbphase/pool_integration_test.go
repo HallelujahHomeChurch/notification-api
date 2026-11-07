@@ -48,8 +48,8 @@ func config(t *testing.T) *pgx.ConnConfig {
 		t.Skip("requires disposable loopback DB_PHASE_TEST_DSN")
 	}
 	cfg, err := pgx.ParseConfig(dsn)
-	if err != nil || cfg.Database != "db_phase_test" || (cfg.Host != "localhost" && cfg.Host != "127.0.0.1") {
-		t.Fatal("requires disposable loopback db_phase_test")
+	if err != nil || (cfg.Database != "db_phase_test" && cfg.Database != "notification_test") || (cfg.Host != "localhost" && cfg.Host != "127.0.0.1") {
+		t.Fatal("requires disposable loopback db_phase_test or notification_test")
 	}
 	return cfg
 }

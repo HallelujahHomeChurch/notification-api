@@ -15,7 +15,7 @@ func TestObservedPoolPreservesNativeSessionTransactions(t *testing.T) {
 		t.Skip("disposable PostgreSQL required")
 	}
 	cfg, err := pgx.ParseConfig(dsn)
-	if err != nil || cfg.Database != "db_phase_test" || (cfg.Host != "127.0.0.1" && cfg.Host != "localhost") {
+	if err != nil || (cfg.Database != "db_phase_test" && cfg.Database != "notification_test") || (cfg.Host != "127.0.0.1" && cfg.Host != "localhost") {
 		t.Fatal("requires isolated loopback fixture")
 	}
 	db := dbphase.Open(*cfg, func(context.Context, string, time.Duration, bool) {})

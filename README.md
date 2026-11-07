@@ -334,8 +334,7 @@ Runtime PostgreSQL diagnostics retain failed or >=250ms connection establishment
 session reset, and `db_query_lifecycle` outcomes without SQL, arguments or raw
 errors. Query lifecycle includes result consumption/closure, not only PostgreSQL
 execution time. Runtime-owned 15s global pool-pressure records report wait deltas
-or >=90% in-use occupancy and flush at shutdown; Asset API retains its existing
-pool summaries. Global counters cannot assign a wait to an individual request.
+or >=90% in-use occupancy and flush at shutdown. Global counters cannot assign a wait to an individual request.
 Migrations retain unwrapped driver connections.
 
 Runtime sessions use `CONTAINER_APP_REVISION` as PostgreSQL `application_name`:
