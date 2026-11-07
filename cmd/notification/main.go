@@ -21,6 +21,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/dependencyhealth"
 	"github.com/HallelujahHomeChurch/notification-api/internal/eligibilityclient"
 	"github.com/HallelujahHomeChurch/notification-api/internal/httpapi"
+	"github.com/HallelujahHomeChurch/notification-api/internal/jobidentity"
 	"github.com/HallelujahHomeChurch/notification-api/internal/logging"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/outbox"
@@ -342,6 +343,9 @@ func runMigrations(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := jobidentity.Check(ctx, db, "notification_migrate", 1); err != nil {
+		return err
+	}
 	if err := migrations.Run(ctx, db); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
