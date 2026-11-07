@@ -2,7 +2,7 @@
 set -euo pipefail
 # Single-image handoff; Python parses provenance and archives without executing their contents.
 python3 - "$@" <<'PY'
-import gzip, hashlib, json, os, pathlib, re, shutil, subprocess, sys, tarfile
+import gzip, hashlib, json, os, pathlib, re, shutil, subprocess, sys, tarfile, tempfile
 
 ROLES = ('api',)
 FILES = {'IMAGE_PROVENANCE.json', 'images.tar.gz', 'SHA256SUMS'}
@@ -33,7 +33,7 @@ def inspect(ref):
     return read_json(subprocess.check_output(['docker', 'image', 'inspect', ref]))[0]
 
 def archive_configs(path, images):
-    with tarfile.open(path, 'r:gz') as archive:
+    with tarfile.open(path, 'r:*') as archive:
         members = {}
         for member in archive.getmembers():
             parts = pathlib.PurePosixPath(member.name).parts
@@ -126,7 +126,14 @@ try:
         subprocess.run(['docker', 'load', '--input', str(directory / 'images.tar.gz')], check=True)
         for image in images:
             loaded = inspect(image['ref'])
-            require(loaded['Id'] == image['image_id'] and loaded['Os'] == 'linux' and loaded['Architecture'] == 'amd64', 'loaded image identity or platform mismatch')
+            require(loaded['Os'] == 'linux' and loaded['Architecture'] == 'amd64', 'loaded image platform mismatch')
+            # Docker stores may expose the OCI manifest or config as Id. Prove both resolve to the same config.
+            with tempfile.TemporaryDirectory() as temporary:
+                exported = pathlib.Path(temporary) / 'loaded.tar'
+                subprocess.run(['docker', 'save', '--output', str(exported), image['ref']], check=True)
+                loaded_record = {**image, 'image_id': loaded['Id']}
+                require(archive_configs(exported, [loaded_record]) == [image['config_id']], 'loaded image config mismatch')
+            image['image_id'] = loaded['Id']
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             for image in images:
                 output.write(image['role'] + '_image_id=' + image['image_id'] + '\n')

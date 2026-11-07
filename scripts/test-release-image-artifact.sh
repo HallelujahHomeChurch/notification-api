@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory() as temp:
         watched = root / 'bin'
         watched.mkdir()
         calls = root / 'docker-calls'
-        (watched / 'docker').write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_CALLS"\nexec "$REAL_DOCKER" "$@"\n')
+        (watched / 'docker').write_text("#!/usr/bin/env python3\nimport json, os, subprocess, sys\nargs = sys.argv[1:]\nwith open(os.environ['DOCKER_CALLS'], 'a') as stream: stream.write(' '.join(args) + '\\n')\nif args[:2] == ['image', 'inspect'] and os.environ.get('LOADED_ID'):\n    details = json.loads(subprocess.check_output([os.environ['REAL_DOCKER'], *args]))\n    details[0]['Id'] = os.environ['LOADED_ID']\n    details[0]['Architecture'] = os.environ.get('LOADED_ARCH', details[0]['Architecture'])\n    print(json.dumps(details))\nelse:\n    sys.exit(subprocess.call([os.environ['REAL_DOCKER'], *args]))\n")
         (watched / 'docker').chmod(0o755)
         env = dict(os.environ, PATH=str(watched) + os.pathsep + os.environ['PATH'], DOCKER_CALLS=str(calls), REAL_DOCKER=real_docker)
         output = root / 'outputs'
@@ -115,6 +115,18 @@ with tempfile.TemporaryDirectory() as temp:
         for image_id in ids:
             assert subprocess.check_output([real_docker, 'image', 'inspect', '--format', '{{.Os}}/{{.Architecture}}', image_id], text=True).strip() == 'linux/amd64'
         print('PASS cold Docker round-trip and exact producer identities')
+        config_id = json.loads((good / 'IMAGE_PROVENANCE.json').read_text())['images'][0]['config_id']
+        classic = dict(env, LOADED_ID=config_id)
+        output.write_text('')
+        subprocess.run(['bash', str(helper), 'load', str(good), commit], env=classic, check=True)
+        assert output.read_text() == 'api_image_id=' + config_id + '\n'
+        for override in [dict(LOADED_ID='sha256:' + '0' * 64), dict(LOADED_ID=config_id, LOADED_ARCH='arm64')]:
+            output.write_text('')
+            result = subprocess.run(['bash', str(helper), 'load', str(good), commit], env=dict(env, **override), capture_output=True)
+            assert result.returncode != 0 and not output.read_text(), 'loaded identity/platform mismatch accepted'
+        print('PASS OCI-to-classic identity and reject unrelated loaded identity/platform')
+        output.write_text(''.join(role + '_image_id=' + image_id + '\n' for role, image_id in zip(roles, ids)))
+
         if len(sys.argv) == 2:
             destination = pathlib.Path(sys.argv[1])
             shutil.copytree(good, destination)
