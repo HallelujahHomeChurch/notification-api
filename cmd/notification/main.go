@@ -471,7 +471,7 @@ func monitorDependencies(db *sql.DB) process {
 
 func monitorAPDependencies(db *sql.DB) process {
 	return func(ctx context.Context) error {
-		dependencyhealth.RunAP(ctx, dependencyhealth.Check{Name: "db", Ping: db.PingContext}, dependencyhealth.Dapr(os.Getenv("DAPR_HTTP_PORT"), os.Getenv("DAPR_API_TOKEN")))
+		dependencyhealth.RunAP(ctx, dependencyhealth.Check{Name: "db", Ping: db.PingContext})
 		return nil
 	}
 }

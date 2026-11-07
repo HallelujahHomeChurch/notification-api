@@ -5,9 +5,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +19,7 @@ func TestSampleClassifiesWithoutRawError(t *testing.T) {
 		err     error
 		outcome string
 	}{
-		{nil, "ok"}, {context.DeadlineExceeded, "deadline"}, {context.Canceled, "cancelled"}, {errNotConfigured, "not_configured"}, {errors.New("secret postgres://token@host/query"), "unavailable"},
+		{nil, "ok"}, {context.DeadlineExceeded, "deadline"}, {context.Canceled, "cancelled"}, {errors.New("secret postgres://token@host/query"), "unavailable"},
 	} {
 		logs.Reset()
 		sample(context.Background(), Check{Name: "db", Ping: func(ctx context.Context) error {
@@ -55,33 +52,10 @@ func TestRunCancelsAndDoesNotStartAnotherProbe(t *testing.T) {
 	}
 }
 
-func TestDaprProbeDoesNotFollowRedirectOrLeakToken(t *testing.T) {
-	called := false
-	destination := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
-	defer destination.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("dapr-api-token") != "test-token" {
-			t.Error("token missing")
-		}
-		http.Redirect(w, r, destination.URL, http.StatusFound)
-	}))
-	defer server.Close()
-	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
-	if err := Dapr(port, "test-token").Ping(context.Background()); err == nil {
-		t.Fatal("redirect accepted")
-	}
-	if called {
-		t.Fatal("redirect followed")
-	}
-	if !errors.Is(Dapr("", "").Ping(context.Background()), errNotConfigured) {
-		t.Fatal("missing configuration")
-	}
-}
-
 func TestObservationTransitionsAndHeartbeat(t *testing.T) {
 	now := time.Unix(1000, 0)
-	var db, dapr observation
-	if !db.due("ok", now) || !dapr.due("ok", now) {
+	var db, other observation
+	if !db.due("ok", now) || !other.due("ok", now) {
 		t.Fatal("initial samples missing")
 	}
 	if db.due("ok", now.Add(30*time.Second)) {
@@ -90,7 +64,7 @@ func TestObservationTransitionsAndHeartbeat(t *testing.T) {
 	if !db.due("deadline", now.Add(time.Minute)) {
 		t.Fatal("outage missing")
 	}
-	if dapr.due("ok", now.Add(time.Minute)) {
+	if other.due("ok", now.Add(time.Minute)) {
 		t.Fatal("cross-dependency state interference")
 	}
 	if db.due("deadline", now.Add(5*time.Minute)) {
@@ -102,7 +76,7 @@ func TestObservationTransitionsAndHeartbeat(t *testing.T) {
 	if !db.due("ok", now.Add(6*time.Minute+time.Second)) {
 		t.Fatal("recovery missing")
 	}
-	if !dapr.due("ok", now.Add(5*time.Minute)) {
+	if !other.due("ok", now.Add(5*time.Minute)) {
 		t.Fatal("healthy heartbeat missing")
 	}
 	if !(*observation)(nil).due("ok", now) {
