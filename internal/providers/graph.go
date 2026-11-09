@@ -58,6 +58,8 @@ func NewGraph(config GraphConfig) (*Graph, error) {
 
 func (*Graph) Family() string { return "graph" }
 
+func (g *Graph) SenderMailboxID() string { return g.config.SenderUserID }
+
 // Prepare completes MIME and token work before the worker reserves a send permit.
 func (g *Graph) Prepare(ctx context.Context, payload DeliveryPayload) (func(context.Context) (ProviderReceipt, error), error) {
 	if err := validateEmailPayload(payload); err != nil {

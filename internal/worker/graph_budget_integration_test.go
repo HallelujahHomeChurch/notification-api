@@ -199,7 +199,7 @@ func TestGraphWorkersShareOneInFlightFence(t *testing.T) {
 	makeDelivery := func() string {
 		t.Helper()
 		id := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
-		if _, err := db.Exec(`UPDATE notification_deliveries SET provider='graph' WHERE id=$1`, id); err != nil {
+		if _, err := db.Exec(`UPDATE notification_deliveries SET provider='graph',graph_mailbox_id=$2 WHERE id=$1`, id, fixtureGraphMailboxID); err != nil {
 			t.Fatal(err)
 		}
 		return id
@@ -239,6 +239,12 @@ func TestGraphWorkersShareOneInFlightFence(t *testing.T) {
 type graphIntegrationProvider struct{ integrationProvider }
 
 func (*graphIntegrationProvider) Family() string { return "graph" }
+
+func (*graphIntegrationProvider) SenderMailboxID() string { return fixtureGraphMailboxID }
+
+func (p *graphIntegrationProvider) Prepare(_ context.Context, payload providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error) {
+	return func(ctx context.Context) (providers.ProviderReceipt, error) { return p.Send(ctx, payload) }, nil
+}
 
 func graphBudgetClaim(t *testing.T, p *emailPolicy, template string) claim {
 	t.Helper()

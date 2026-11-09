@@ -36,11 +36,21 @@ func TestGraphForbiddenDurablyHaltsSubmission(t *testing.T) {
 	}
 }
 
+const fixtureGraphMailboxID = "0b3e6b27-bb63-441b-8a1c-214827219289"
+
 type preparedGraphFixture struct {
+	mailbox string
 	prepare func(context.Context, providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error)
 }
 
 func (*preparedGraphFixture) Family() string { return "graph" }
+
+func (f *preparedGraphFixture) SenderMailboxID() string {
+	if f.mailbox != "" {
+		return f.mailbox
+	}
+	return fixtureGraphMailboxID
+}
 
 func (*preparedGraphFixture) Send(context.Context, providers.DeliveryPayload) (providers.ProviderReceipt, error) {
 	panic("worker called Graph without preparing the request")
@@ -54,7 +64,7 @@ func TestGraphWorkerChecksPermitAfterPreparation(t *testing.T) {
 	db := workerTestDatabase(t)
 	ctx := t.Context()
 	id := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
-	if _, err := db.ExecContext(ctx, `UPDATE notification_deliveries SET provider='graph' WHERE id=$1`, id); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE notification_deliveries SET provider='graph',graph_mailbox_id=$2 WHERE id=$1`, id, fixtureGraphMailboxID); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -85,7 +95,7 @@ func TestGraphPreparationFailureDoesNotConsumeSubmission(t *testing.T) {
 	db := workerTestDatabase(t)
 	ctx := t.Context()
 	id := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
-	if _, err := db.ExecContext(ctx, `UPDATE notification_deliveries SET provider='graph' WHERE id=$1`, id); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE notification_deliveries SET provider='graph',graph_mailbox_id=$2 WHERE id=$1`, id, fixtureGraphMailboxID); err != nil {
 		t.Fatal(err)
 	}
 	f := &preparedGraphFixture{prepare: func(context.Context, providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error) {

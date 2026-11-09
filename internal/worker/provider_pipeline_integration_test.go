@@ -1,0 +1,200 @@
+//go:build integration
+
+package worker
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
+	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
+	"github.com/HallelujahHomeChurch/notification-api/internal/httpapi"
+	"github.com/HallelujahHomeChurch/notification-api/internal/outbox"
+	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
+	"github.com/HallelujahHomeChurch/notification-api/internal/service"
+	"github.com/HallelujahHomeChurch/notification-api/internal/store"
+	"github.com/google/uuid"
+)
+
+type pipelinePublisher func(context.Context, string, string) error
+
+func (f pipelinePublisher) Publish(ctx context.Context, messageID, deliveryID string) error {
+	return f(ctx, messageID, deliveryID)
+}
+
+func TestNotificationProviderNeutralPipeline(t *testing.T) {
+	db := workerTestDatabase(t)
+	ctx := t.Context()
+	keys := map[string][]byte{"legacy-v1": testKey}
+	cfg := service.Config{EmailProvider: "graph", GraphMailboxID: fixtureGraphMailboxID, DataEncryptionKey: testKey, HashKey: testKey}
+	api := func(evidence bool) http.Handler {
+		svc := service.New(store.New(db, testKey).WithDeliveryEvidence(evidence), cfg)
+		return httpapi.New(svc, db, []string{"account-api", "engagement-api"}, false, accountcleanup.New(db, keys))
+	}
+	legacyAPI, evidenceAPI := api(false), api(true)
+	request := func(h http.Handler, caller, method, path, key string, body any, wantStatus int) map[string]any {
+		t.Helper()
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(method, path, bytes.NewReader(encoded)).WithContext(ctx)
+		r.Header.Set("Dapr-Caller-App-Id", caller)
+		r.Header.Set("Idempotency-Key", key)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != wantStatus {
+			t.Fatalf("%s %s status=%d, want %d: %s", method, path, w.Code, wantStatus, w.Body)
+		}
+		var envelope struct{ Data map[string]any }
+		if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		return envelope.Data
+	}
+
+	var dispatched string
+	dispatcher := outbox.New(db, pipelinePublisher(func(_ context.Context, _, id string) error {
+		dispatched = id
+		return nil
+	}))
+	dispatch := func() *fakeMessage {
+		t.Helper()
+		dispatched = ""
+		if ok, err := dispatcher.DispatchOne(ctx); err != nil || !ok || dispatched == "" {
+			t.Fatalf("outbox dispatch = %v, %v", ok, err)
+		}
+		return &fakeMessage{id: dispatched}
+	}
+
+	subject := uuid.NewString()
+	target := "fixture@example.test"
+	email := contracts.SendRequest{
+		TemplateID: "account.verify-email", Channel: "email", Locale: "en",
+		Target: contracts.Target{Type: "email", Address: target}, SubjectAccountID: subject,
+		Resource: contracts.Resource{Type: "account", ID: subject},
+		Payload:  map[string]string{"verifyUrl": "https://account.alive.org.tw/verify-email?token=fixture"},
+	}
+	created := request(legacyAPI, "account-api", http.MethodPost, "/priv/notifications/send", "fixture-graph", email, http.StatusAccepted)
+	id, ok := created["messageId"].(string)
+	if !ok || id == "" || created["status"] != "queued" {
+		t.Fatalf("queued email = %#v", created)
+	}
+	replay := request(legacyAPI, "account-api", http.MethodPost, "/priv/notifications/send", "fixture-graph", email, http.StatusAccepted)
+	if replay["messageId"] != id || replay["replayed"] != true {
+		t.Fatalf("admission replay = %#v", replay)
+	}
+
+	alternate := cfg
+	alternate.GraphMailboxID = uuid.NewString()
+	changedConfigReplay, err := service.New(store.New(db, testKey), alternate).Send(ctx, "account-api", "fixture-graph", email)
+	if err != nil || !changedConfigReplay.Replayed || changedConfigReplay.MessageID != id {
+		t.Fatalf("mailbox change repinned an existing delivery: %#v, %v", changedConfigReplay, err)
+	}
+	message := dispatch()
+	if ok, err := dispatcher.DispatchOne(ctx); err != nil || ok {
+		t.Fatalf("idempotent replay created duplicate outbox work: %v, %v", ok, err)
+	}
+
+	graphCalls := 0
+	graph := &preparedGraphFixture{prepare: func(context.Context, providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error) {
+		return func(context.Context) (providers.ProviderReceipt, error) {
+			graphCalls++
+			return providers.ProviderReceipt{Provider: "graph", AcceptedAt: time.Now(), ProviderRequestID: uuid.NewString()}, nil
+		}, nil
+	}}
+	push := &fakeProvider{receipt: providers.ProviderReceipt{Provider: "webpush", ProviderMessageID: "fixture-push"}}
+	instance := NewWithProviders(db, map[string]providers.Provider{"email": graph, "web_push": push}, keys).
+		WithEmailLimits(db, EmailLimits{GraphDailyBudget: 10})
+
+	// The provider has accepted, but the final sent-state transaction fails once.
+	if _, err := db.ExecContext(ctx, `
+		CREATE FUNCTION fail_mark_sent() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'synthetic sent-state failure'; END $$;
+		CREATE TRIGGER fail_mark_sent BEFORE UPDATE OF status ON notification_deliveries
+		FOR EACH ROW WHEN (NEW.status='sent') EXECUTE FUNCTION fail_mark_sent()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Process(ctx, message); err == nil || graphCalls != 1 || message.completed != 0 {
+		t.Fatalf("receipt failure sends=%d complete=%d error=%v", graphCalls, message.completed, err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TRIGGER fail_mark_sent ON notification_deliveries`); err != nil {
+		t.Fatal(err)
+	}
+	recoveryGraph := &preparedGraphFixture{
+		mailbox: uuid.NewString(),
+		prepare: func(context.Context, providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error) {
+			t.Fatal("stored acceptance must recover before mailbox routing or credential preparation")
+			return nil, nil
+		},
+	}
+	recovery := NewWithProviders(db, map[string]providers.Provider{"email": recoveryGraph, "web_push": push}, keys).
+		WithEmailLimits(db, EmailLimits{GraphDailyBudget: 10})
+	if err := recovery.Process(ctx, message); err != nil || graphCalls != 1 || message.completed != 1 {
+		t.Fatalf("receipt recovery sends=%d complete=%d error=%v", graphCalls, message.completed, err)
+	}
+	path := "/priv/notifications/" + id
+	oldStatus := request(legacyAPI, "account-api", http.MethodGet, path, "", nil, http.StatusOK)
+	newStatus := request(evidenceAPI, "account-api", http.MethodGet, path, "", nil, http.StatusOK)
+	if oldStatus["status"] != "sent" || oldStatus["providerAcceptedAt"] != nil || oldStatus["safeToRetry"] != false ||
+		newStatus["status"] != "sent" || newStatus["providerAcceptedAt"] == nil || newStatus["deliveryOutcome"] != "unknown" {
+		t.Fatalf("status compatibility = %#v, %#v", oldStatus, newStatus)
+	}
+	request(legacyAPI, "engagement-api", http.MethodGet, path, "", nil, http.StatusNotFound)
+
+	webPush := contracts.SendRequest{
+		TemplateID: "engagement.web-push", Channel: "web_push", Locale: "en",
+		Target:   contracts.Target{Type: "web_push", Address: `{"endpoint":"https://push.example.test/sub","keys":{"p256dh":"fixture","auth":"fixture"}}`},
+		Resource: contracts.Resource{Type: "campaign", ID: uuid.NewString()},
+		Payload:  map[string]string{"title": "Fixture", "body": "Fixture", "clickBehavior": "dismiss"},
+	}
+	request(legacyAPI, "engagement-api", http.MethodPost, "/priv/notifications/send", "fixture-push", webPush, http.StatusAccepted)
+	pushMessage := dispatch()
+	if err := instance.Process(ctx, pushMessage); err != nil || push.calls != 1 || pushMessage.completed != 1 || graphCalls != 1 {
+		t.Fatalf("push separation: push=%d graph=%d error=%v", push.calls, graphCalls, err)
+	}
+	cleanup := request(legacyAPI, "account-api", http.MethodPost, "/priv/account-cleanup", "",
+		accountcleanup.AccountCleanupRequest{UserID: subject, Email: target, IdempotencyKey: "erase-fixture"}, http.StatusOK)
+	if cleanup["status"] != "completed" {
+		t.Fatalf("cleanup = %#v", cleanup)
+	}
+	var encryptedBytes int
+	if err := db.QueryRowContext(ctx, `SELECT octet_length(target_ciphertext)+octet_length(payload_ciphertext) FROM notification_messages WHERE id=$1`, id).Scan(&encryptedBytes); err != nil || encryptedBytes != 0 {
+		t.Fatalf("cleanup ciphertext bytes=%d error=%v", encryptedBytes, err)
+	}
+}
+
+func TestLegacyWorkerMustBeFencedFromGraphPins(t *testing.T) {
+	db := workerTestDatabase(t)
+	id := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
+	if _, err := db.ExecContext(t.Context(), `UPDATE notification_deliveries SET provider='graph',graph_mailbox_id=$2 WHERE id=$1`, id, fixtureGraphMailboxID); err != nil {
+		t.Fatal(err)
+	}
+	smtp := &fakeProvider{}
+	message := &fakeMessage{id: id}
+	instance := New(db, smtp, testKey).WithEmailLimits(db, EmailLimits{PerMinute: 20, PerHour: 100})
+	if err := instance.Process(t.Context(), message); err != nil || smtp.calls != 0 || message.deadLetterReason != "provider_mismatch" {
+		t.Fatalf("legacy worker sent Graph pin or missed routing fence: calls=%d reason=%q err=%v", smtp.calls, message.deadLetterReason, err)
+	}
+}
+
+func TestGraphWorkerRejectsDifferentPinnedMailbox(t *testing.T) {
+	db := workerTestDatabase(t)
+	id := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
+	if _, err := db.ExecContext(t.Context(), `UPDATE notification_deliveries SET provider='graph',graph_mailbox_id=$2 WHERE id=$1`, id, uuid.New()); err != nil {
+		t.Fatal(err)
+	}
+	f := &preparedGraphFixture{prepare: func(context.Context, providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error) {
+		t.Fatal("attempted preparation for a different pinned sender mailbox")
+		return nil, nil
+	}}
+	message := &fakeMessage{id: id}
+	if err := New(db, f, testKey).WithEmailLimits(db, EmailLimits{GraphDailyBudget: 10}).Process(t.Context(), message); err != nil || message.deadLetterReason != "provider_mismatch" {
+		t.Fatalf("wrong mailbox reason=%q err=%v", message.deadLetterReason, err)
+	}
+}

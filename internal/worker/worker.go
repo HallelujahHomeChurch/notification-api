@@ -36,6 +36,7 @@ var ErrLeaseLost = errors.New("delivery lease lost")
 
 type claim struct {
 	DeliveryID             string
+	GraphMailboxID         string
 	MessageID              string
 	TemplateID             string
 	TemplateVersion        int
@@ -240,11 +241,21 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	provider, providerOK := w.providers[claimed.Channel]
 	var providerErr error
 	var prepared func(context.Context) (providers.ProviderReceipt, error)
-	if graph, ok := provider.(interface {
+	graph, canPrepareGraph := provider.(interface {
+		SenderMailboxID() string
 		Prepare(context.Context, providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error)
-	}); ok {
-		if claimed.Channel != "email" || w.email == nil || w.email.provider != "graph" {
-			return errors.New("prepared Graph delivery requires the Graph email budget")
+	})
+	graphBudget := claimed.Channel == "email" && w.email != nil && w.email.provider == "graph"
+	if canPrepareGraph || graphBudget {
+		if !canPrepareGraph || !graphBudget {
+			return errors.New("Graph delivery requires a prepared provider and its email budget")
+		}
+		if claimed.GraphMailboxID == "" || claimed.GraphMailboxID != graph.SenderMailboxID() {
+			if err := w.repository.markDeadLettered(ctx, claimed, "provider_mismatch"); err != nil {
+				return err
+			}
+			leaseHeld = false
+			return message.DeadLetter(ctx, "provider_mismatch")
 		}
 		prepareCtx, cancel := context.WithTimeout(ctx, sendTimeout)
 		prepared, providerErr = graph.Prepare(prepareCtx, payload)
