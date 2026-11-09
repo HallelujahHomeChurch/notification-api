@@ -237,13 +237,30 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		}
 	}
 
+	provider, providerOK := w.providers[claimed.Channel]
+	var providerErr error
+	var prepared func(context.Context) (providers.ProviderReceipt, error)
+	if graph, ok := provider.(interface {
+		Prepare(context.Context, providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error)
+	}); ok {
+		if claimed.Channel != "email" || w.email == nil || w.email.provider != "graph" {
+			return errors.New("prepared Graph delivery requires the Graph email budget")
+		}
+		prepareCtx, cancel := context.WithTimeout(ctx, sendTimeout)
+		prepared, providerErr = graph.Prepare(prepareCtx, payload)
+		cancel()
+		if providerErr == nil && prepared == nil {
+			return errors.New("Graph preparation did not return a submission")
+		}
+	}
+
 	var releaseGraph func()
 	defer func() {
 		if releaseGraph != nil {
 			releaseGraph()
 		}
 	}()
-	if claimed.Channel == "email" && w.email != nil {
+	if providerErr == nil && claimed.Channel == "email" && w.email != nil {
 		var delay time.Duration
 		graph := w.email.provider == "graph"
 		if graph {
@@ -312,26 +329,31 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 			return message.Complete(ctx)
 		}
 	}
-	providerCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-	provider, ok := w.providers[claimed.Channel]
-	if !ok {
-		cancel()
-		return fmt.Errorf("provider for channel %q is not configured", claimed.Channel)
-	}
-	providerStarted := time.Now()
-	receipt, providerErr := provider.Send(providerCtx, payload)
-	telemetry.RecordOutcome(providerCtx, "provider", 0, time.Since(providerStarted), providerErr != nil)
-	cancel()
-	if claimed.Channel == "email" && w.email != nil {
-		finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
-		recordErr := w.email.finish(finishCtx, claimed, receipt, providerErr)
-		finish()
-		if recordErr != nil {
-			return fmt.Errorf("persist email attempt: %w", recordErr)
+	var receipt providers.ProviderReceipt
+	if providerErr == nil {
+		if !providerOK {
+			return fmt.Errorf("provider for channel %q is not configured", claimed.Channel)
 		}
-		if releaseGraph != nil {
-			releaseGraph()
-			releaseGraph = nil
+		providerCtx, cancel := context.WithTimeout(ctx, sendTimeout)
+		providerStarted := time.Now()
+		if prepared == nil {
+			receipt, providerErr = provider.Send(providerCtx, payload)
+		} else {
+			receipt, providerErr = prepared(providerCtx)
+		}
+		telemetry.RecordOutcome(providerCtx, "provider", 0, time.Since(providerStarted), providerErr != nil)
+		cancel()
+		if claimed.Channel == "email" && w.email != nil {
+			finishCtx, finish := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+			recordErr := w.email.finish(finishCtx, claimed, receipt, providerErr)
+			finish()
+			if recordErr != nil {
+				return fmt.Errorf("persist email attempt: %w", recordErr)
+			}
+			if releaseGraph != nil {
+				releaseGraph()
+				releaseGraph = nil
+			}
 		}
 	}
 	if providerErr == nil {

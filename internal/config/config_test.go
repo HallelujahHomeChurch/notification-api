@@ -10,6 +10,16 @@ import (
 	"time"
 )
 
+func TestGraphRuntimeSelectionRemainsUnavailable(t *testing.T) {
+	for _, mode := range []string{"api", "worker"} {
+		cfg := validProductionModeConfig(mode)
+		cfg.EmailProvider = "graph"
+		if err := cfg.Validate(mode); err == nil || !strings.Contains(err.Error(), "EMAIL_PROVIDER") {
+			t.Fatalf("%s accepted Graph runtime selection: %v", mode, err)
+		}
+	}
+}
+
 func TestDeliveryEvidenceConfigDefaultsOff(t *testing.T) {
 	clearConfigEnv(t)
 	for _, tc := range []struct {
