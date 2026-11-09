@@ -170,7 +170,7 @@ func (s postgresStore) claimFenced(
 		FROM candidate, notification_messages AS message
 		WHERE delivery.id=candidate.id AND message.id=delivery.message_id
 			RETURNING delivery.id, COALESCE(delivery.graph_mailbox_id::text,''), message.id, message.template_id, message.template_version,
-			          delivery.channel, delivery.attempt_count, delivery.failure_count,
+			          delivery.channel, delivery.provider, delivery.attempt_count, delivery.failure_count,
 			          message.encryption_key_id, message.target_ciphertext, message.payload_ciphertext,
 			          COALESCE(message.eligibility_campaign_id::text,''), COALESCE(message.eligibility_recipient_id::text,''), message.caller_app_id, message.idempotency_key`,
 		deliveryID,
@@ -182,6 +182,7 @@ func (s postgresStore) claimFenced(
 		&claimed.TemplateID,
 		&claimed.TemplateVersion,
 		&claimed.Channel,
+		&claimed.Provider,
 		&claimed.Attempt,
 		&claimed.FailureCount,
 		&claimed.EncryptionKeyID,
@@ -372,7 +373,7 @@ func (s postgresStore) markRetry(
 			SET status='queued',
 			    next_attempt_at=clock_timestamp()+($3::bigint*interval '1 microsecond'),
 			    last_error_code=$4,
-       failure_count=failure_count+CASE WHEN channel='email' AND $4 IN ('rate_limited','email_paused') THEN 0 ELSE 1 END,
+       failure_count=failure_count+CASE WHEN channel='email' AND $4 IN ('rate_limited','email_paused','graph_bulk_disabled') THEN 0 ELSE 1 END,
        lease_expires_at=NULL,
 			    updated_at=clock_timestamp()
 			WHERE id=$1 AND status='sending' AND attempt_count=$2

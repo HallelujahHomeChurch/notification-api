@@ -764,12 +764,24 @@ window and separate cooldown. A started or uncertain attempt consumes a Graph
 reservation. An expired permit that is known to have reached no provider call
 is deferred. An unrecorded finish retains a bounded in-flight hold.
 
-The source-only Graph adapter prepares MIME and the explicit managed-identity
+The Graph adapter prepares MIME and the explicit managed-identity
 token before reserving a permit. The worker checks the permit immediately
 before the prepared HTTP POST. A 403 records a durable Graph-only configuration
 halt. Any eventual operator reset requires evidence of repaired mailbox rights,
 a reviewed preview and authorization. A restart alone cannot resume submissions.
-Runtime Graph selection and daily limit configuration remain disabled.
+Current release manifests leave Graph disabled. A future approved preview must
+set worker and API controls independently.
+
+| Process | Reviewed configuration |
+| --- | --- |
+| Worker | `NOTIFICATION_GRAPH_WORKER_ENABLED=true`, `NOTIFICATION_GRAPH_SENDER_MAILBOX_ID`, `NOTIFICATION_GRAPH_WORKER_CLIENT_ID`, `NOTIFICATION_GRAPH_FROM`, optional `NOTIFICATION_GRAPH_FROM_NAME`, positive `NOTIFICATION_GRAPH_DAILY_BUDGET`, and optional smaller `NOTIFICATION_GRAPH_DAILY_RESERVE`. Keep the existing legacy `EMAIL_PROVIDER`. |
+| API | `EMAIL_PROVIDER=graph` and the same `NOTIFICATION_GRAPH_SENDER_MAILBOX_ID`. The API requires only the mailbox pin and rejects worker identity mode. |
+
+The worker routes each delivery by its persisted provider and validates the
+exact mailbox before obtaining a token. Existing SMTP/SES pins retain their
+provider and budget. Graph admissions accept transactional templates only.
+Graph bulk remains unavailable until verified feedback and a separate review.
+
 Confirm a producer-to-provider p95 of at most 10 seconds with 10,000 bulk
 deliveries already queued and a Web Push lane present before enabling Graph bulk.
 The existing FIFO route provides no transactional priority for messages already
@@ -814,7 +826,7 @@ suppression safety pass.
 
 ### Provider and reader compatibility
 
-The source-only Graph admission path stores the canonical mailbox ID with the
+The Graph admission path stores the canonical mailbox ID with the
 delivery. Idempotent requests retain their original provider and mailbox pins.
 A prepared Graph worker checks the exact mailbox before token acquisition and
 checks it again with the submission permit. A legacy worker that receives a
@@ -825,14 +837,14 @@ the queue fence or a drain.
 The local pipeline covers the private send request, durable outbox, fake
 broker/provider, accepted receipt recovery after a failing sent-state write,
 caller-scoped status, Web Push separation and Account cleanup. Status evidence
-remains off by default. Existing receipts remain readable. Graph selection,
-live Service Bus behavior, mailbox rights, feedback, fair queue latency and
-real delivery require separate validation.
+remains off by default. Existing receipts remain readable. Effective configuration, live Service Bus
+behavior, mailbox rights, feedback, fair queue latency and real delivery require
+separate validation.
 
 ### Cutover evidence and rollback decisions
 
-This checklist prepares a future change. The source-only Graph adapters in the
-current stack cannot be selected by the deployed runtime configuration.
+This checklist prepares a future change. Current release manifests leave Graph
+admission and dispatch disabled.
 
 - Record the approved change and test purpose. Capture the exact serving API and
   worker image/revision, effective SMTP/SES pins, pending and dead-lettered work,

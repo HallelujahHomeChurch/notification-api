@@ -8,15 +8,51 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 )
 
-func TestGraphRuntimeSelectionRemainsUnavailable(t *testing.T) {
-	for _, mode := range []string{"api", "worker"} {
-		cfg := validProductionModeConfig(mode)
-		cfg.EmailProvider = "graph"
-		if err := cfg.Validate(mode); err == nil || !strings.Contains(err.Error(), "EMAIL_PROVIDER") {
-			t.Fatalf("%s accepted Graph runtime selection: %v", mode, err)
-		}
+func TestGraphRuntimeControlsAreIndependent(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("NOTIFICATION_GRAPH_DAILY_BUDGET", "unused")
+	t.Setenv("NOTIFICATION_GRAPH_WORKER_ENABLED", "")
+	cfg, err := Load()
+	if err != nil || cfg.GraphWorkerEnabled || cfg.EmailProvider != "smtp" {
+		t.Fatalf("disabled Graph: enabled=%v provider=%q error=%v", cfg.GraphWorkerEnabled, cfg.EmailProvider, err)
+	}
+
+	api := validProductionModeConfig("api")
+	api.EmailProvider = "graph"
+	if err := api.Validate("api"); err == nil {
+		t.Fatal("Graph admission accepted missing mailbox pin")
+	}
+	api.Graph.SenderUserID = "11111111-1111-4111-8111-111111111111"
+	if err := api.Validate("api"); err != nil {
+		t.Fatalf("admission should only need the immutable mailbox ID: %v", err)
+	}
+	api.GraphWorkerEnabled = true
+	if err := api.Validate("api"); err == nil {
+		t.Fatal("API accepted Graph worker identity mode")
+	}
+
+	worker := validProductionModeConfig("worker")
+	worker.EmailProvider = "graph"
+	if err := worker.Validate("worker"); err == nil {
+		t.Fatal("worker accepted Graph as replacement for legacy pins")
+	}
+	worker.EmailProvider = "smtp"
+	worker.GraphWorkerEnabled = true
+	worker.Graph = providers.GraphConfig{
+		SenderUserID: api.Graph.SenderUserID, ManagedIdentityClientID: "22222222-2222-4222-8222-222222222222",
+		From: "sender@example.test",
+	}
+	if err := worker.Validate("worker"); err == nil {
+		t.Fatal("worker accepted missing Graph daily budget")
+	}
+	worker.GraphDailyBudget = 10
+	worker.GraphDailyReserve = 1
+	if err := worker.Validate("worker"); err != nil {
+		t.Fatalf("named Graph sender with approved budget: %v", err)
 	}
 }
 

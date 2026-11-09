@@ -495,3 +495,25 @@ func TestSendPinsConfiguredEmailProvider(t *testing.T) {
 		})
 	}
 }
+
+func TestGraphAdmissionHoldsBulkWhileLegacyAdmissionContinues(t *testing.T) {
+	repo := &memoryRepository{}
+	cfg := Config{EmailProvider: "graph", GraphMailboxID: "11111111-1111-4111-8111-111111111111", DataEncryptionKey: testEncryptionKey, HashKey: testHashKey}
+	request := contracts.SendRequest{
+		TemplateID: "engagement.newsletter", Channel: "email", Locale: "en",
+		Target:   contracts.Target{Type: "email", Address: "fixture@example.test"},
+		Resource: contracts.Resource{Type: "campaign", ID: "fixture-campaign"},
+		Payload: map[string]string{
+			"subject": "Fixture", "body": "Fixture",
+			"unsubscribeUrl":         "https://www.alive.org.tw/en/newsletter/unsubscribe?token=opaque",
+			"oneClickUnsubscribeUrl": "https://www.alive.org.tw/api/engagement/v1/newsletter/unsubscribe?token=opaque",
+		},
+	}
+	if _, err := New(repo, cfg).Send(t.Context(), "engagement-api", "graph-bulk", request); !errors.Is(err, ErrNotificationsDisabled) || len(repo.creates) != 0 {
+		t.Fatalf("Graph bulk creates=%d err=%v", len(repo.creates), err)
+	}
+	cfg.EmailProvider = "smtp"
+	if _, err := New(repo, cfg).Send(t.Context(), "engagement-api", "legacy-bulk", request); err != nil || len(repo.creates) != 1 || repo.creates[0].Provider != "smtp" {
+		t.Fatalf("legacy bulk creates=%d err=%v", len(repo.creates), err)
+	}
+}

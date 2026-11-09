@@ -146,6 +146,9 @@ func (s *Service) Send(
 		}
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
+	if definition.Channel == "email" && s.config.EmailProvider == "graph" && definition.DeliveryClass != templates.DeliveryClassTransactional {
+		return Result{}, ErrNotificationsDisabled
+	}
 	request.Payload = validatedPayload
 
 	if request.ExpiresAt != nil {
