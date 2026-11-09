@@ -35,6 +35,7 @@ var excludedColumns = map[string]map[string]string{
 		"source":            "Provider feedback stream identifier with no recipient join.",
 		"mailbox_id":        "Dedicated service mailbox identifier, not an Account subject.",
 		"cursor_ciphertext": "Encrypted polling continuation state with no recipient join.",
+		"encryption_key_id": "Retained key reference for the encrypted polling checkpoint.",
 		"updated_at":        "Polling checkpoint time, not an Account event.",
 	},
 	"schema_migrations": {
@@ -90,7 +91,7 @@ func TestDataGovernanceManifest(t *testing.T) {
 		},
 		"notification.delivery-receipts": {
 			"id", "message_id", "channel", "endpoint_ref", "provider", "status", "attempt_count",
-			"next_attempt_at", "lease_expires_at", "sent_at", "provider_message_id", "last_error_code",
+			"next_attempt_at", "lease_expires_at", "sent_at", "provider_message_id", "last_error_code", "graph_mailbox_id",
 			"created_at", "updated_at", "failure_count",
 		},
 		"notification.outbox": {

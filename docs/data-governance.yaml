@@ -91,6 +91,7 @@ datasets:
       - {"name":"next_attempt_at","purpose":"Schedule the next delivery attempt.","necessity":"required","data_classes":["activity"]}
       - {"name":"lease_expires_at","purpose":"Fence concurrent delivery workers.","necessity":"optional","data_classes":["security","activity"]}
       - {"name":"sent_at","purpose":"Record successful provider acceptance time.","necessity":"optional","data_classes":["activity"]}
+      - {"name":"graph_mailbox_id","purpose":"Bind Graph feedback and submission to the approved mailbox pinned on a delivery.","necessity":"optional","data_classes":["security","activity"]}
       - {"name":"provider_message_id","purpose":"Record the optional provider receipt identifier.","necessity":"optional","data_classes":["identity","activity"]}
       - {"name":"last_error_code","purpose":"Record the latest bounded provider failure category.","necessity":"optional","data_classes":["activity"]}
       - {"name":"created_at","purpose":"Record delivery creation time.","necessity":"required","data_classes":["activity"]}

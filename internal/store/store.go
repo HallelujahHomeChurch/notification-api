@@ -180,7 +180,8 @@ func ValidateKeyReferences(
 		WHERE subject_hash_key_id IS NOT NULL
 		GROUP BY subject_hash_key_id
 		UNION SELECT 'hash',hash_key_id FROM notification_email_suppressions
-		UNION SELECT 'hash',jsonb_object_keys(target_hashes) FROM notification_messages`)
+		UNION SELECT 'hash',jsonb_object_keys(target_hashes) FROM notification_messages
+		UNION SELECT 'encryption',encryption_key_id FROM notification_email_feedback_cursors WHERE encryption_key_id IS NOT NULL`)
 	if err != nil {
 		return fmt.Errorf("read notification key references: %w", err)
 	}

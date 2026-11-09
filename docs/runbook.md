@@ -782,3 +782,32 @@ means Graph accepted submission, with no provider message ID in the response.
 Use the existing provider failure telemetry for Graph errors. A 429 applies
 Retry-After, and ambiguous transport/server errors enter the existing
 same-provider acceptance policy. [Graph sendMail](https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0) · [Graph throttling](https://learn.microsoft.com/en-us/graph/throttling)
+
+### Graph feedback foundation
+
+The source-only feedback consumer requires an already verified page from the
+approved mailbox reader. It rechecks the durable delivery mailbox pin, Graph
+attempt and recipient HMAC, then commits matched evidence with the
+encrypted checkpoint, and deduplicates page replay. A stale checkpoint cannot
+overwrite current state. A provider-expired cursor triggers one bounded resync
+attempt per poll. Matching started or unknown attempts defer the whole page for
+up to two minutes while acceptance can settle. Older unresolved attempts need
+manual reconciliation and do not create feedback or suppression. After the
+cursor advances, an authorized operator can reread the retained dedicated
+mailbox for the bounded incident time window and compare the candidate with the
+original attempt and provider message trace. Record only the sanitized
+reconciliation result. Keep the shared cursor and the original send unchanged.
+Manual evidence import requires a separately reviewed and authorized path. Delivery
+metadata follows existing retention, and recipient
+erasure prevents new evidence attribution. Encrypted cursors retain their key
+reference until checkpoint retirement or rotation.
+
+Graph polling stays disabled. Before wiring it, obtain separately approved
+sanitized samples for authenticated hard bounce, temporary delay, redirected
+recipient, duplicate/replay, and forged DSN. Verify which Graph mailbox,
+message provenance, original submission and recipient fields are reliable.
+Implement bounded parsing and host-bound delta reads only after those facts
+are established with the scoped reader identity. The current store consumes
+verified evidence only and writes no technical suppression. Keep bulk disabled
+until actual correlation, key/cursor lifecycle, delivery monitoring and
+suppression safety pass.
