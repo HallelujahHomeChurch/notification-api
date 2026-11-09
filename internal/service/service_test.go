@@ -44,6 +44,9 @@ func (r *memoryRepository) Create(_ context.Context, params store.CreateParams) 
 		}
 		return store.CreateResult{Message: existing, Replayed: true}, nil
 	}
+	if params.ReplayOnly {
+		return store.CreateResult{}, store.ErrAdmissionPaused
+	}
 	message := store.Message{
 		ID:              params.MessageID,
 		Caller:          params.Caller,
@@ -509,11 +512,22 @@ func TestGraphAdmissionHoldsBulkWhileLegacyAdmissionContinues(t *testing.T) {
 			"oneClickUnsubscribeUrl": "https://www.alive.org.tw/api/engagement/v1/newsletter/unsubscribe?token=opaque",
 		},
 	}
-	if _, err := New(repo, cfg).Send(t.Context(), "engagement-api", "graph-bulk", request); !errors.Is(err, ErrNotificationsDisabled) || len(repo.creates) != 0 {
-		t.Fatalf("Graph bulk creates=%d err=%v", len(repo.creates), err)
-	}
+	graph := New(repo, cfg)
 	cfg.EmailProvider = "smtp"
-	if _, err := New(repo, cfg).Send(t.Context(), "engagement-api", "legacy-bulk", request); err != nil || len(repo.creates) != 1 || repo.creates[0].Provider != "smtp" {
+	legacy := New(repo, cfg)
+	admitted, err := legacy.Send(t.Context(), "engagement-api", "legacy-bulk", request)
+	if err != nil || len(repo.creates) != 1 || repo.creates[0].Provider != "smtp" {
 		t.Fatalf("legacy bulk creates=%d err=%v", len(repo.creates), err)
+	}
+	replay, err := graph.Send(t.Context(), "engagement-api", "legacy-bulk", request)
+	if err != nil || !replay.Replayed || replay.MessageID != admitted.MessageID {
+		t.Fatalf("legacy replay after switching Graph admission = %#v, %v", replay, err)
+	}
+	if _, err := graph.Send(t.Context(), "engagement-api", "graph-bulk", request); !errors.Is(err, ErrNotificationsDisabled) || len(repo.messages) != 1 {
+		t.Fatalf("Graph bulk messages=%d err=%v", len(repo.messages), err)
+	}
+	request.Payload["body"] = "Different body"
+	if _, err := graph.Send(t.Context(), "engagement-api", "legacy-bulk", request); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("legacy replay with a different payload = %v", err)
 	}
 }
