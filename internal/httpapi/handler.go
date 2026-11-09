@@ -195,6 +195,12 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	if result.FailureCode != "" {
 		data["failureCode"] = result.FailureCode
 	}
+	if result.ProviderAcceptedAt != nil {
+		data["providerAcceptedAt"] = result.ProviderAcceptedAt.UTC()
+	}
+	if result.DeliveryOutcome != "" {
+		data["deliveryOutcome"] = result.DeliveryOutcome
+	}
 	writeEnvelope(w, http.StatusOK, r, data, nil)
 }
 

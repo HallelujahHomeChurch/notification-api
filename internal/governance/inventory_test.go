@@ -24,6 +24,12 @@ var excludedColumns = map[string]map[string]string{
 		"cooldown_until": "Shared provider cooldown, not an Account event.",
 		"throttle_count": "Provider-wide failure counter without a recipient join.",
 	},
+	"notification_email_feedback_cursors": {
+		"source":            "Provider feedback stream identifier with no recipient join.",
+		"mailbox_id":        "Dedicated service mailbox identifier, not an Account subject.",
+		"cursor_ciphertext": "Encrypted polling continuation state with no recipient join.",
+		"updated_at":        "Polling checkpoint time, not an Account event.",
+	},
 	"schema_migrations": {
 		"version":    "Migration filename, not an Account subject.",
 		"checksum":   "Migration content checksum, not an Account subject.",
@@ -58,15 +64,17 @@ func TestDataGovernanceManifest(t *testing.T) {
 		"notification.delivery-receipts",
 		"notification.email-attempts",
 		"notification.email-feedback", "notification.email-suppressions",
+		"notification.email-delivery-events",
 		"notification.outbox",
 		"notification.rate-limit-buckets",
 	}, mapKeys(datasets))
 
 	exactPhysicalFields := map[string][]string{
+		"notification.email-delivery-events":      {"source", "event_key", "delivery_id", "outcome", "event_at"},
 		"notification.email-feedback":             {"sns_message_id", "delivery_id", "provider_message_id", "event_type", "event_at", "received_at"},
 		"notification.email-suppressions":         {"hash_key_id", "target_hash", "reason", "created_at", "updated_at"},
 		"notification.account-cleanup-operations": {"idempotency_key", "subject_ref", "result", "created_at", "updated_at"},
-		"notification.email-attempts":             {"delivery_id", "attempt", "bulk", "started_at", "finished_at", "outcome", "stage", "smtp_code", "enhanced_code", "provider", "provider_message_id", "provider_accepted_at"},
+		"notification.email-attempts":             {"delivery_id", "attempt", "bulk", "started_at", "finished_at", "outcome", "stage", "smtp_code", "enhanced_code", "provider", "provider_message_id", "provider_accepted_at", "provider_request_id"},
 		"notification.message-sensitive":          {"target_ciphertext", "payload_ciphertext"},
 		"notification.message-metadata": {
 			"id", "caller_app_id", "idempotency_key", "request_hash", "template_id", "template_version",

@@ -212,7 +212,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		_ = db.Close()
 		return apiComponents{}, fmt.Errorf("create publisher: %w", err)
 	}
-	repository := store.NewWithHashKeys(db, cfg.HashKeys)
+	repository := store.NewWithHashKeys(db, cfg.HashKeys).WithDeliveryEvidence(cfg.ExposeDeliveryEvidence)
 	notificationService := service.New(repository, service.Config{
 		EmailProvider:         cfg.EmailProvider,
 		ActiveEncryptionKeyID: cfg.ActiveEncryptionKeyID,

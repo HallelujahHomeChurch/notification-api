@@ -220,6 +220,32 @@ func TestSendMapsServiceErrors(t *testing.T) {
 	}
 }
 
+func TestStatusIncludesOptionalDeliveryEvidence(t *testing.T) {
+	accepted := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
+	result := service.Result{MessageID: "message-1", Status: contracts.MessageStatusSent}
+	handler := New(&fakeService{get: func(context.Context, string, string) (service.Result, error) {
+		return result, nil
+	}}, &fakePinger{}, []string{"account-api"}, false)
+	get := func() map[string]any {
+		request := httptest.NewRequest(http.MethodGet, "/priv/notifications/message-1", nil)
+		request.Header.Set("Dapr-Caller-App-Id", "account-api")
+		response := serve(handler, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d", response.Code)
+		}
+		return decodeEnvelope(t, response).Data
+	}
+	if data := get(); len(data) != 3 || data["status"] != "sent" {
+		t.Fatalf("legacy shape = %#v", data)
+	}
+	result.ProviderAcceptedAt = &accepted
+	result.DeliveryOutcome = contracts.DeliveryOutcomeUnknown
+	if data := get(); len(data) != 5 || data["status"] != "sent" || data["safeToRetry"] != false ||
+		data["providerAcceptedAt"] != "2026-11-10T02:00:00Z" || data["deliveryOutcome"] != "unknown" {
+		t.Fatalf("additive shape = %#v", data)
+	}
+}
+
 func TestStatusIsScopedToCaller(t *testing.T) {
 	svc := &fakeService{get: func(_ context.Context, caller, messageID string) (service.Result, error) {
 		if caller != "account-api" || messageID != "message-1" {
