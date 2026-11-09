@@ -50,6 +50,7 @@ type Config struct {
 	DataEncryptionKey     []byte
 	HashKey               []byte
 	NotificationsDisabled bool
+	EmailPaused           bool
 	RateLimits            []store.RateLimit
 }
 
@@ -105,6 +106,9 @@ func (s *Service) Send(
 	definition, err := templates.Resolve(request.TemplateID, request.Channel)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	if s.config.EmailPaused && definition.Channel == "email" {
+		return Result{}, ErrNotificationsDisabled
 	}
 	target, err := normalizeTarget(request.Target, definition.Channel)
 	if err != nil {

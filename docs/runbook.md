@@ -844,11 +844,14 @@ current stack cannot be selected by the deployed runtime configuration.
   delivery correlation. Record the 10,000-bulk plus Web Push p95 result and
   mixed-revision connection budget. Leave the cutover pending while evidence is
   missing.
-- Validate a channel-specific email pause and drain that keeps Web Push
-  available. The existing global notification disable control pauses every
-  channel and cannot serve as the email-only control. Record zero in-flight
-  sends and prove that old workers cannot claim Graph-pinned work before the
-  reviewed transition. Pin the approved sender mailbox for new Graph admissions.
+- For an authorized future pause, set `NOTIFICATION_EMAIL_PAUSED=true` on
+  both the API and worker. The API rejects new email admission and its
+  dispatcher holds queued email while continuing expiration and Web Push.
+  The worker returns already-brokered email to the durable outbox and restores
+  any previously recorded acceptance. Verify the pause on every active revision,
+  then record zero in-flight sends before classifying pending work. Verify
+  that old workers cannot claim Graph-pinned work before the reviewed
+  transition. Pin the approved sender mailbox for new Graph admissions.
 - Run the authorized canary and verify durable acceptance, actual arrival and
   feedback independently. Restore transactional traffic first. Restore bulk
   after feedback, queue latency and external-recipient headroom pass.

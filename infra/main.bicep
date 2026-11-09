@@ -38,6 +38,7 @@ param smtpAuthenticationEnabled bool = true
 @minValue(1)
 param notificationTemplateDailyLimit int = 1000
 param notificationsDisabled bool
+param notificationEmailPaused bool = false
 param activeEncryptionKeyID string = 'legacy-v1'
 param activeHashKeyID string = 'legacy-v1'
 param smtpUsernameSecretName string = 'notification-smtp-username'
@@ -296,6 +297,7 @@ resource api 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && run
             { name: 'NOTIFICATION_ALLOW_DEV_CALLER_HEADER', value: 'false' }
             { name: 'NOTIFICATION_TEMPLATE_DAILY_LIMIT', value: '${notificationTemplateDailyLimit}' }
             { name: 'NOTIFICATIONS_DISABLED', value: toLower(string(notificationsDisabled)) }
+            { name: 'NOTIFICATION_EMAIL_PAUSED', value: toLower(string(notificationEmailPaused)) }
           ], engagementStatusEnabled ? [
             { name: 'NOTIFICATION_ENGAGEMENT_STATUS_TOKEN', secretRef: engagementStatusSecretName }
           ] : [], privateWriteEnvironment), entry => !contains(runtimeOverrides['notification-api'], entry.name)), configuredEnv['notification-api'])
@@ -421,6 +423,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && 
             { name: 'VAPID_PUBLIC_KEY', value: vapidPublicKey }
             { name: 'VAPID_PRIVATE_KEY', secretRef: 'vapid-private-key' }
             { name: 'VAPID_SUBJECT', value: vapidSubject }
+            { name: 'NOTIFICATION_EMAIL_PAUSED', value: toLower(string(notificationEmailPaused)) }
           ], empty(workerEligibilityVersion) ? [] : [
             { name: 'NOTIFICATION_WORKER_ELIGIBILITY_TOKEN', secretRef: 'notification-worker-eligibility-token' }
           ], smtpAuthenticationEnabled ? [

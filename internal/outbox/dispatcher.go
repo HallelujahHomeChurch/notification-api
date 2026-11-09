@@ -43,7 +43,8 @@ type store interface {
 }
 
 type postgresStore struct {
-	db *sql.DB
+	db          *sql.DB
+	emailPaused bool
 }
 
 type Dispatcher struct {
@@ -57,7 +58,11 @@ type Dispatcher struct {
 }
 
 func New(db *sql.DB, publisher queue.Publisher) *Dispatcher {
-	return newDispatcher(postgresStore{db: db}, publisher)
+	return NewWithEmailPaused(db, publisher, false)
+}
+
+func NewWithEmailPaused(db *sql.DB, publisher queue.Publisher, emailPaused bool) *Dispatcher {
+	return newDispatcher(postgresStore{db: db, emailPaused: emailPaused}, publisher)
 }
 
 func newDispatcher(store store, publisher queue.Publisher) *Dispatcher {
@@ -193,10 +198,12 @@ func (s postgresStore) claimNext(ctx context.Context, lease time.Duration) (clai
 		      )
 		  AND delivery.status='queued'
 		  AND message.status='queued'
+		  AND (NOT $1 OR delivery.channel<>'email' OR message.expires_at <= clock_timestamp())
 		ORDER BY COALESCE(outbox.lease_expires_at, outbox.next_attempt_at),
 		         outbox.created_at, outbox.id
 		FOR UPDATE OF outbox, delivery, message SKIP LOCKED
 		LIMIT 1`,
+		s.emailPaused,
 	).Scan(
 		&claimed.OutboxID,
 		&claimed.DeliveryID,
