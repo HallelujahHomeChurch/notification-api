@@ -741,3 +741,14 @@ unknown-receipt reconciliation and no resurrection after Account erasure. They
 do not prove AWS event delivery, the final alert receiver, or inbox arrival.
 A future approved live test must prove all three before SES cutover. No test or
 simulator email is authorized by this runbook.
+
+## Exchange Online cutover gates
+
+The [Exchange Online ADR](adr/0001-exchange-online-delivery-target.md) records the target. Complete the [readiness inventory](reviews/2026-11-10-notification-exchange-readiness.md), including mailbox, effective rights, daily recipient budget and compatible rollback revisions, before requesting a cutover preview.
+
+1. Verify old status readers and release compatible readers before enabling optional receipt fields. Deploy the additive delivery schema and compatible worker with Graph dispatch disabled. Check SMTP and Web Push with isolated fixtures before requesting live acceptance.
+2. Review the scoped worker identity, mailbox feedback reader, queue wake and repair, quota windows and mixed-version fencing. Keep the ACS hourly gate for ACS-pinned work and require Graph-specific budget settings only when Graph is enabled.
+3. Under separate authorization, pause new email admission and dispatch, keep Web Push running, and drain in-flight email. Classify queued, accepted, uncertain and expired attempts. Keep accepted attempts closed. Allow re-pinning only for unexpired, provably unsubmitted or definitively rejected attempts covered by the approved preview.
+4. Fence older workers from Graph-pinned deliveries. Run a canary with approved recipients before restoring transactional traffic. Resume bulk after feedback correlation and daily headroom are verified. Observe worker/queue health, retry delays, unknown outcomes and durable receipt recovery.
+5. For rollback, pause and drain the affected email lane and restore a compatible worker and API pair through the release workflow. Keep additive schema and durable receipts. Keep bulk unknowns in reconciliation and bound transactional unknown retries to their pinned provider and original expiry.
+6. Consider ACS retirement only after at least seven days of observation, an approved campaign, and confirmation that live/retryable/in-flight ACS pins and rollback dependencies have drained. Retain historical receipt readers. Resource changes require a separate preview and authorization.

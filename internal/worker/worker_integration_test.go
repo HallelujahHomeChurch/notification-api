@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/accountcleanup"
+	"github.com/HallelujahHomeChurch/notification-api/internal/contracts"
 	notificationcrypto "github.com/HallelujahHomeChurch/notification-api/internal/crypto"
 	"github.com/HallelujahHomeChurch/notification-api/internal/migrations"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
@@ -168,6 +169,71 @@ func TestPostgresEraseWaitsForClaimedProviderCall(t *testing.T) {
 	if targetLength != 0 || payloadLength != 0 {
 		t.Fatalf("erased target=%d payload=%d", targetLength, payloadLength)
 	}
+}
+
+func TestPostgresEraseWaitsForEligibilityDenial(t *testing.T) {
+	db := workerTestDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	email := "user@example.com"
+	deliveryID := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
+	ref := uuid.NewString()
+	if _, err := db.ExecContext(ctx, `
+		UPDATE notification_messages
+		SET hash_key_id='v1', target_hash=$2, eligibility_campaign_id=$3, eligibility_recipient_id=$3
+		WHERE id=(SELECT message_id FROM notification_deliveries WHERE id=$1)`,
+		deliveryID, notificationcrypto.Hash(testKey, []byte(email)), ref,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	checking := make(chan struct{})
+	deny := make(chan struct{})
+	checker := eligibilityFunc(func(ctx context.Context, _ contracts.EligibilityRef) (bool, error) {
+		close(checking)
+		select {
+		case <-deny:
+			return false, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	})
+	provider := &fakeProvider{}
+	instance := New(db, provider, testKey).WithEligibilityChecker(checker).
+		WithEmailLimits(db, EmailLimits{PerMinute: 20, PerHour: 100, ReserveMinute: 5, ReserveHour: 20})
+	message := &fakeMessage{id: deliveryID}
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- instance.Process(ctx, message) }()
+	select {
+	case <-checking:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	eraseDone := make(chan error, 1)
+	go func() {
+		_, err := accountcleanup.New(db, map[string][]byte{"v1": testKey}).CleanupAccount(ctx, accountcleanup.AccountCleanupRequest{
+			UserID: uuid.NewString(), Email: email, IdempotencyKey: "erase-eligibility-race",
+		})
+		eraseDone <- err
+	}()
+	waitForAdvisoryWaiters(t, db, "notification-dsr-delivery:"+deliveryID, 1)
+	close(deny)
+	if err := <-workerDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-eraseDone; err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 0 || message.completed != 1 || db.Stats().InUse != 0 {
+		t.Fatalf("provider calls=%d, completed=%d, checked-out connections=%d", provider.calls, message.completed, db.Stats().InUse)
+	}
+}
+
+type eligibilityFunc func(context.Context, contracts.EligibilityRef) (bool, error)
+
+func (f eligibilityFunc) Check(ctx context.Context, ref contracts.EligibilityRef) (bool, error) {
+	return f(ctx, ref)
 }
 
 func TestPostgresEraseRollbackLeavesQueuedDeliveryRetryable(t *testing.T) {

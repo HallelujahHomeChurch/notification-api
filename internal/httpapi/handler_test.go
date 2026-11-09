@@ -163,6 +163,17 @@ func TestSendReturnsAcceptedEnvelopeAndRequestID(t *testing.T) {
 	}
 }
 
+func TestDeliveryClassCannotBeSelectedByCaller(t *testing.T) {
+	svc := &fakeService{}
+	handler := New(svc, &fakePinger{}, []string{"account-api"}, false)
+	body := strings.TrimSuffix(validBody(), "}") + `,"deliveryClass":"transactional"}`
+
+	assertError(t, serve(handler, authorizedSend(body)), http.StatusBadRequest, "NTF_INVALID_REQUEST")
+	if svc.sendCalls != 0 {
+		t.Fatalf("Send calls = %d, want 0", svc.sendCalls)
+	}
+}
+
 func TestSendRejectsNonStrictJSON(t *testing.T) {
 	oversized := strings.Replace(validBody(), "opaque", strings.Repeat("x", 64<<10), 1)
 	for _, test := range []struct {

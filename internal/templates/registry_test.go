@@ -10,6 +10,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDeliveryClassForPersistedTemplateVersions(t *testing.T) {
+	wantByTemplate := map[string]DeliveryClass{
+		"account.email-correction-verify":          DeliveryClassTransactional,
+		"account.email-correction-security-notice": DeliveryClassTransactional,
+		"account.email-correction-admin-review":    DeliveryClassTransactional,
+		"account.email-correction-completed":       DeliveryClassTransactional,
+		"account.verify-email":                     DeliveryClassTransactional,
+		"account.reset-password":                   DeliveryClassTransactional,
+		"account.oauth-link-confirmation":          DeliveryClassTransactional,
+		"account.oauth-onboarding-code":            DeliveryClassTransactional,
+		"engagement.newsletter":                    DeliveryClassBulk,
+		"engagement.web-push":                      DeliveryClassBulk,
+	}
+	require.Len(t, wantByTemplate, len(definitions))
+	for id, versions := range definitions {
+		want, ok := wantByTemplate[id]
+		require.True(t, ok, "missing class fixture for %s", id)
+		for version, definition := range versions {
+			got, err := ResolveVersion(id, version, definition.Channel)
+			require.NoError(t, err)
+			require.Equal(t, want, got.DeliveryClass, "%s version %d", id, version)
+			require.Equal(t, want, DeliveryClassFor(id, version), "%s version %d", id, version)
+		}
+	}
+}
+
 func TestGovernanceKnownTemplatePayloadFieldsMatchRegistry(t *testing.T) {
 	governanceFields := map[string][]string{
 		"account.email-correction-verify/1/email":          {"verifyUrl"},
