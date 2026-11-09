@@ -857,8 +857,9 @@ admission and dispatch disabled.
   mixed-revision connection budget. Leave the cutover pending while evidence is
   missing.
 - For an authorized future pause, set `NOTIFICATION_EMAIL_PAUSED=true` on
-  both the API and worker. The API rejects new email admission and its
-  dispatcher holds queued email while continuing expiration and Web Push.
+  both the API and worker. The API rejects new email admission and returns the
+  original result for a matching idempotent replay. Its dispatcher holds queued
+  email while continuing expiration and Web Push.
   The worker returns already-brokered email to the durable outbox and restores
   any previously recorded acceptance. Verify the pause on every active revision,
   then record zero in-flight sends before classifying pending work. Verify

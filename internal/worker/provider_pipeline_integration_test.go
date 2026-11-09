@@ -216,8 +216,18 @@ func TestEmailPausePreservesQueuedWorkAndWebPush(t *testing.T) {
 	if _, err := paused.Send(ctx, "account-api", "blocked-email", email); !errors.Is(err, service.ErrNotificationsDisabled) {
 		t.Fatalf("paused email admission = %v", err)
 	}
-	if _, err := legacy.Send(ctx, "account-api", "brokered-email", email); err != nil {
+	admitted, err := legacy.Send(ctx, "account-api", "brokered-email", email)
+	if err != nil {
 		t.Fatal(err)
+	}
+	replay, err := paused.Send(ctx, "account-api", "brokered-email", email)
+	if err != nil || !replay.Replayed || replay.MessageID != admitted.MessageID {
+		t.Fatalf("paused email replay = %#v, %v", replay, err)
+	}
+	conflict := email
+	conflict.Resource.ID = uuid.NewString()
+	if _, err := paused.Send(ctx, "account-api", "brokered-email", conflict); !errors.Is(err, service.ErrIdempotencyConflict) {
+		t.Fatalf("paused email conflicting replay = %v", err)
 	}
 	var published string
 	publisher := pipelinePublisher(func(_ context.Context, _, id string) error { published = id; return nil })
