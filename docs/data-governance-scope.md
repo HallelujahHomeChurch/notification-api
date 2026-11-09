@@ -22,6 +22,11 @@ This inventory describes existing metadata and behavior only. It exports no data
 - `notification_email_budget.cooldown_until` — Shared provider cooldown, not an Account event.
 - `notification_email_budget.throttle_count` — Provider-wide failure counter without a recipient join.
 
+- `notification_graph_email_budget.id` — Graph mailbox budget singleton key with no recipient join.
+- `notification_graph_email_budget.next_send_at` — Shared Graph pacing and bounded in-flight hold time.
+- `notification_graph_email_budget.cooldown_until` — Shared Graph provider cooldown, not an Account event.
+- `notification_graph_email_budget.throttle_count` — Graph provider-wide failure counter without a recipient join.
+
 - `notification_email_feedback_cursors.source` — Provider feedback stream identifier with no recipient join.
 - `notification_email_feedback_cursors.mailbox_id` — Dedicated service mailbox identifier, not an Account subject.
 - `notification_email_feedback_cursors.cursor_ciphertext` — Encrypted polling continuation state with no recipient join.

@@ -313,8 +313,11 @@ func TestEmailAcceptedEvidenceSurvivesOutboxExpiry(t *testing.T) {
 
 func TestSESReceiptSurvivesWorkerCrashAndRecovery(t *testing.T) {
 	db := workerTestDatabase(t)
-	p := &emailPolicy{db: db, limits: EmailLimits{PerMinute: 20, PerHour: 100, ReserveMinute: 5, ReserveHour: 20}}
+	p := &emailPolicy{db: db, provider: "ses", limits: EmailLimits{PerMinute: 20, PerHour: 100, ReserveMinute: 5, ReserveHour: 20}}
 	c := emailClaim(t, db, "engagement.newsletter")
+	if _, err := db.Exec(`UPDATE notification_deliveries SET provider='ses' WHERE id=$1`, c.DeliveryID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := p.begin(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}

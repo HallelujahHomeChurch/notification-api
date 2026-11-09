@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -20,7 +21,18 @@ var errEmailProviderMismatch = errors.New("email provider does not match pinned 
 
 var errEmailAlreadyAccepted = errors.New("email already accepted")
 
-type EmailLimits struct{ PerMinute, PerHour, ReserveMinute, ReserveHour int }
+type EmailLimits struct {
+	PerMinute, PerHour, ReserveMinute, ReserveHour int
+	GraphDailyBudget, GraphDailyReserve            int
+}
+
+const (
+	graphPerMinute      = 25
+	graphReserveMinute  = 5
+	graphSendInterval   = time.Minute / graphPerMinute
+	graphPermitLifetime = time.Second
+	graphFenceKey       = "notification-graph-mailbox"
+)
 
 func (l EmailLimits) Validate() error {
 	if l.PerMinute <= 0 || l.PerHour <= 0 || l.ReserveMinute < 0 || l.ReserveHour < 0 || l.ReserveMinute >= l.PerMinute || l.ReserveHour >= l.PerHour {
@@ -56,8 +68,67 @@ func campaignEmail(c claim) bool {
 	return templates.DeliveryClassFor(c.TemplateID, c.TemplateVersion) == templates.DeliveryClassBulk
 }
 
+func (p *emailPolicy) budgetTable() string {
+	if p.provider == "graph" {
+		return "notification_graph_email_budget"
+	}
+	return "notification_email_budget"
+}
+
+func (p *emailPolicy) lockGraphMailbox(ctx context.Context) (func(), error) {
+	if p.conn == nil {
+		return nil, errors.New("Graph mailbox fence requires an owned delivery session")
+	}
+	var locked bool
+	if err := p.conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, graphFenceKey).Scan(&locked); err != nil {
+		_ = p.conn.Raw(func(any) error { return driver.ErrBadConn })
+		return nil, err
+	}
+	if !locked {
+		return nil, nil
+	}
+	return func() {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+		defer cancel()
+		if _, err := p.conn.ExecContext(releaseCtx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, graphFenceKey); err != nil {
+			_ = p.conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}, nil
+}
+
+// A late worker must release its reservation before any call reaches the provider.
+func (p *emailPolicy) confirmGraphPermit(ctx context.Context, c claim) (bool, error) {
+	var allowed bool
+	err := p.statements().QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM notification_email_attempts a
+			JOIN notification_deliveries d ON d.id=a.delivery_id
+			JOIN notification_messages m ON m.id=d.message_id
+			WHERE d.id=$1 AND d.provider='graph' AND d.status='sending'
+			  AND d.attempt_count=$2 AND a.attempt=$2 AND a.outcome='started'
+			  AND d.lease_expires_at IS NOT NULL
+			  AND LEAST(a.started_at+($3::bigint*interval '1 microsecond'),d.lease_expires_at,m.expires_at)>clock_timestamp()
+		)`, c.DeliveryID, c.Attempt, graphPermitLifetime.Microseconds()).Scan(&allowed)
+	if err != nil || allowed {
+		return allowed, err
+	}
+	_, err = p.statements().ExecContext(ctx, `
+		WITH deferred AS (
+			UPDATE notification_email_attempts SET outcome='deferred',finished_at=clock_timestamp()
+			WHERE delivery_id=$1 AND attempt=$2 AND outcome='started' RETURNING 1
+		)
+		UPDATE notification_graph_email_budget SET next_send_at=clock_timestamp()
+		WHERE id=true AND EXISTS(SELECT 1 FROM deferred)`, c.DeliveryID, c.Attempt)
+	return false, err
+}
+
 func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error) {
-	if err := p.limits.Validate(); err != nil {
+	graph := p.provider == "graph"
+	if graph {
+		if p.limits.GraphDailyBudget <= 0 || p.limits.GraphDailyReserve < 0 || p.limits.GraphDailyReserve >= p.limits.GraphDailyBudget {
+			return 0, errors.New("Graph daily budget must be positive and its reserve smaller than the budget")
+		}
+	} else if err := p.limits.Validate(); err != nil {
 		return 0, err
 	}
 	tx, err := beginDeliveryTransaction(ctx, p.db, p.conn)
@@ -66,7 +137,7 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	}
 	defer tx.Rollback()
 	var now, next, cooldown time.Time
-	if err = tx.QueryRowContext(ctx, `SELECT next_send_at,cooldown_until FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&next, &cooldown); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT next_send_at,cooldown_until FROM `+p.budgetTable()+` WHERE id=true FOR UPDATE`).Scan(&next, &cooldown); err != nil {
 		return 0, err
 	}
 	// A clock evaluated before the lock wait can expire a reservation before admission.
@@ -112,13 +183,21 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 		}
 		return 0, errEmailAcceptanceUnknown
 	}
-	for _, window := range []struct {
+	windows := [2]struct {
 		duration       time.Duration
 		total, reserve int
-	}{{time.Minute, p.limits.PerMinute, p.limits.ReserveMinute}, {time.Hour, p.limits.PerHour, p.limits.ReserveHour}} {
+	}{{time.Minute, p.limits.PerMinute, p.limits.ReserveMinute}, {time.Hour, p.limits.PerHour, p.limits.ReserveHour}}
+	providerFilter := "provider<>'graph'"
+	if graph {
+		providerFilter = "provider='graph'"
+		// Count a reservation through its latest permitted submission instant.
+		windows[0].duration, windows[0].total, windows[0].reserve = time.Minute+graphPermitLifetime, graphPerMinute, graphReserveMinute
+		windows[1].duration, windows[1].total, windows[1].reserve = 24*time.Hour+graphPermitLifetime, p.limits.GraphDailyBudget, p.limits.GraphDailyReserve
+	}
+	for _, window := range windows {
 		var total, bulkCount int
 		var oldest, oldestBulk sql.NullTime
-		err = tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER(WHERE bulk),min(started_at),min(started_at) FILTER(WHERE bulk) FROM notification_email_attempts WHERE outcome<>'deferred' AND started_at>$1`, now.Add(-window.duration)).Scan(&total, &bulkCount, &oldest, &oldestBulk)
+		err = tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER(WHERE bulk),min(started_at),min(started_at) FILTER(WHERE bulk) FROM notification_email_attempts WHERE outcome<>'deferred' AND started_at>$1 AND `+providerFilter, now.Add(-window.duration)).Scan(&total, &bulkCount, &oldest, &oldestBulk)
 		if err != nil {
 			return 0, err
 		}
@@ -147,11 +226,18 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 		return 0, fmt.Errorf("email attempt fence lost")
 	}
 	if delay == 0 {
-		perMinute := p.limits.PerMinute
-		if bulk {
-			perMinute -= p.limits.ReserveMinute
+		var interval time.Duration
+		if graph {
+			// Preserve the hold across connection loss or a crash with no durable finish.
+			interval = graphPermitLifetime + sendTimeout + graphSendInterval
+		} else {
+			perMinute := p.limits.PerMinute
+			if bulk {
+				perMinute -= p.limits.ReserveMinute
+			}
+			interval = time.Minute / time.Duration(perMinute)
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE notification_email_budget SET next_send_at=$1 WHERE id=true`, now.Add(time.Minute/time.Duration(perMinute))); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE `+p.budgetTable()+` SET next_send_at=$1 WHERE id=true`, now.Add(interval)); err != nil {
 			return 0, err
 		}
 	}
@@ -160,20 +246,23 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 
 func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.ProviderReceipt, providerErr error) error {
 	outcome, stage, enhanced := "accepted", "data", ""
-	if receipt.Provider == "" {
-		receipt.Provider = p.provider
-		if receipt.Provider == "" {
-			receipt.Provider = "smtp"
-		}
+	family := p.provider
+	if family == "" {
+		family = "smtp"
+	}
+	if providerErr == nil && receipt.Provider != "" && receipt.Provider != family {
+		return errors.New("accepted receipt does not match the pinned email provider")
 	}
 	code := 0
-	if receipt.Provider == "smtp" {
+	if family == "smtp" {
 		code = 250
 	}
 	requestID := receipt.ProviderRequestID
 	var pe *providers.ProviderError
 	if providerErr != nil {
-		outcome = "unknown"
+		receipt = providers.ProviderReceipt{}
+		requestID = ""
+		outcome, code = "unknown", 0
 		if errors.As(providerErr, &pe) {
 			stage, code, enhanced = pe.Operation, pe.SMTPCode, pe.EnhancedCode
 			requestID = pe.ProviderRequestID
@@ -192,10 +281,10 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 	defer tx.Rollback()
 	// Use the same lock order as begin, including during a provider cooldown update.
 	var strikes int
-	if err = tx.QueryRowContext(ctx, `SELECT throttle_count FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&strikes); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT throttle_count FROM `+p.budgetTable()+` WHERE id=true FOR UPDATE`).Scan(&strikes); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE notification_email_attempts SET outcome=$3,stage=$4,smtp_code=$5,enhanced_code=$6,finished_at=clock_timestamp(),provider=$7,provider_message_id=$8,provider_accepted_at=$9,provider_request_id=$10 WHERE delivery_id=$1 AND attempt=$2 AND outcome='started'`, c.DeliveryID, c.Attempt, outcome, stage, code, enhanced, receipt.Provider, nullableReceiptID(receipt.ProviderMessageID), nullableReceiptTime(receipt.AcceptedAt), nullableReceiptID(requestID))
+	result, err := tx.ExecContext(ctx, `UPDATE notification_email_attempts SET outcome=$3,stage=$4,smtp_code=$5,enhanced_code=$6,finished_at=clock_timestamp(),provider_message_id=$7,provider_accepted_at=$8,provider_request_id=$9 WHERE delivery_id=$1 AND attempt=$2 AND outcome='started' AND provider=$10`, c.DeliveryID, c.Attempt, outcome, stage, code, enhanced, nullableReceiptID(receipt.ProviderMessageID), nullableReceiptTime(receipt.AcceptedAt), nullableReceiptID(requestID), family)
 	if err != nil {
 		return err
 	}
@@ -203,7 +292,7 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 		return fmt.Errorf("email attempt fence lost")
 	}
 	if providerErr == nil {
-		if _, err = tx.ExecContext(ctx, `UPDATE notification_email_budget SET throttle_count=0 WHERE id=true`); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE `+p.budgetTable()+` SET throttle_count=0 WHERE id=true`); err != nil {
 			return err
 		}
 	}
@@ -214,7 +303,12 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 			delay = min(delay, time.Hour)
 			delay += time.Duration(rand.Int64N(int64(delay/4) + 1))
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE notification_email_budget SET cooldown_until=GREATEST(cooldown_until,clock_timestamp()+($1::bigint*interval '1 microsecond')),throttle_count=LEAST(throttle_count+1,6) WHERE id=true`, delay.Microseconds()); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE `+p.budgetTable()+` SET cooldown_until=GREATEST(cooldown_until,clock_timestamp()+($1::bigint*interval '1 microsecond')),throttle_count=LEAST(throttle_count+1,6) WHERE id=true`, delay.Microseconds()); err != nil {
+			return err
+		}
+	}
+	if p.provider == "graph" {
+		if _, err := tx.ExecContext(ctx, `UPDATE notification_graph_email_budget SET next_send_at=clock_timestamp()+($1::bigint*interval '1 microsecond') WHERE id=true`, graphSendInterval.Microseconds()); err != nil {
 			return err
 		}
 	}

@@ -752,3 +752,23 @@ The [Exchange Online ADR](adr/0001-exchange-online-delivery-target.md) records t
 4. Fence older workers from Graph-pinned deliveries. Run a canary with approved recipients before restoring transactional traffic. Resume bulk after feedback correlation and daily headroom are verified. Observe worker/queue health, retry delays, unknown outcomes and durable receipt recovery.
 5. For rollback, pause and drain the affected email lane and restore a compatible worker and API pair through the release workflow. Keep additive schema and durable receipts. Keep bulk unknowns in reconciliation and bound transactional unknown retries to their pinned provider and original expiry.
 6. Consider ACS retirement only after at least seven days of observation, an approved campaign, and confirmation that live/retryable/in-flight ACS pins and rollback dependencies have drained. Retain historical receipt readers. Resource changes require a separate preview and authorization.
+
+### Graph admission foundation
+
+The additive Graph budget uses the existing fenced attempt ledger and a separate
+budget row. For the single approved sender mailbox, it reserves at most 25
+submissions in a rolling minute, with at most 20 for bulk, and applies a
+configured rolling daily budget. The local foundation counts every candidate
+recipient conservatively. ACS and SES retain their legacy minute and hourly
+window and separate cooldown. A started or uncertain attempt consumes a Graph
+reservation. An expired permit that is known to have reached no provider call
+is deferred. An unrecorded finish retains a bounded in-flight hold.
+
+The Graph adapter and daily limit configuration remain outside this slice.
+Validate the permit at the actual submission boundary when wiring the adapter.
+Confirm a producer-to-provider p95 of at most 10 seconds with 10,000 bulk
+deliveries already queued and a Web Push lane present before enabling Graph bulk.
+The existing FIFO route provides no transactional priority for messages already
+in the broker. If the shared queue misses the fixture, review and rebase the
+existing queue isolation proposal before changing topology. Confirm connection
+headroom, queue ownership, and old/new worker fencing in a separate preview.

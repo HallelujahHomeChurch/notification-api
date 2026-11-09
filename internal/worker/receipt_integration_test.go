@@ -18,7 +18,7 @@ import (
 func TestGraphAcceptedWithoutMessageID(t *testing.T) {
 	db := workerTestDatabase(t)
 	ctx := context.Background()
-	p := &emailPolicy{db: db, provider: "graph", limits: EmailLimits{PerMinute: 20, PerHour: 100, ReserveMinute: 5, ReserveHour: 20}}
+	p := &emailPolicy{db: db, provider: "graph", limits: EmailLimits{PerMinute: 20, PerHour: 100, ReserveMinute: 5, ReserveHour: 20, GraphDailyBudget: 100}}
 	c := emailClaim(t, db, "engagement.newsletter")
 	if _, err := db.ExecContext(ctx, `UPDATE notification_deliveries SET provider='graph' WHERE id=$1`, c.DeliveryID); err != nil {
 		t.Fatal(err)
