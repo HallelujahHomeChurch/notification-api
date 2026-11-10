@@ -237,8 +237,29 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		}
 	}
 
+	var releaseGraph func()
+	defer func() {
+		if releaseGraph != nil {
+			releaseGraph()
+		}
+	}()
 	if claimed.Channel == "email" && w.email != nil {
-		delay, gateErr := w.email.begin(ctx, claimed)
+		var delay time.Duration
+		graph := w.email.provider == "graph"
+		if graph {
+			var err error
+			releaseGraph, err = w.email.lockGraphMailbox(ctx)
+			if err != nil {
+				return err
+			}
+			if releaseGraph == nil {
+				delay = graphSendInterval
+			}
+		}
+		var gateErr error
+		if delay == 0 {
+			delay, gateErr = w.email.begin(ctx, claimed)
+		}
 		if errors.Is(gateErr, errEmailSuppressed) {
 			if err := w.repository.markSuppressed(ctx, claimed, "technical_suppression"); err != nil {
 				return err
@@ -274,6 +295,15 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		if gateErr != nil {
 			return gateErr
 		}
+		if graph && delay == 0 {
+			allowed, err := w.email.confirmGraphPermit(ctx, claimed)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				delay = graphSendInterval
+			}
+		}
 		if delay > 0 {
 			if err := w.repository.markRetry(ctx, claimed, "rate_limited", delay, w.newID()); err != nil {
 				return err
@@ -298,6 +328,10 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		finish()
 		if recordErr != nil {
 			return fmt.Errorf("persist email attempt: %w", recordErr)
+		}
+		if releaseGraph != nil {
+			releaseGraph()
+			releaseGraph = nil
 		}
 	}
 	if providerErr == nil {

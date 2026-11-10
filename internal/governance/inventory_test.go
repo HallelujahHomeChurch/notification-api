@@ -24,6 +24,12 @@ var excludedColumns = map[string]map[string]string{
 		"cooldown_until": "Shared provider cooldown, not an Account event.",
 		"throttle_count": "Provider-wide failure counter without a recipient join.",
 	},
+	"notification_graph_email_budget": {
+		"id":             "Graph mailbox budget singleton key with no recipient join.",
+		"next_send_at":   "Shared Graph pacing and bounded in-flight hold time.",
+		"cooldown_until": "Shared Graph provider cooldown, not an Account event.",
+		"throttle_count": "Graph provider-wide failure counter without a recipient join.",
+	},
 	"notification_email_feedback_cursors": {
 		"source":            "Provider feedback stream identifier with no recipient join.",
 		"mailbox_id":        "Dedicated service mailbox identifier, not an Account subject.",
