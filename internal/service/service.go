@@ -107,9 +107,6 @@ func (s *Service) Send(
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
-	if s.config.EmailPaused && definition.Channel == "email" {
-		return Result{}, ErrNotificationsDisabled
-	}
 	target, err := normalizeTarget(request.Target, definition.Channel)
 	if err != nil {
 		return Result{}, err
@@ -221,6 +218,8 @@ func (s *Service) Send(
 			graphMailboxID = id.String()
 		}
 	}
+	replayOnly := definition.Channel == "email" && (s.config.EmailPaused ||
+		provider == "graph" && definition.DeliveryClass != templates.DeliveryClassTransactional)
 	created, err := s.repository.Create(ctx, store.CreateParams{
 		MessageID:         messageID,
 		DeliveryID:        uuid.NewString(),
@@ -247,10 +246,14 @@ func (s *Service) Send(
 		EligibilityRef:    request.EligibilityRef,
 		Provider:          provider,
 		GraphMailboxID:    graphMailboxID,
+		ReplayOnly:        replayOnly,
 		RateLimits:        rateLimits,
 		ExpiresAfter:      definition.TTL,
 		ExpiresAt:         request.ExpiresAt,
 	})
+	if errors.Is(err, store.ErrAdmissionPaused) {
+		return Result{}, ErrNotificationsDisabled
+	}
 	if errors.Is(err, store.ErrSubjectErased) {
 		return Result{}, ErrInvalidRequest
 	}

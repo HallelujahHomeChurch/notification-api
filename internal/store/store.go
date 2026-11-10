@@ -62,6 +62,7 @@ type CreateParams struct {
 	EligibilityRef    *contracts.EligibilityRef
 	Provider          string
 	GraphMailboxID    string
+	ReplayOnly        bool
 	RateLimits        []RateLimit
 	ExpiresAfter      time.Duration
 	ExpiresAt         *time.Time
@@ -75,6 +76,7 @@ type CreateResult struct {
 }
 
 var ErrSubjectErased = errors.New("notification account subject erased")
+var ErrAdmissionPaused = errors.New("notification admission paused")
 
 func eligibilityCampaignID(ref *contracts.EligibilityRef) any {
 	if ref == nil {
@@ -270,6 +272,9 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 		return CreateResult{}, fmt.Errorf("find notification intent: %w", err)
 	}
 
+	if params.ReplayOnly {
+		return CreateResult{}, ErrAdmissionPaused
+	}
 	retryAfter, err := s.applyRateLimits(ctx, tx, params)
 	if err != nil {
 		return CreateResult{}, err

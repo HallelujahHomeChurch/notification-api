@@ -16,6 +16,7 @@ import (
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 	"github.com/HallelujahHomeChurch/notification-api/internal/sesfeedback"
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
+	"github.com/google/uuid"
 )
 
 const (
@@ -33,6 +34,10 @@ type Config struct {
 	SESFeedbackTopicARN        string
 	SESFeedbackDLQURL          string
 	EmailProvider              string
+	GraphWorkerEnabled         bool
+	Graph                      providers.GraphConfig
+	GraphDailyBudget           int
+	GraphDailyReserve          int
 	SES                        providers.SESConfig
 	Environment                string
 	Port                       string
@@ -150,6 +155,26 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("DB_CONN_MAX_LIFETIME must be positive")
 	}
 
+	graphWorkerEnabled, err := boolEnv("NOTIFICATION_GRAPH_WORKER_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	graph := providers.GraphConfig{SenderUserID: os.Getenv("NOTIFICATION_GRAPH_SENDER_MAILBOX_ID")}
+	var graphDailyBudget, graphDailyReserve int
+	if graphWorkerEnabled {
+		graph.ManagedIdentityClientID = os.Getenv("NOTIFICATION_GRAPH_WORKER_CLIENT_ID")
+		graph.From = os.Getenv("NOTIFICATION_GRAPH_FROM")
+		graph.FromName = os.Getenv("NOTIFICATION_GRAPH_FROM_NAME")
+		graphDailyBudget, err = intEnv("NOTIFICATION_GRAPH_DAILY_BUDGET", 0)
+		if err != nil {
+			return Config{}, err
+		}
+		graphDailyReserve, err = intEnv("NOTIFICATION_GRAPH_DAILY_RESERVE", 0)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+
 	activeEncryptionKeyID, encryptionKeys, dataEncryptionKey, err := loadEncryptionKeys()
 	if err != nil {
 		return Config{}, err
@@ -160,6 +185,10 @@ func Load() (Config, error) {
 	}
 	cfg := Config{
 		EmailProvider:              env("EMAIL_PROVIDER", "smtp"),
+		GraphWorkerEnabled:         graphWorkerEnabled,
+		Graph:                      graph,
+		GraphDailyBudget:           graphDailyBudget,
+		GraphDailyReserve:          graphDailyReserve,
 		SESFeedbackDLQURL:          os.Getenv("SES_FEEDBACK_DLQ_URL"),
 		SESFeedbackQueueURL:        os.Getenv("SES_FEEDBACK_QUEUE_URL"),
 		SESFeedbackTopicARN:        os.Getenv("SES_FEEDBACK_TOPIC_ARN"),
@@ -209,8 +238,8 @@ func Load() (Config, error) {
 }
 
 func (c Config) validateLoaded() error {
-	if c.EmailProvider != "" && c.EmailProvider != "smtp" && c.EmailProvider != "ses" {
-		return fmt.Errorf("EMAIL_PROVIDER must be smtp or ses")
+	if c.EmailProvider != "" && c.EmailProvider != "smtp" && c.EmailProvider != "ses" && c.EmailProvider != "graph" {
+		return fmt.Errorf("EMAIL_PROVIDER must be smtp, ses or graph")
 	}
 	if c.Environment != EnvironmentDevelopment && c.Environment != EnvironmentProduction {
 		return fmt.Errorf("ENVIRONMENT must be development or production")
@@ -237,6 +266,15 @@ func (c Config) Validate(mode string) error {
 	case "migrate":
 		return nil
 	case "api":
+		if c.GraphWorkerEnabled {
+			return fmt.Errorf("NOTIFICATION_GRAPH_WORKER_ENABLED is worker-only")
+		}
+		if c.EmailProvider == "graph" {
+			id, err := uuid.Parse(c.Graph.SenderUserID)
+			if err != nil || id == uuid.Nil || id.String() != c.Graph.SenderUserID {
+				return fmt.Errorf("NOTIFICATION_GRAPH_SENDER_MAILBOX_ID must be a canonical nonzero UUID")
+			}
+		}
 		if err := c.validateEncryptionAndServiceBus(); err != nil {
 			return err
 		}
@@ -293,6 +331,14 @@ func (c Config) Validate(mode string) error {
 			}
 		default:
 			return fmt.Errorf("EMAIL_PROVIDER must be smtp or ses")
+		}
+		if c.GraphWorkerEnabled {
+			if err := providers.ValidateGraphConfig(c.Graph); err != nil {
+				return err
+			}
+			if c.GraphDailyBudget <= 0 || c.GraphDailyReserve < 0 || c.GraphDailyReserve >= c.GraphDailyBudget {
+				return fmt.Errorf("Graph daily budget must be positive and its reserve smaller than the budget")
+			}
 		}
 		if c.SESFeedbackQueueURL != "" || c.SESFeedbackTopicARN != "" || c.SESFeedbackDLQURL != "" {
 			if err := providers.ValidateSESConfig(c.SES); err != nil {

@@ -37,6 +37,7 @@ var ErrLeaseLost = errors.New("delivery lease lost")
 type claim struct {
 	DeliveryID             string
 	GraphMailboxID         string
+	Provider               string
 	MessageID              string
 	TemplateID             string
 	TemplateVersion        int
@@ -74,6 +75,7 @@ type fencedClaimer interface {
 
 type Worker struct {
 	emailPaused     bool
+	graphProvider   providers.Provider
 	email           *emailPolicy
 	repository      repository
 	providers       map[string]providers.Provider
@@ -84,6 +86,11 @@ type Worker struct {
 	eligibility     interface {
 		Check(context.Context, contracts.EligibilityRef) (bool, error)
 	}
+}
+
+func (w *Worker) WithGraphEmailProvider(provider providers.Provider) *Worker {
+	w.graphProvider = provider
+	return w
 }
 
 func (w *Worker) WithEmailPaused(paused bool) *Worker {
@@ -209,6 +216,14 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		leaseHeld = false
 		return message.Complete(ctx)
 	}
+	useGraph := claimed.Channel == "email" && claimed.Provider == "graph" && w.graphProvider != nil
+	if useGraph && templates.DeliveryClassFor(claimed.TemplateID, claimed.TemplateVersion) != templates.DeliveryClassTransactional {
+		if err := w.repository.markRetry(ctx, claimed, "graph_bulk_disabled", 5*time.Minute, w.newID()); err != nil {
+			return err
+		}
+		leaseHeld = false
+		return message.Complete(ctx)
+	}
 	payload, err := w.render(claimed)
 	if err != nil {
 		if errors.Is(err, notificationcrypto.ErrKeyNotConfigured) {
@@ -253,6 +268,17 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 	}
 
 	provider, providerOK := w.providers[claimed.Channel]
+	if useGraph {
+		if w.email == nil {
+			return errors.New("Graph delivery requires an email budget")
+		}
+		// Bind the Graph policy to this delivery session without modifying the legacy policy.
+		scoped, policy := *w, *w.email
+		policy.provider = "graph"
+		scoped.email = &policy
+		w = &scoped
+		provider, providerOK = w.graphProvider, true
+	}
 	var providerErr error
 	var prepared func(context.Context) (providers.ProviderReceipt, error)
 	graph, canPrepareGraph := provider.(interface {

@@ -33,12 +33,19 @@ type Graph struct {
 	client   *http.Client
 }
 
-func NewGraph(config GraphConfig) (*Graph, error) {
+func ValidateGraphConfig(config GraphConfig) error {
 	if !graphUUID(config.SenderUserID) || !graphUUID(config.ManagedIdentityClientID) {
-		return nil, errors.New("Graph requires a sender mailbox ID and a named managed identity client ID")
+		return errors.New("Graph requires a sender mailbox ID and a named managed identity client ID")
 	}
 	if !plainAddress(config.From) || strings.ContainsAny(config.FromName, "\r\n") {
-		return nil, errors.New("invalid Graph sender")
+		return errors.New("invalid Graph sender")
+	}
+	return nil
+}
+
+func NewGraph(config GraphConfig) (*Graph, error) {
+	if err := ValidateGraphConfig(config); err != nil {
+		return nil, err
 	}
 	identity, err := azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{ID: azidentity.ClientID(config.ManagedIdentityClientID)})
 	if err != nil {

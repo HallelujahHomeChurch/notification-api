@@ -44,6 +44,9 @@ func (r *memoryRepository) Create(_ context.Context, params store.CreateParams) 
 		}
 		return store.CreateResult{Message: existing, Replayed: true}, nil
 	}
+	if params.ReplayOnly {
+		return store.CreateResult{}, store.ErrAdmissionPaused
+	}
 	message := store.Message{
 		ID:              params.MessageID,
 		Caller:          params.Caller,
@@ -493,5 +496,38 @@ func TestSendPinsConfiguredEmailProvider(t *testing.T) {
 				t.Fatalf("provider was not pinned: %#v", repo.creates)
 			}
 		})
+	}
+}
+
+func TestGraphAdmissionHoldsBulkWhileLegacyAdmissionContinues(t *testing.T) {
+	repo := &memoryRepository{}
+	cfg := Config{EmailProvider: "graph", GraphMailboxID: "11111111-1111-4111-8111-111111111111", DataEncryptionKey: testEncryptionKey, HashKey: testHashKey}
+	request := contracts.SendRequest{
+		TemplateID: "engagement.newsletter", Channel: "email", Locale: "en",
+		Target:   contracts.Target{Type: "email", Address: "fixture@example.test"},
+		Resource: contracts.Resource{Type: "campaign", ID: "fixture-campaign"},
+		Payload: map[string]string{
+			"subject": "Fixture", "body": "Fixture",
+			"unsubscribeUrl":         "https://www.alive.org.tw/en/newsletter/unsubscribe?token=opaque",
+			"oneClickUnsubscribeUrl": "https://www.alive.org.tw/api/engagement/v1/newsletter/unsubscribe?token=opaque",
+		},
+	}
+	graph := New(repo, cfg)
+	cfg.EmailProvider = "smtp"
+	legacy := New(repo, cfg)
+	admitted, err := legacy.Send(t.Context(), "engagement-api", "legacy-bulk", request)
+	if err != nil || len(repo.creates) != 1 || repo.creates[0].Provider != "smtp" {
+		t.Fatalf("legacy bulk creates=%d err=%v", len(repo.creates), err)
+	}
+	replay, err := graph.Send(t.Context(), "engagement-api", "legacy-bulk", request)
+	if err != nil || !replay.Replayed || replay.MessageID != admitted.MessageID {
+		t.Fatalf("legacy replay after switching Graph admission = %#v, %v", replay, err)
+	}
+	if _, err := graph.Send(t.Context(), "engagement-api", "graph-bulk", request); !errors.Is(err, ErrNotificationsDisabled) || len(repo.messages) != 1 {
+		t.Fatalf("Graph bulk messages=%d err=%v", len(repo.messages), err)
+	}
+	request.Payload["body"] = "Different body"
+	if _, err := graph.Send(t.Context(), "engagement-api", "legacy-bulk", request); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("legacy replay with a different payload = %v", err)
 	}
 }

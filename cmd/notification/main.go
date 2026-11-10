@@ -215,6 +215,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 	repository := store.NewWithHashKeys(db, cfg.HashKeys).WithDeliveryEvidence(cfg.ExposeDeliveryEvidence)
 	notificationService := service.New(repository, service.Config{
 		EmailProvider:         cfg.EmailProvider,
+		GraphMailboxID:        cfg.Graph.SenderUserID,
 		ActiveEncryptionKeyID: cfg.ActiveEncryptionKeyID,
 		EncryptionKeys:        cfg.EncryptionKeys,
 		ActiveHashKeyID:       cfg.ActiveHashKeyID,
@@ -281,6 +282,16 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		}
 		emailProvider = providers.NewSMTP(smtpConfig)
 	}
+	var graph *providers.Graph
+	if cfg.GraphWorkerEnabled {
+		graphConfig := cfg.Graph
+		graphConfig.Logger = log.New(os.Stdout, "", log.LstdFlags)
+		var err error
+		graph, err = providers.NewGraph(graphConfig)
+		if err != nil {
+			return workerComponents{}, err
+		}
+	}
 	webPushConfig := providers.WebPushConfig{
 		PublicKey: cfg.VAPIDPublicKey, PrivateKey: cfg.VAPIDPrivateKey,
 		Subject: cfg.VAPIDSubject, Logger: log.New(os.Stdout, "", log.LstdFlags),
@@ -325,7 +336,14 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 	}
 	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
 		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
-	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New(cfg.WorkerEligibilityToken)).WithEmailPaused(cfg.EmailPaused)
+	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{
+		PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour,
+		ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour,
+		GraphDailyBudget: cfg.GraphDailyBudget, GraphDailyReserve: cfg.GraphDailyReserve,
+	}).WithEligibilityChecker(eligibilityclient.New(cfg.WorkerEligibilityToken)).WithEmailPaused(cfg.EmailPaused)
+	if graph != nil {
+		deliveryWorker.WithGraphEmailProvider(graph)
+	}
 
 	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
 	return workerComponents{
