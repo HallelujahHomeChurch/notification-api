@@ -31,6 +31,7 @@ This inventory describes existing metadata and behavior only. It exports no data
 - `notification_email_feedback_cursors.source` — Provider feedback stream identifier with no recipient join.
 - `notification_email_feedback_cursors.mailbox_id` — Dedicated service mailbox identifier, not an Account subject.
 - `notification_email_feedback_cursors.cursor_ciphertext` — Encrypted polling continuation state with no recipient join.
+- `notification_email_feedback_cursors.encryption_key_id` — Retained key reference for the encrypted polling checkpoint.
 - `notification_email_feedback_cursors.updated_at` — Polling checkpoint time, not an Account event.
 
 - `schema_migrations.version` — Migration filename, not an Account subject.
