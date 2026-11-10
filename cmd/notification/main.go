@@ -220,6 +220,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		ActiveHashKeyID:       cfg.ActiveHashKeyID,
 		HashKeys:              cfg.HashKeys,
 		NotificationsDisabled: cfg.NotificationsDisabled,
+		EmailPaused:           cfg.EmailPaused,
 		RateLimits: []store.RateLimit{
 			{Window: 15 * time.Minute, Maximum: 1},
 			{Window: 24 * time.Hour, Maximum: 5},
@@ -234,7 +235,7 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 		cfg.AllowDevCallerHeader,
 		cleanup,
 	)
-	dispatcher := outbox.New(db, publisher)
+	dispatcher := outbox.NewWithEmailPaused(db, publisher, cfg.EmailPaused)
 	retentionWorker := retention.New(db)
 	var private process
 	if cfg.EngagementStatusToken != "" || cfg.AccountPrivateToken != "" || cfg.EngagementSendToken != "" {
@@ -324,7 +325,7 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 	}
 	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
 		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
-	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New(cfg.WorkerEligibilityToken))
+	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour, ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour}).WithEligibilityChecker(eligibilityclient.New(cfg.WorkerEligibilityToken)).WithEmailPaused(cfg.EmailPaused)
 
 	stopPoolStats := dbphase.StartPoolStats(ctx, db.Stats)
 	return workerComponents{

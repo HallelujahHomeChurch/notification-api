@@ -73,6 +73,7 @@ type fencedClaimer interface {
 }
 
 type Worker struct {
+	emailPaused     bool
 	email           *emailPolicy
 	repository      repository
 	providers       map[string]providers.Provider
@@ -83,6 +84,11 @@ type Worker struct {
 	eligibility     interface {
 		Check(context.Context, contracts.EligibilityRef) (bool, error)
 	}
+}
+
+func (w *Worker) WithEmailPaused(paused bool) *Worker {
+	w.emailPaused = paused
+	return w
 }
 
 func (w *Worker) WithEligibilityChecker(checker interface {
@@ -194,6 +200,14 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		if err := w.email.observe(ctx, claimed); err != nil {
 			return err
 		}
+	}
+	if w.emailPaused && claimed.Channel == "email" {
+		// A message already in Service Bus is durably returned to the paused outbox.
+		if err := w.repository.markRetry(ctx, claimed, "email_paused", 30*time.Second, w.newID()); err != nil {
+			return err
+		}
+		leaseHeld = false
+		return message.Complete(ctx)
 	}
 	payload, err := w.render(claimed)
 	if err != nil {

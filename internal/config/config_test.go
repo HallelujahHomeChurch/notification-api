@@ -20,6 +20,24 @@ func TestGraphRuntimeSelectionRemainsUnavailable(t *testing.T) {
 	}
 }
 
+func TestEmailPauseDefaultsOff(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("NOTIFICATION_EMAIL_PAUSED", "")
+	cfg, err := Load()
+	if err != nil || cfg.EmailPaused {
+		t.Fatalf("default email pause = %v, %v", cfg.EmailPaused, err)
+	}
+	t.Setenv("NOTIFICATION_EMAIL_PAUSED", "true")
+	cfg, err = Load()
+	if err != nil || !cfg.EmailPaused {
+		t.Fatalf("configured email pause = %v, %v", cfg.EmailPaused, err)
+	}
+	t.Setenv("NOTIFICATION_EMAIL_PAUSED", "typo")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "NOTIFICATION_EMAIL_PAUSED") {
+		t.Fatalf("invalid email pause = %v", err)
+	}
+}
+
 func TestDeliveryEvidenceConfigDefaultsOff(t *testing.T) {
 	clearConfigEnv(t)
 	for _, tc := range []struct {

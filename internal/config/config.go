@@ -69,6 +69,7 @@ type Config struct {
 	VAPIDPrivateKey            string
 	VAPIDSubject               string
 	NotificationsDisabled      bool
+	EmailPaused                bool
 	ExposeDeliveryEvidence     bool
 	TemplateDailyLimit         int
 	ShutdownTimeout            time.Duration
@@ -80,6 +81,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	notificationsDisabled, err := boolEnv("NOTIFICATIONS_DISABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	emailPaused, err := boolEnv("NOTIFICATION_EMAIL_PAUSED", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -191,6 +196,7 @@ func Load() (Config, error) {
 		VAPIDPrivateKey:        os.Getenv("VAPID_PRIVATE_KEY"),
 		VAPIDSubject:           os.Getenv("VAPID_SUBJECT"),
 		NotificationsDisabled:  notificationsDisabled,
+		EmailPaused:            emailPaused,
 		ExposeDeliveryEvidence: exposeDeliveryEvidence,
 		TemplateDailyLimit:     templateDailyLimit,
 		ShutdownTimeout:        time.Duration(shutdownTimeoutSeconds) * time.Second,
