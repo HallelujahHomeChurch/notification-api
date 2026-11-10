@@ -416,6 +416,14 @@ components:
             safeToRetry:
               type: boolean
               description: Affirmative proof that a terminal unexpired retained Email has complete attempt history with definitive rejection and no accepted, unknown or incomplete send. False for legacy history. Consumers must treat a missing field as false; this does not authorize replay without current consent and source eligibility.
+            providerAcceptedAt:
+              type: string
+              format: date-time
+              description: Optional recorded provider submission acceptance time. This does not imply inbox delivery.
+            deliveryOutcome:
+              type: string
+              enum: [unknown, delivered, bounced]
+              description: Optional outcome from delivery evidence. Unknown means no conclusive delivery or bounce evidence is recorded.
             failureCode:
               type: string
               description: Stable, non-sensitive failure category for terminal delivery failures.

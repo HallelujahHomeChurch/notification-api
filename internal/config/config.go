@@ -69,6 +69,7 @@ type Config struct {
 	VAPIDPrivateKey            string
 	VAPIDSubject               string
 	NotificationsDisabled      bool
+	ExposeDeliveryEvidence     bool
 	TemplateDailyLimit         int
 	ShutdownTimeout            time.Duration
 }
@@ -79,6 +80,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	notificationsDisabled, err := boolEnv("NOTIFICATIONS_DISABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	exposeDeliveryEvidence, err := boolEnv("NOTIFICATION_STATUS_DELIVERY_EVIDENCE", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -177,17 +182,18 @@ func Load() (Config, error) {
 		ServiceBusQueueName:        env("SERVICEBUS_QUEUE_NAME", "notifications-email"),
 		ServiceBusConnectionString: os.Getenv("SERVICEBUS_CONNECTION_STRING"),
 		SMTPEmailsPerMinute:        smtpMinute, SMTPEmailsPerHour: smtpHour, SMTPReservePerMinute: smtpReserveMinute, SMTPReservePerHour: smtpReserveHour,
-		SMTPAddr:              os.Getenv("SMTP_ADDR"),
-		SMTPUsername:          os.Getenv("SMTP_USERNAME"),
-		SMTPPassword:          os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:              os.Getenv("SMTP_FROM"),
-		SMTPFromName:          env("SMTP_FROM_NAME", "哈利路亞家教會"),
-		VAPIDPublicKey:        os.Getenv("VAPID_PUBLIC_KEY"),
-		VAPIDPrivateKey:       os.Getenv("VAPID_PRIVATE_KEY"),
-		VAPIDSubject:          os.Getenv("VAPID_SUBJECT"),
-		NotificationsDisabled: notificationsDisabled,
-		TemplateDailyLimit:    templateDailyLimit,
-		ShutdownTimeout:       time.Duration(shutdownTimeoutSeconds) * time.Second,
+		SMTPAddr:               os.Getenv("SMTP_ADDR"),
+		SMTPUsername:           os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:           os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:               os.Getenv("SMTP_FROM"),
+		SMTPFromName:           env("SMTP_FROM_NAME", "哈利路亞家教會"),
+		VAPIDPublicKey:         os.Getenv("VAPID_PUBLIC_KEY"),
+		VAPIDPrivateKey:        os.Getenv("VAPID_PRIVATE_KEY"),
+		VAPIDSubject:           os.Getenv("VAPID_SUBJECT"),
+		NotificationsDisabled:  notificationsDisabled,
+		ExposeDeliveryEvidence: exposeDeliveryEvidence,
+		TemplateDailyLimit:     templateDailyLimit,
+		ShutdownTimeout:        time.Duration(shutdownTimeoutSeconds) * time.Second,
 	}
 
 	if err := cfg.validateLoaded(); err != nil {

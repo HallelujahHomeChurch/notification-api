@@ -34,6 +34,7 @@ type DeliveryPayload struct {
 type ProviderReceipt struct {
 	Provider          string
 	ProviderMessageID string
+	ProviderRequestID string
 	AcceptedAt        time.Time
 }
 

@@ -18,14 +18,16 @@ import (
 )
 
 type Message struct {
-	ID              string
-	Caller          string
-	RequestHash     string
-	HashKeyID       string
-	TemplateVersion int
-	Status          contracts.MessageStatus
-	FailureCode     string
-	SafeToRetry     bool
+	ID                 string
+	Caller             string
+	RequestHash        string
+	HashKeyID          string
+	TemplateVersion    int
+	Status             contracts.MessageStatus
+	FailureCode        string
+	SafeToRetry        bool
+	ProviderAcceptedAt *time.Time
+	DeliveryOutcome    contracts.DeliveryOutcome
 }
 
 type RateLimit struct {
@@ -144,8 +146,9 @@ func (tx sqlTransaction) Rollback() error {
 }
 
 type Store struct {
-	db       database
-	hashKeys map[string][]byte
+	exposeDeliveryEvidence bool
+	db                     database
+	hashKeys               map[string][]byte
 }
 
 func New(db *sql.DB, hashKey []byte) *Store {
@@ -333,19 +336,39 @@ func nullString(value string) any {
 	return value
 }
 
+// WithDeliveryEvidence enables the optional caller-scoped status fields.
+func (s *Store) WithDeliveryEvidence(enabled bool) *Store {
+	s.exposeDeliveryEvidence = enabled
+	return s
+}
+
 func (s *Store) Get(ctx context.Context, caller, messageID string) (Message, error) {
 	var message Message
 	err := s.db.QueryRowContext(ctx, `
 			SELECT m.id, m.caller_app_id, m.request_hash, m.hash_key_id, m.template_version, m.status,
-				COALESCE((SELECT d.last_error_code FROM notification_deliveries d
-					WHERE d.message_id=m.id ORDER BY d.updated_at DESC LIMIT 1), ''),
+				COALESCE(latest.last_error_code, ''),
     m.channel='email' AND m.email_history_complete AND m.status IN ('failed','dead_lettered') AND m.expires_at>clock_timestamp() AND m.payload_purged_at IS NULL AND octet_length(m.target_ciphertext)>0 AND octet_length(m.payload_ciphertext)>0
     AND NOT EXISTS(SELECT 1 FROM notification_deliveries d WHERE d.message_id=m.id AND (d.status NOT IN ('failed','dead_lettered') OR d.attempt_count<>(SELECT count(*) FROM notification_email_attempts a WHERE a.delivery_id=d.id)))
     AND EXISTS(SELECT 1 FROM notification_email_attempts a JOIN notification_deliveries d ON d.id=a.delivery_id WHERE d.message_id=m.id AND a.outcome='rejected')
-    AND NOT EXISTS(SELECT 1 FROM notification_email_attempts a JOIN notification_deliveries d ON d.id=a.delivery_id WHERE d.message_id=m.id AND a.outcome IN ('started','unknown','accepted'))
+    AND NOT EXISTS(SELECT 1 FROM notification_email_attempts a JOIN notification_deliveries d ON d.id=a.delivery_id WHERE d.message_id=m.id AND a.outcome IN ('started','unknown','accepted')),
+				CASE WHEN $3 THEN (SELECT a.provider_accepted_at FROM notification_email_attempts a
+				 WHERE a.delivery_id=latest.id AND a.outcome='accepted' ORDER BY a.attempt DESC LIMIT 1) END,
+				CASE
+				 WHEN NOT $3 OR m.channel<>'email' THEN ''
+				 WHEN EXISTS(SELECT 1 FROM notification_email_delivery_events e WHERE e.delivery_id=latest.id AND e.outcome='bounced')
+				   OR EXISTS(SELECT 1 FROM notification_email_feedback f WHERE f.delivery_id=latest.id AND f.event_type='hard_bounce') THEN 'bounced'
+				 WHEN EXISTS(SELECT 1 FROM notification_email_delivery_events e WHERE e.delivery_id=latest.id AND e.outcome='delivered')
+				   OR EXISTS(SELECT 1 FROM notification_email_feedback f WHERE f.delivery_id=latest.id AND f.event_type='delivery') THEN 'delivered'
+				 WHEN m.status='sent' OR latest.last_error_code='acceptance_unknown' THEN 'unknown'
+				 ELSE ''
+				END
 			FROM notification_messages m
+			LEFT JOIN LATERAL (
+				SELECT d.id,d.last_error_code FROM notification_deliveries d
+				WHERE d.message_id=m.id ORDER BY d.updated_at DESC LIMIT 1
+			) latest ON true
 			WHERE m.id=$1 AND m.caller_app_id=$2`,
-		messageID, caller,
+		messageID, caller, s.exposeDeliveryEvidence,
 	).Scan(
 		&message.ID,
 		&message.Caller,
@@ -355,6 +378,8 @@ func (s *Store) Get(ctx context.Context, caller, messageID string) (Message, err
 		&message.Status,
 		&message.FailureCode,
 		&message.SafeToRetry,
+		&message.ProviderAcceptedAt,
+		&message.DeliveryOutcome,
 	)
 	return message, err
 }

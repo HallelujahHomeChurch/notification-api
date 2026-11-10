@@ -374,3 +374,14 @@ existing recovery contracts; configuration rollback never down-migrates data.
 Pure Markdown-only changes (`**/*.md`) do not trigger automatic release workflows.
 Non-Markdown configuration and mixed source changes retain their existing gates.
 PRs retain the required `verify` check; Markdown-only PRs use classification only.
+
+### Optional email delivery evidence
+
+`NOTIFICATION_STATUS_DELIVERY_EVIDENCE` defaults to false. Leave it disabled
+until the caller compatibility checks pass and activation is approved.
+When enabled, the existing caller-scoped status GET can include
+`providerAcceptedAt` and `deliveryOutcome`. The former records provider
+submission acceptance. The latter is `unknown`, `delivered` or `bounced` and
+reflects only recorded evidence. The status enum, retry policy and send
+response keep their current meanings. Provider request identifiers stay
+internal. Migration 009 is additive and runs before the new binaries.

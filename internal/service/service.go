@@ -53,12 +53,14 @@ type Config struct {
 }
 
 type Result struct {
-	MessageID       string
-	Status          contracts.MessageStatus
-	TemplateVersion int
-	Replayed        bool
-	FailureCode     string
-	SafeToRetry     bool
+	MessageID          string
+	Status             contracts.MessageStatus
+	TemplateVersion    int
+	Replayed           bool
+	FailureCode        string
+	SafeToRetry        bool
+	ProviderAcceptedAt *time.Time
+	DeliveryOutcome    contracts.DeliveryOutcome
 }
 
 type repository interface {
@@ -271,7 +273,10 @@ func (s *Service) Get(ctx context.Context, caller, messageID string) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
-	return resultFromMessage(message, false), nil
+	result := resultFromMessage(message, false)
+	result.ProviderAcceptedAt = message.ProviderAcceptedAt
+	result.DeliveryOutcome = message.DeliveryOutcome
+	return result, nil
 }
 
 func canonicalRequest(request contracts.SendRequest, templateVersion int) ([]byte, error) {

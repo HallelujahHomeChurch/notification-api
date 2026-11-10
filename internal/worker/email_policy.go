@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"regexp"
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
@@ -138,7 +139,7 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	} else {
 		delay = 0
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO notification_email_attempts(delivery_id,attempt,bulk,outcome,started_at,provider,finished_at) VALUES($1,$2,$3,$4::text,$5::timestamptz,$6,CASE WHEN $4::text='deferred' THEN $5::timestamptz ELSE NULL END) ON CONFLICT(delivery_id,attempt) DO UPDATE SET outcome=EXCLUDED.outcome,started_at=EXCLUDED.started_at,finished_at=EXCLUDED.finished_at WHERE notification_email_attempts.outcome='deferred'`, c.DeliveryID, c.Attempt, bulk, outcome, now, name)
+	result, err := tx.ExecContext(ctx, `INSERT INTO notification_email_attempts(delivery_id,attempt,bulk,outcome,started_at,provider,finished_at) VALUES($1,$2,$3,$4::text,$5::timestamptz,$6,CASE WHEN $4::text='deferred' THEN $5::timestamptz ELSE NULL END) ON CONFLICT(delivery_id,attempt) DO UPDATE SET outcome=EXCLUDED.outcome,started_at=EXCLUDED.started_at,provider=EXCLUDED.provider,finished_at=EXCLUDED.finished_at WHERE notification_email_attempts.outcome='deferred'`, c.DeliveryID, c.Attempt, bulk, outcome, now, name)
 	if err != nil {
 		return 0, err
 	}
@@ -165,19 +166,24 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 			receipt.Provider = "smtp"
 		}
 	}
-	code := 250
-	if receipt.Provider == "ses" {
-		code = 0
+	code := 0
+	if receipt.Provider == "smtp" {
+		code = 250
 	}
+	requestID := receipt.ProviderRequestID
 	var pe *providers.ProviderError
 	if providerErr != nil {
 		outcome = "unknown"
 		if errors.As(providerErr, &pe) {
 			stage, code, enhanced = pe.Operation, pe.SMTPCode, pe.EnhancedCode
+			requestID = pe.ProviderRequestID
 			if pe.Kind != providers.ErrorAcceptanceUnknown {
 				outcome = "rejected"
 			}
 		}
+	}
+	if !providerRequestIDPattern.MatchString(requestID) {
+		requestID = ""
 	}
 	tx, err := beginDeliveryTransaction(ctx, p.db, p.conn)
 	if err != nil {
@@ -189,7 +195,7 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 	if err = tx.QueryRowContext(ctx, `SELECT throttle_count FROM notification_email_budget WHERE id=true FOR UPDATE`).Scan(&strikes); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE notification_email_attempts SET outcome=$3,stage=$4,smtp_code=$5,enhanced_code=$6,finished_at=clock_timestamp(),provider=$7,provider_message_id=$8,provider_accepted_at=$9 WHERE delivery_id=$1 AND attempt=$2 AND outcome='started'`, c.DeliveryID, c.Attempt, outcome, stage, code, enhanced, receipt.Provider, nullableReceiptID(receipt.ProviderMessageID), nullableReceiptTime(receipt.AcceptedAt))
+	result, err := tx.ExecContext(ctx, `UPDATE notification_email_attempts SET outcome=$3,stage=$4,smtp_code=$5,enhanced_code=$6,finished_at=clock_timestamp(),provider=$7,provider_message_id=$8,provider_accepted_at=$9,provider_request_id=$10 WHERE delivery_id=$1 AND attempt=$2 AND outcome='started'`, c.DeliveryID, c.Attempt, outcome, stage, code, enhanced, receipt.Provider, nullableReceiptID(receipt.ProviderMessageID), nullableReceiptTime(receipt.AcceptedAt), nullableReceiptID(requestID))
 	if err != nil {
 		return err
 	}
@@ -215,9 +221,11 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 	return tx.Commit()
 }
 
+var providerRequestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
 func (p *emailPolicy) acceptedReceipt(ctx context.Context, c claim) (providers.ProviderReceipt, error) {
 	var receipt providers.ProviderReceipt
-	err := p.statements().QueryRowContext(ctx, `SELECT provider,COALESCE(provider_message_id,'<'||delivery_id::text||'@notification.alive.org.tw>'),COALESCE(provider_accepted_at,finished_at) FROM notification_email_attempts WHERE delivery_id=$1 AND outcome='accepted' ORDER BY attempt DESC LIMIT 1`, c.DeliveryID).Scan(&receipt.Provider, &receipt.ProviderMessageID, &receipt.AcceptedAt)
+	err := p.statements().QueryRowContext(ctx, `SELECT provider,COALESCE(provider_message_id,CASE WHEN provider='smtp' THEN '<'||delivery_id::text||'@notification.alive.org.tw>' ELSE '' END),COALESCE(provider_request_id,''),COALESCE(provider_accepted_at,finished_at) FROM notification_email_attempts WHERE delivery_id=$1 AND outcome='accepted' ORDER BY attempt DESC LIMIT 1`, c.DeliveryID).Scan(&receipt.Provider, &receipt.ProviderMessageID, &receipt.ProviderRequestID, &receipt.AcceptedAt)
 	return receipt, err
 }
 
@@ -244,14 +252,14 @@ func restoreAcceptedEmail(ctx context.Context, tx *database.SessionTransaction, 
 	var messageID string
 	var acceptedAt time.Time
 	var providerMessageID string
-	err := tx.QueryRowContext(ctx, `SELECT d.message_id::text,COALESCE(a.provider_accepted_at,a.finished_at),COALESCE(a.provider_message_id,'<'||d.id::text||'@notification.alive.org.tw>') FROM notification_deliveries d JOIN notification_email_attempts a ON a.delivery_id=d.id WHERE d.id=$1 AND (d.status IN ('queued','sending') OR (d.status='dead_lettered' AND d.last_error_code='expired')) AND a.outcome='accepted' ORDER BY a.attempt DESC LIMIT 1 FOR UPDATE OF d`, deliveryID).Scan(&messageID, &acceptedAt, &providerMessageID)
+	err := tx.QueryRowContext(ctx, `SELECT d.message_id::text,COALESCE(a.provider_accepted_at,a.finished_at),COALESCE(a.provider_message_id,CASE WHEN a.provider='smtp' THEN '<'||d.id::text||'@notification.alive.org.tw>' ELSE '' END) FROM notification_deliveries d JOIN notification_email_attempts a ON a.delivery_id=d.id WHERE d.id=$1 AND (d.status IN ('queued','sending') OR (d.status='dead_lettered' AND d.last_error_code='expired')) AND a.outcome='accepted' ORDER BY a.attempt DESC LIMIT 1 FOR UPDATE OF d`, deliveryID).Scan(&messageID, &acceptedAt, &providerMessageID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE notification_deliveries SET status='sent',sent_at=$2,provider_message_id=$3,last_error_code=NULL,lease_expires_at=NULL,updated_at=clock_timestamp() WHERE id=$1`, deliveryID, acceptedAt, providerMessageID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE notification_deliveries SET status='sent',sent_at=$2,provider_message_id=NULLIF($3,''),last_error_code=NULL,lease_expires_at=NULL,updated_at=clock_timestamp() WHERE id=$1`, deliveryID, acceptedAt, providerMessageID); err != nil {
 		return false, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE notification_messages SET status='sent',terminal_at=clock_timestamp(),updated_at=clock_timestamp() WHERE id=$1`, messageID); err != nil {

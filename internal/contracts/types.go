@@ -13,6 +13,14 @@ const (
 	MessageStatusSuppressed   MessageStatus = "suppressed"
 )
 
+type DeliveryOutcome string
+
+const (
+	DeliveryOutcomeUnknown   DeliveryOutcome = "unknown"
+	DeliveryOutcomeDelivered DeliveryOutcome = "delivered"
+	DeliveryOutcomeBounced   DeliveryOutcome = "bounced"
+)
+
 type DeliveryStatus string
 
 const (

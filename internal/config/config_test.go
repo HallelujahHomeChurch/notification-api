@@ -10,6 +10,23 @@ import (
 	"time"
 )
 
+func TestDeliveryEvidenceConfigDefaultsOff(t *testing.T) {
+	clearConfigEnv(t)
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"true", true},
+	} {
+		t.Setenv("NOTIFICATION_STATUS_DELIVERY_EVIDENCE", tc.value)
+		cfg, err := Load()
+		if err != nil || cfg.ExposeDeliveryEvidence != tc.want {
+			t.Fatalf("Load delivery evidence = %v, %v", cfg.ExposeDeliveryEvidence, err)
+		}
+	}
+}
+
 func TestLoadParsesVersionedKeyrings(t *testing.T) {
 	clearConfigEnv(t)
 	encryptionV1 := base64.StdEncoding.EncodeToString(make([]byte, 32))
