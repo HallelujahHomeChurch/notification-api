@@ -471,6 +471,16 @@ func TestSendRejectsRetiredDSRTemplatesBeforePersistence(t *testing.T) {
 	}
 }
 
+func TestGraphAdmissionRequiresAnImmutableMailboxPin(t *testing.T) {
+	for _, mailbox := range []string{"", "someone@example.test", "00000000-0000-0000-0000-000000000000"} {
+		repo := &memoryRepository{}
+		svc := New(repo, Config{EmailProvider: "graph", GraphMailboxID: mailbox, DataEncryptionKey: testEncryptionKey, HashKey: testHashKey})
+		if _, err := svc.Send(t.Context(), "account-api", "mailbox-fixture", validRequest()); err == nil || len(repo.creates) != 0 {
+			t.Fatalf("invalid mailbox created a notification: %v", err)
+		}
+	}
+}
+
 func TestSendPinsConfiguredEmailProvider(t *testing.T) {
 	for _, provider := range []string{"smtp", "ses"} {
 		t.Run(provider, func(t *testing.T) {

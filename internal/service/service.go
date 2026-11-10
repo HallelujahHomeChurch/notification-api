@@ -42,6 +42,7 @@ func (e *RateLimitError) Unwrap() error {
 
 type Config struct {
 	EmailProvider         string
+	GraphMailboxID        string
 	ActiveEncryptionKeyID string
 	EncryptionKeys        map[string][]byte
 	ActiveHashKeyID       string
@@ -205,9 +206,16 @@ func (s *Service) Send(
 		}
 	}
 
-	provider := "webpush"
+	provider, graphMailboxID := "webpush", ""
 	if definition.Channel == "email" {
 		provider = s.config.EmailProvider
+		if provider == "graph" {
+			id, err := uuid.Parse(s.config.GraphMailboxID)
+			if err != nil || id == uuid.Nil || id.String() != s.config.GraphMailboxID {
+				return Result{}, errors.New("Graph admission requires an immutable sender mailbox ID")
+			}
+			graphMailboxID = id.String()
+		}
 	}
 	created, err := s.repository.Create(ctx, store.CreateParams{
 		MessageID:         messageID,
@@ -234,6 +242,7 @@ func (s *Service) Send(
 		ResourceID:        request.Resource.ID,
 		EligibilityRef:    request.EligibilityRef,
 		Provider:          provider,
+		GraphMailboxID:    graphMailboxID,
 		RateLimits:        rateLimits,
 		ExpiresAfter:      definition.TTL,
 		ExpiresAt:         request.ExpiresAt,

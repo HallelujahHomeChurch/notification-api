@@ -106,10 +106,11 @@ func (p *emailPolicy) confirmGraphPermit(ctx context.Context, c claim) (bool, er
 			JOIN notification_deliveries d ON d.id=a.delivery_id
 			JOIN notification_messages m ON m.id=d.message_id
 			WHERE d.id=$1 AND d.provider='graph' AND d.status='sending'
+			  AND d.graph_mailbox_id=NULLIF($4,'')::uuid
 			  AND d.attempt_count=$2 AND a.attempt=$2 AND a.outcome='started'
 			  AND d.lease_expires_at IS NOT NULL
 			  AND LEAST(a.started_at+($3::bigint*interval '1 microsecond'),d.lease_expires_at,m.expires_at)>clock_timestamp()
-		)`, c.DeliveryID, c.Attempt, graphPermitLifetime.Microseconds()).Scan(&allowed)
+		)`, c.DeliveryID, c.Attempt, graphPermitLifetime.Microseconds(), c.GraphMailboxID).Scan(&allowed)
 	if err != nil || allowed {
 		return allowed, err
 	}

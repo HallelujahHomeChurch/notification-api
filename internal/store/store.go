@@ -61,6 +61,7 @@ type CreateParams struct {
 	ResourceID        string
 	EligibilityRef    *contracts.EligibilityRef
 	Provider          string
+	GraphMailboxID    string
 	RateLimits        []RateLimit
 	ExpiresAfter      time.Duration
 	ExpiresAt         *time.Time
@@ -302,9 +303,9 @@ func (s *Store) Create(ctx context.Context, params CreateParams) (CreateResult, 
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO notification_deliveries (
-			id, message_id, channel, provider, status
-		) VALUES ($1,$2,$3,$4,'queued')`,
-		params.DeliveryID, params.MessageID, params.Channel, params.Provider,
+			id, message_id, channel, provider, status, graph_mailbox_id
+		) VALUES ($1,$2,$3,$4,'queued',NULLIF($5,'')::uuid)`,
+		params.DeliveryID, params.MessageID, params.Channel, params.Provider, params.GraphMailboxID,
 	); err != nil {
 		return CreateResult{}, fmt.Errorf("insert notification delivery: %w", err)
 	}

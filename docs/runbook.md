@@ -811,3 +811,20 @@ are established with the scoped reader identity. The current store consumes
 verified evidence only and writes no technical suppression. Keep bulk disabled
 until actual correlation, key/cursor lifecycle, delivery monitoring and
 suppression safety pass.
+
+### Provider and reader compatibility
+
+The source-only Graph admission path stores the canonical mailbox ID with the
+delivery. Idempotent requests retain their original provider and mailbox pins.
+A prepared Graph worker checks the exact mailbox before token acquisition and
+checks it again with the submission permit. A legacy worker that receives a
+Graph-pinned message refuses submission and can dead-letter it. Rollout must
+keep those messages away from old consumers. The pin check cannot replace
+the queue fence or a drain.
+
+The local pipeline covers the private send request, durable outbox, fake
+broker/provider, accepted receipt recovery after a failing sent-state write,
+caller-scoped status, Web Push separation and Account cleanup. Status evidence
+remains off by default. Existing receipts remain readable. Graph selection,
+live Service Bus behavior, mailbox rights, feedback, fair queue latency and
+real delivery require separate validation.
