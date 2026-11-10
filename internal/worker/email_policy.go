@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
 	"regexp"
 	"time"
 
@@ -137,8 +138,16 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 	}
 	defer tx.Rollback()
 	var now, next, cooldown time.Time
-	if err = tx.QueryRowContext(ctx, `SELECT next_send_at,cooldown_until FROM `+p.budgetTable()+` WHERE id=true FOR UPDATE`).Scan(&next, &cooldown); err != nil {
+	var halted bool
+	haltColumn := "false"
+	if graph {
+		haltColumn = "configuration_halted"
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT next_send_at,cooldown_until,`+haltColumn+` FROM `+p.budgetTable()+` WHERE id=true FOR UPDATE`).Scan(&next, &cooldown, &halted); err != nil {
 		return 0, err
+	}
+	if halted {
+		return 5 * time.Minute, nil
 	}
 	// A clock evaluated before the lock wait can expire a reservation before admission.
 	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
@@ -308,7 +317,11 @@ func (p *emailPolicy) finish(ctx context.Context, c claim, receipt providers.Pro
 		}
 	}
 	if p.provider == "graph" {
-		if _, err := tx.ExecContext(ctx, `UPDATE notification_graph_email_budget SET next_send_at=clock_timestamp()+($1::bigint*interval '1 microsecond') WHERE id=true`, graphSendInterval.Microseconds()); err != nil {
+		halt := pe != nil && pe.HTTPStatus == http.StatusForbidden
+		if _, err := tx.ExecContext(ctx, `UPDATE notification_graph_email_budget
+			SET next_send_at=clock_timestamp()+($1::bigint*interval '1 microsecond'),
+			    configuration_halted=configuration_halted OR $2
+			WHERE id=true`, graphSendInterval.Microseconds(), halt); err != nil {
 			return err
 		}
 	}

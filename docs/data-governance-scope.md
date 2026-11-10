@@ -26,6 +26,7 @@ This inventory describes existing metadata and behavior only. It exports no data
 - `notification_graph_email_budget.next_send_at` — Shared Graph pacing and bounded in-flight hold time.
 - `notification_graph_email_budget.cooldown_until` — Shared Graph provider cooldown, not an Account event.
 - `notification_graph_email_budget.throttle_count` — Graph provider-wide failure counter without a recipient join.
+- `notification_graph_email_budget.configuration_halted` — Graph sender configuration halt with no recipient join.
 
 - `notification_email_feedback_cursors.source` — Provider feedback stream identifier with no recipient join.
 - `notification_email_feedback_cursors.mailbox_id` — Dedicated service mailbox identifier, not an Account subject.

@@ -764,11 +764,21 @@ window and separate cooldown. A started or uncertain attempt consumes a Graph
 reservation. An expired permit that is known to have reached no provider call
 is deferred. An unrecorded finish retains a bounded in-flight hold.
 
-The Graph adapter and daily limit configuration remain outside this slice.
-Validate the permit at the actual submission boundary when wiring the adapter.
+The source-only Graph adapter prepares MIME and the explicit managed-identity
+token before reserving a permit. The worker checks the permit immediately
+before the prepared HTTP POST. A 403 records a durable Graph-only configuration
+halt. Any eventual operator reset requires evidence of repaired mailbox rights,
+a reviewed preview and authorization. A restart alone cannot resume submissions.
+Runtime Graph selection and daily limit configuration remain disabled.
 Confirm a producer-to-provider p95 of at most 10 seconds with 10,000 bulk
 deliveries already queued and a Web Push lane present before enabling Graph bulk.
 The existing FIFO route provides no transactional priority for messages already
 in the broker. If the shared queue misses the fixture, review and rebase the
 existing queue isolation proposal before changing topology. Confirm connection
 headroom, queue ownership, and old/new worker fencing in a separate preview.
+
+The adapter sends one base64 MIME POST to the immutable sender mailbox. A 202
+means Graph accepted submission, with no provider message ID in the response.
+Use the existing provider failure telemetry for Graph errors. A 429 applies
+Retry-After, and ambiguous transport/server errors enter the existing
+same-provider acceptance policy. [Graph sendMail](https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0) · [Graph throttling](https://learn.microsoft.com/en-us/graph/throttling)
