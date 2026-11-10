@@ -828,3 +828,48 @@ caller-scoped status, Web Push separation and Account cleanup. Status evidence
 remains off by default. Existing receipts remain readable. Graph selection,
 live Service Bus behavior, mailbox rights, feedback, fair queue latency and
 real delivery require separate validation.
+
+### Cutover evidence and rollback decisions
+
+This checklist prepares a future change. The source-only Graph adapters in the
+current stack cannot be selected by the deployed runtime configuration.
+
+- Record the approved change and test purpose. Capture the exact serving API and
+  worker image/revision, effective SMTP/SES pins, pending and dead-lettered work,
+  in-flight leases, active queue consumers and compatible rollback artifacts.
+- Verify the Account and Engagement reader evidence and release compatible
+  readers before enabling optional delivery evidence. Confirm migrations, exact
+  mailbox and managed identities, scoped positive and negative access tests,
+  sender alignment, actual approved daily budget, feedback recovery and scoped
+  delivery correlation. Record the 10,000-bulk plus Web Push p95 result and
+  mixed-revision connection budget. Leave the cutover pending while evidence is
+  missing.
+- Validate a channel-specific email pause and drain that keeps Web Push
+  available. The existing global notification disable control pauses every
+  channel and cannot serve as the email-only control. Record zero in-flight
+  sends and prove that old workers cannot claim Graph-pinned work before the
+  reviewed transition. Pin the approved sender mailbox for new Graph admissions.
+- Run the authorized canary and verify durable acceptance, actual arrival and
+  feedback independently. Restore transactional traffic first. Restore bulk
+  after feedback, queue latency and external-recipient headroom pass.
+
+| Delivery evidence at drain | Disposition |
+| --- | --- |
+| Accepted receipt, including a Graph 202 without message ID | Preserve the receipt and terminal state. |
+| Started, incomplete or ambiguous bulk attempt | Hold for reconciliation without an automatic retry or provider change. |
+| Ambiguous transactional attempt | Retain bounded retries on its existing provider and mailbox pin under the original expiry. |
+| Eligible, unexpired, provably unsubmitted or definitively rejected | Permit a reviewed re-pin only after the approved dry run and current eligibility checks. |
+| Expired, revoked or suppressed | Leave terminal and retain policy and receipt evidence. |
+
+On rollback, pause the affected email lane and drain the active sender. Restore
+only an API/worker pair that can read retained receipts and the current schema.
+Keep unresolved Graph pins away from legacy consumers. Restore legacy admission
+only after the reviewed routing fence and preserved pin evidence are verified.
+Repeat private API, queue, worker and Web Push checks and record the actual
+rollback revisions. Leave provider selection or optional status fields disabled
+if their acceptance evidence is missing.
+
+ACS retirement follows a separate preview after seven days of observation, an
+authorized campaign and confirmation that active/retryable ACS pins and rollback
+dependencies have drained. Preserve historic receipts. Leave SES disposition,
+DNS, mailbox roles and provider-resource deletion to their own changes.
