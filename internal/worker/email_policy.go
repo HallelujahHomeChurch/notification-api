@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"strings"
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/database"
 	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
+	"github.com/HallelujahHomeChurch/notification-api/internal/templates"
 )
 
 var errEmailAcceptanceUnknown = errors.New("email acceptance requires reconciliation")
@@ -51,7 +51,9 @@ func (w *Worker) WithEmailLimits(db *sql.DB, limits EmailLimits) *Worker {
 	return w
 }
 
-func campaignEmail(c claim) bool { return strings.HasPrefix(c.TemplateID, "engagement.") }
+func campaignEmail(c claim) bool {
+	return templates.DeliveryClassFor(c.TemplateID, c.TemplateVersion) == templates.DeliveryClassBulk
+}
 
 func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error) {
 	if err := p.limits.Validate(); err != nil {
@@ -102,13 +104,13 @@ func (p *emailPolicy) begin(ctx context.Context, c claim) (time.Duration, error)
 			return 0, err
 		}
 	}
-	if campaignEmail(c) && (uncertain || recorded != c.Attempt-1) {
+	bulk := campaignEmail(c)
+	if bulk && (uncertain || recorded != c.Attempt-1) {
 		if err := tx.Commit(); err != nil {
 			return 0, err
 		}
 		return 0, errEmailAcceptanceUnknown
 	}
-	bulk := campaignEmail(c)
 	for _, window := range []struct {
 		duration       time.Duration
 		total, reserve int

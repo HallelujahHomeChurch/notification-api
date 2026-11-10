@@ -72,6 +72,9 @@ type Service struct {
 }
 
 func New(repository repository, config Config) *Service {
+	if config.EmailProvider == "" {
+		config.EmailProvider = "smtp"
+	}
 	if len(config.EncryptionKeys) == 0 && len(config.DataEncryptionKey) > 0 {
 		config.ActiveEncryptionKeyID = "legacy-v1"
 		config.EncryptionKeys = map[string][]byte{"legacy-v1": config.DataEncryptionKey}
@@ -100,7 +103,7 @@ func (s *Service) Send(
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
-	target, provider, err := normalizeTarget(request.Target, definition.Channel)
+	target, err := normalizeTarget(request.Target, definition.Channel)
 	if err != nil {
 		return Result{}, err
 	}
@@ -200,7 +203,8 @@ func (s *Service) Send(
 		}
 	}
 
-	if definition.Channel == "email" && s.config.EmailProvider != "" {
+	provider := "webpush"
+	if definition.Channel == "email" {
 		provider = s.config.EmailProvider
 	}
 	created, err := s.repository.Create(ctx, store.CreateParams{
@@ -305,16 +309,14 @@ func normalizeEmail(value string) (string, error) {
 	return normalized, nil
 }
 
-func normalizeTarget(target contracts.Target, channel string) (string, string, error) {
+func normalizeTarget(target contracts.Target, channel string) (string, error) {
 	switch {
 	case channel == "email" && target.Type == "email":
-		normalized, err := normalizeEmail(target.Address)
-		return normalized, "smtp", err
+		return normalizeEmail(target.Address)
 	case channel == "web_push" && target.Type == "web_push":
-		normalized, err := normalizeWebPushSubscription(target.Address)
-		return normalized, "webpush", err
+		return normalizeWebPushSubscription(target.Address)
 	default:
-		return "", "", ErrInvalidRequest
+		return "", ErrInvalidRequest
 	}
 }
 

@@ -18,10 +18,18 @@ var (
 	ErrInvalidPayload     = errors.New("invalid template payload")
 )
 
+type DeliveryClass string
+
+const (
+	DeliveryClassTransactional DeliveryClass = "transactional"
+	DeliveryClassBulk          DeliveryClass = "bulk"
+)
+
 type Definition struct {
 	ID              string
 	Version         int
 	Channel         string
+	DeliveryClass   DeliveryClass
 	AllowedCallers  map[string]bool
 	RequiredFields  map[string]bool
 	AllowedFields   map[string]bool
@@ -30,19 +38,20 @@ type Definition struct {
 }
 
 var definitions = map[string]map[int]Definition{
-	"account.email-correction-verify": {1: {ID: "account.email-correction-verify", Version: 1, Channel: "email", AllowedCallers: set("account-api"), RequiredFields: set("verifyUrl"), AllowedFields: set("verifyUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 30 * time.Minute}},
+	"account.email-correction-verify": {1: {ID: "account.email-correction-verify", Version: 1, Channel: "email", DeliveryClass: DeliveryClassTransactional, AllowedCallers: set("account-api"), RequiredFields: set("verifyUrl"), AllowedFields: set("verifyUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 30 * time.Minute}},
 
-	"account.email-correction-security-notice": {1: {ID: "account.email-correction-security-notice", Version: 1, Channel: "email", AllowedCallers: set("account-api"), RequiredFields: set("actionUrl"), AllowedFields: set("actionUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
+	"account.email-correction-security-notice": {1: {ID: "account.email-correction-security-notice", Version: 1, Channel: "email", DeliveryClass: DeliveryClassTransactional, AllowedCallers: set("account-api"), RequiredFields: set("actionUrl"), AllowedFields: set("actionUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
 
-	"account.email-correction-admin-review": {1: {ID: "account.email-correction-admin-review", Version: 1, Channel: "email", AllowedCallers: set("account-api"), RequiredFields: set("reviewUrl"), AllowedFields: set("reviewUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
+	"account.email-correction-admin-review": {1: {ID: "account.email-correction-admin-review", Version: 1, Channel: "email", DeliveryClass: DeliveryClassTransactional, AllowedCallers: set("account-api"), RequiredFields: set("reviewUrl"), AllowedFields: set("reviewUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
 
-	"account.email-correction-completed": {1: {ID: "account.email-correction-completed", Version: 1, Channel: "email", AllowedCallers: set("account-api"), RequiredFields: set("actionUrl"), AllowedFields: set("actionUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
+	"account.email-correction-completed": {1: {ID: "account.email-correction-completed", Version: 1, Channel: "email", DeliveryClass: DeliveryClassTransactional, AllowedCallers: set("account-api"), RequiredFields: set("actionUrl"), AllowedFields: set("actionUrl"), SupportedLocale: set("zh-Hant", "zh-Hans", "en", "ja", "ko"), TTL: 24 * time.Hour}},
 
 	"account.verify-email": {
 		1: {
 			ID:              "account.verify-email",
 			Version:         1,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("verifyUrl"),
 			AllowedFields:   set("verifyUrl"),
@@ -53,6 +62,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.verify-email",
 			Version:         2,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("verifyUrl"),
 			AllowedFields:   set("verifyUrl"),
@@ -63,6 +73,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.verify-email",
 			Version:         3,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("verifyUrl"),
 			AllowedFields:   set("verifyUrl"),
@@ -75,6 +86,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.reset-password",
 			Version:         1,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("resetUrl"),
 			AllowedFields:   set("resetUrl"),
@@ -85,6 +97,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.reset-password",
 			Version:         2,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("resetUrl"),
 			AllowedFields:   set("resetUrl"),
@@ -95,6 +108,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.reset-password",
 			Version:         3,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("resetUrl"),
 			AllowedFields:   set("resetUrl"),
@@ -107,6 +121,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.oauth-link-confirmation",
 			Version:         1,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("confirmUrl", "provider"),
 			AllowedFields:   set("confirmUrl", "provider"),
@@ -117,6 +132,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.oauth-link-confirmation",
 			Version:         2,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("confirmUrl", "provider"),
 			AllowedFields:   set("confirmUrl", "provider"),
@@ -127,6 +143,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.oauth-link-confirmation",
 			Version:         3,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("confirmUrl", "provider"),
 			AllowedFields:   set("confirmUrl", "provider"),
@@ -139,6 +156,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.oauth-onboarding-code",
 			Version:         1,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("code", "provider"),
 			AllowedFields:   set("code", "provider"),
@@ -149,6 +167,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.oauth-onboarding-code",
 			Version:         2,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("code", "provider"),
 			AllowedFields:   set("code", "provider"),
@@ -159,6 +178,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "account.oauth-onboarding-code",
 			Version:         3,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassTransactional,
 			AllowedCallers:  set("account-api"),
 			RequiredFields:  set("code", "provider"),
 			AllowedFields:   set("code", "provider"),
@@ -166,7 +186,7 @@ var definitions = map[string]map[int]Definition{
 			TTL:             15 * time.Minute,
 		},
 		4: {
-			ID: "account.oauth-onboarding-code", Version: 4, Channel: "email",
+			ID: "account.oauth-onboarding-code", Version: 4, Channel: "email", DeliveryClass: DeliveryClassTransactional,
 			AllowedCallers: set("account-api"), RequiredFields: set("code", "provider"),
 			AllowedFields:   set("code", "provider", "expiresAt"),
 			SupportedLocale: set("zh-Hant", "zh-Hans", "en"), TTL: 30 * time.Minute,
@@ -177,6 +197,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "engagement.newsletter",
 			Version:         1,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassBulk,
 			AllowedCallers:  set("engagement-api"),
 			RequiredFields:  set("subject", "body", "unsubscribeUrl"),
 			AllowedFields:   set("subject", "body", "actionUrl", "unsubscribeUrl"),
@@ -187,6 +208,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "engagement.newsletter",
 			Version:         2,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassBulk,
 			AllowedCallers:  set("engagement-api"),
 			RequiredFields:  set("subject", "body", "unsubscribeUrl", "oneClickUnsubscribeUrl"),
 			AllowedFields:   set("subject", "body", "actionUrl", "unsubscribeUrl", "oneClickUnsubscribeUrl"),
@@ -197,6 +219,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "engagement.newsletter",
 			Version:         3,
 			Channel:         "email",
+			DeliveryClass:   DeliveryClassBulk,
 			AllowedCallers:  set("engagement-api"),
 			RequiredFields:  set("subject", "body", "unsubscribeUrl", "oneClickUnsubscribeUrl"),
 			AllowedFields:   set("subject", "body", "actionUrl", "unsubscribeUrl", "oneClickUnsubscribeUrl"),
@@ -209,6 +232,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "engagement.web-push",
 			Version:         1,
 			Channel:         "web_push",
+			DeliveryClass:   DeliveryClassBulk,
 			AllowedCallers:  set("engagement-api"),
 			RequiredFields:  set("title", "body"),
 			AllowedFields:   set("title", "body", "actionUrl"),
@@ -219,6 +243,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "engagement.web-push",
 			Version:         2,
 			Channel:         "web_push",
+			DeliveryClass:   DeliveryClassBulk,
 			AllowedCallers:  set("engagement-api"),
 			RequiredFields:  set("title", "body", "clickBehavior"),
 			AllowedFields:   set("title", "body", "clickBehavior", "actionUrl"),
@@ -229,6 +254,7 @@ var definitions = map[string]map[int]Definition{
 			ID:              "engagement.web-push",
 			Version:         3,
 			Channel:         "web_push",
+			DeliveryClass:   DeliveryClassBulk,
 			AllowedCallers:  set("engagement-api"),
 			RequiredFields:  set("title", "body", "clickBehavior"),
 			AllowedFields:   set("title", "body", "clickBehavior", "actionUrl"),
@@ -250,6 +276,11 @@ var currentVersions = map[string]int{
 	"account.oauth-onboarding-code":   4,
 	"engagement.newsletter":           2,
 	"engagement.web-push":             2,
+}
+
+// DeliveryClassFor reads policy for a persisted template version without copying render metadata.
+func DeliveryClassFor(templateID string, version int) DeliveryClass {
+	return definitions[templateID][version].DeliveryClass
 }
 
 func Resolve(templateID, channel string) (Definition, error) {

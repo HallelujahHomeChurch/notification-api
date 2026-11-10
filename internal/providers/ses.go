@@ -121,7 +121,7 @@ func (s *SES) Send(ctx context.Context, p DeliveryPayload) (ProviderReceipt, err
 		return ProviderReceipt{}, sesFailure(ErrorInvalidEndpoint, "validate", err)
 	}
 	var raw bytes.Buffer
-	if err := writeMessage(&raw, s.config.From, s.config.FromName, p); err != nil {
+	if err := writeEmailMIME(&raw, s.config.From, s.config.FromName, p); err != nil {
 		return ProviderReceipt{}, sesFailure(ErrorInvalidEndpoint, "message", err)
 	}
 	// Fetch credentials before SendEmail so STS/Entra failures are known not to have submitted mail.

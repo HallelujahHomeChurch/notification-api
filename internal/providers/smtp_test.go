@@ -29,7 +29,7 @@ import (
 	"time"
 )
 
-func TestWriteMessageUsesDisplayNameAndHTMLAlternative(t *testing.T) {
+func TestEmailMIMEUsesDisplayNameAndHTMLAlternative(t *testing.T) {
 	var message bytes.Buffer
 	payload := DeliveryPayload{
 		Recipient:           "person@example.test",
@@ -40,7 +40,7 @@ func TestWriteMessageUsesDisplayNameAndHTMLAlternative(t *testing.T) {
 		ListUnsubscribe:     "<https://www.alive.org.tw/newsletter/unsubscribe?token=opaque>",
 		OneClickUnsubscribe: true,
 	}
-	if err := writeMessage(&message, "no-reply@alive.org.tw", "哈利路亞家教會", payload); err != nil {
+	if err := writeEmailMIME(&message, "no-reply@alive.org.tw", "哈利路亞家教會", payload); err != nil {
 		t.Fatal(err)
 	}
 	parsed, err := mail.ReadMessage(bytes.NewReader(message.Bytes()))
@@ -59,14 +59,24 @@ func TestWriteMessageUsesDisplayNameAndHTMLAlternative(t *testing.T) {
 		t.Fatalf("Content-Type = %q, error = %v", parsed.Header.Get("Content-Type"), err)
 	}
 	parts := multipart.NewReader(parsed.Body, params["boundary"])
-	for _, contentType := range []string{"text/plain; charset=UTF-8", "text/html; charset=UTF-8"} {
+	for _, want := range []struct{ contentType, body string }{
+		{"text/plain; charset=UTF-8", payload.Body},
+		{"text/html; charset=UTF-8", payload.HTMLBody},
+	} {
 		part, err := parts.NextPart()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if part.Header.Get("Content-Type") != contentType {
-			t.Fatalf("part Content-Type = %q, want %q", part.Header.Get("Content-Type"), contentType)
+		if part.Header.Get("Content-Type") != want.contentType {
+			t.Fatalf("part Content-Type = %q, want %q", part.Header.Get("Content-Type"), want.contentType)
 		}
+		body, err := io.ReadAll(part)
+		if err != nil || string(body) != want.body {
+			t.Fatalf("part body = %q, error = %v, want %q", body, err, want.body)
+		}
+	}
+	if _, err := parts.NextPart(); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected end of multipart/alternative, got %v", err)
 	}
 }
 
