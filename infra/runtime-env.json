@@ -22,10 +22,10 @@
         "value": "support@alive.org.tw"
       },
       "NOTIFICATION_GRAPH_DAILY_BUDGET": {
-        "value": "500"
+        "value": "1000"
       },
       "NOTIFICATION_GRAPH_DAILY_RESERVE": {
-        "value": "100"
+        "value": "500"
       }
     }
   }
