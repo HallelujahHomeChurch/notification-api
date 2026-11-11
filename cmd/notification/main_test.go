@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/HallelujahHomeChurch/notification-api/internal/config"
+	"github.com/HallelujahHomeChurch/notification-api/internal/providers"
 )
 
 func TestRunRejectsInvalidModeBeforeLoadingConfig(t *testing.T) {
@@ -250,6 +251,22 @@ func TestBuildWorkerRejectsInvalidWebPushBeforeDatabase(t *testing.T) {
 	_, err := buildWorker(context.Background(), cfg)
 	if err == nil || !strings.Contains(err.Error(), "Web Push") {
 		t.Fatalf("buildWorker() error = %v, want Web Push config error before database", err)
+	}
+}
+
+func TestBuildGraphOnlyWorkerSkipsLegacySMTPValidation(t *testing.T) {
+	cfg, _ := testConfig()
+	cfg.EmailProvider = "graph"
+	cfg.SMTPAddr, cfg.SMTPFrom = "", ""
+	cfg.GraphWorkerEnabled = true
+	cfg.Graph = providers.GraphConfig{
+		SenderUserID: "11111111-1111-4111-8111-111111111111", ManagedIdentityClientID: "22222222-2222-4222-8222-222222222222",
+		From: "sender@example.test",
+	}
+	cfg.VAPIDSubject = "invalid"
+	_, err := buildWorker(t.Context(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "Web Push") {
+		t.Fatalf("buildWorker() error = %v, want Web Push validation", err)
 	}
 }
 

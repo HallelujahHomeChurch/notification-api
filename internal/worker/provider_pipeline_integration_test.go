@@ -335,3 +335,29 @@ func TestGraphWorkerRoutesByDurablePinWithLegacyEmailPresent(t *testing.T) {
 		t.Fatalf("Graph bulk status=%q failures=%d err=%v", status, failures, err)
 	}
 }
+
+func TestGraphOnlyWorkerDefersLegacyPinWithoutStartingAttempt(t *testing.T) {
+	db := workerTestDatabase(t)
+	id := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
+	graph := &preparedGraphFixture{prepare: func(context.Context, providers.DeliveryPayload) (func(context.Context) (providers.ProviderReceipt, error), error) {
+		t.Fatal("legacy delivery reached the Graph provider")
+		return nil, nil
+	}}
+	instance := NewWithProviders(db, nil, map[string][]byte{"legacy-v1": testKey}).
+		WithEmailLimits(db, EmailLimits{PerMinute: 20, PerHour: 100, GraphDailyBudget: 1000}).WithGraphEmailProvider(graph)
+	message := &fakeMessage{id: id}
+	if err := instance.Process(t.Context(), message); err != nil || message.completed != 1 || message.deadLetterReason != "" {
+		t.Fatalf("legacy pin handling: %+v, err=%v", message, err)
+	}
+	var status, provider, reason string
+	var failures, started int
+	if err := db.QueryRowContext(t.Context(), `
+		SELECT d.status,d.provider,d.last_error_code,d.failure_count,count(a.*) FILTER (WHERE a.outcome<>'deferred')
+		FROM notification_deliveries d LEFT JOIN notification_email_attempts a ON a.delivery_id=d.id
+		WHERE d.id=$1 GROUP BY d.id`, id).Scan(&status, &provider, &reason, &failures, &started); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" || provider != "smtp" || reason != "legacy_provider_disabled" || failures != 0 || started != 0 {
+		t.Fatalf("legacy pin status=%q provider=%q reason=%q failures=%d provider attempts=%d", status, provider, reason, failures, started)
+	}
+}

@@ -79,6 +79,25 @@ func TestGraphTransactionalAdmissionMode(t *testing.T) {
 	}
 }
 
+func TestGraphOnlyWorkerDoesNotRequireSMTP(t *testing.T) {
+	cfg := validProductionModeConfig("worker")
+	cfg.EmailProvider = "graph"
+	cfg.SMTPAddr, cfg.SMTPFrom = "", ""
+	cfg.GraphWorkerEnabled = true
+	cfg.GraphDailyBudget = 1000
+	cfg.Graph = providers.GraphConfig{
+		SenderUserID: "11111111-1111-4111-8111-111111111111", ManagedIdentityClientID: "22222222-2222-4222-8222-222222222222",
+		From: "sender@example.test",
+	}
+	if err := cfg.Validate("worker"); err != nil {
+		t.Fatalf("Graph-only worker with no SMTP settings: %v", err)
+	}
+	cfg.GraphWorkerEnabled = false
+	if err := cfg.Validate("worker"); err == nil {
+		t.Fatal("Graph-only worker accepted disabled Graph transport")
+	}
+}
+
 func TestGraphWorkerLoadsReplyTo(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("NOTIFICATION_GRAPH_WORKER_ENABLED", "true")

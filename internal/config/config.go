@@ -332,8 +332,12 @@ func (c Config) Validate(mode string) error {
 			if err := providers.ValidateSESConfig(c.SES); err != nil {
 				return err
 			}
+		case "graph":
+			if !c.GraphWorkerEnabled {
+				return fmt.Errorf("EMAIL_PROVIDER=graph requires NOTIFICATION_GRAPH_WORKER_ENABLED=true")
+			}
 		default:
-			return fmt.Errorf("EMAIL_PROVIDER must be smtp or ses")
+			return fmt.Errorf("worker EMAIL_PROVIDER must be smtp, ses, or graph")
 		}
 		if c.GraphWorkerEnabled {
 			if err := providers.ValidateGraphConfig(c.Graph); err != nil {

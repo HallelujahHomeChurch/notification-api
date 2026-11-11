@@ -769,8 +769,7 @@ token before reserving a permit. The worker checks the permit immediately
 before the prepared HTTP POST. A 403 records a durable Graph-only configuration
 halt. Any eventual operator reset requires evidence of repaired mailbox rights,
 a reviewed preview and authorization. A restart alone cannot resume submissions.
-Current release manifests leave Graph disabled. A future approved preview must
-set worker and API controls independently.
+Review worker and API controls independently before each change.
 
 | Process | Reviewed configuration |
 | --- | --- |
@@ -783,6 +782,12 @@ Graph and new bulk mail to SMTP. Keep the worker's legacy provider set to
 `smtp` in this mode. Returning API admission to `smtp` affects new work.
 Keep Graph dispatch available until existing Graph pins have drained or been
 reconciled.
+
+After bulk admission has moved and all SMTP/SES deliveries have drained, set
+the worker's `EMAIL_PROVIDER=graph` with Graph dispatch enabled. This mode
+starts without SMTP or SES credentials and continues Web Push delivery. Any
+remaining legacy pin stays queued on its original provider until its expiry
+or the legacy worker configuration is restored.
 
 Set the worker's optional `NOTIFICATION_GRAPH_REPLY_TO` to a single monitored
 support address. Keep `NOTIFICATION_GRAPH_FROM` and the mailbox pin on the
