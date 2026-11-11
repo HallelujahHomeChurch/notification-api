@@ -165,6 +165,7 @@ func Load() (Config, error) {
 		graph.ManagedIdentityClientID = os.Getenv("NOTIFICATION_GRAPH_WORKER_CLIENT_ID")
 		graph.From = os.Getenv("NOTIFICATION_GRAPH_FROM")
 		graph.FromName = os.Getenv("NOTIFICATION_GRAPH_FROM_NAME")
+		graph.ReplyTo = os.Getenv("NOTIFICATION_GRAPH_REPLY_TO")
 		graphDailyBudget, err = intEnv("NOTIFICATION_GRAPH_DAILY_BUDGET", 0)
 		if err != nil {
 			return Config{}, err

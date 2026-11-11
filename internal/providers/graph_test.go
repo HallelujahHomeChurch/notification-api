@@ -115,6 +115,55 @@ func TestGraphClassifiesSingleHTTPAttempt(t *testing.T) {
 	}
 }
 
+func TestGraphReplyToMIME(t *testing.T) {
+	for _, tc := range []struct {
+		name, replyTo string
+		plain         bool
+	}{
+		{"default", "", false},
+		{"multipart", "support@example.test", false},
+		{"plain", "support@example.test", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := fixtureGraph(t, func(r *http.Request) (*http.Response, error) {
+				msg, err := mail.ReadMessage(base64.NewDecoder(base64.StdEncoding, r.Body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := msg.Header.Get("Reply-To"); got != tc.replyTo {
+					t.Fatalf("Reply-To = %q, want %q", got, tc.replyTo)
+				}
+				from, err := msg.Header.AddressList("From")
+				if err != nil || len(from) != 1 || from[0].Address != "sender@example.test" {
+					t.Fatalf("unexpected From: %v, %v", from, err)
+				}
+				return &http.Response{StatusCode: http.StatusAccepted, Body: http.NoBody}, nil
+			})
+			g.config.ReplyTo = tc.replyTo
+			payload := sesTestPayload()
+			if tc.plain {
+				payload.HTMLBody = ""
+			}
+			if _, err := g.Send(t.Context(), payload); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestGraphRejectsInvalidReplyTo(t *testing.T) {
+	cfg := GraphConfig{
+		SenderUserID: fixtureGraphSender, ManagedIdentityClientID: "5a2625bc-6208-4133-a58e-e219817b232c",
+		From: "sender@example.test",
+	}
+	for _, address := range []string{"support", "support@example.test, other@example.test", "support@example.test\r\nBcc: other@example.test"} {
+		cfg.ReplyTo = address
+		if _, err := NewGraph(cfg); err == nil {
+			t.Fatalf("invalid Reply-To accepted: %q", address)
+		}
+	}
+}
+
 func TestGraphTokenAndHeaderValidationFailBeforeSubmission(t *testing.T) {
 	g := fixtureGraph(t, func(*http.Request) (*http.Response, error) {
 		t.Fatal("request submitted before token and MIME validation")

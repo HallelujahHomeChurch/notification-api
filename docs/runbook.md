@@ -784,6 +784,11 @@ Graph and new bulk mail to SMTP. Keep the worker's legacy provider set to
 Keep Graph dispatch available until existing Graph pins have drained or been
 reconciled.
 
+Set the worker's optional `NOTIFICATION_GRAPH_REPLY_TO` to a single monitored
+support address. Keep `NOTIFICATION_GRAPH_FROM` and the mailbox pin on the
+dedicated sender. During the canary, reply from Gmail and Outlook and confirm
+that the support inbox receives both replies.
+
 The worker routes each delivery by its persisted provider and validates the
 exact mailbox before obtaining a token. Existing SMTP/SES pins retain their
 provider and budget. Graph admissions accept transactional templates only.
