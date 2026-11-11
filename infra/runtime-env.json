@@ -10,6 +10,9 @@
     },
     "notification-migrate": {},
     "notification-worker": {
+      "EMAIL_PROVIDER": {
+        "value": "graph"
+      },
       "NOTIFICATION_GRAPH_WORKER_ENABLED": {
         "value": "true"
       },
@@ -23,7 +26,7 @@
         "value": "notifications@alive.org.tw"
       },
       "NOTIFICATION_GRAPH_FROM_NAME": {
-        "value": "哈利路亞家教會 帳號通知"
+        "value": "\u54c8\u5229\u8def\u4e9e\u5bb6\u6559\u6703 \u5e33\u865f\u901a\u77e5"
       },
       "NOTIFICATION_GRAPH_REPLY_TO": {
         "value": "support@alive.org.tw"
@@ -33,7 +36,12 @@
       },
       "NOTIFICATION_GRAPH_DAILY_RESERVE": {
         "value": "500"
-      }
+      },
+      "SMTP_ADDR": null,
+      "SMTP_FROM": null,
+      "SMTP_FROM_NAME": null,
+      "SMTP_USERNAME": null,
+      "SMTP_PASSWORD": null
     }
   }
 }
