@@ -44,14 +44,16 @@ verify_secret() {
 
 verify_assignments() {
   local principal="$1"
-  shift
+  local allow_retiring_smtp="$2"
+  shift 2
   local allowed
   allowed="$(printf '%s\n' "$@" | jq -R -s '
     split("\n")[:-1] | map(split("|") | map(ascii_downcase)) | sort
   ')"
   az role assignment list --assignee-object-id "$principal" --all \
     -o json --only-show-errors |
-    jq -e --arg vault "$vault_id" --argjson allowed "$allowed" '
+    jq -e --arg vault "$vault_id" --arg role "$role_id" --argjson allowed "$allowed" \
+      --argjson allow_retiring_smtp "$allow_retiring_smtp" '
       ($vault | ascii_downcase) as $vault
       | [.[] | {
           scope: (.scope | ascii_downcase),
@@ -63,6 +65,12 @@ verify_assignments() {
             or ($vault | startswith($assignment.scope + "/"))
             or ($assignment.scope | startswith($vault + "/"))
           )
+        | select((
+            $allow_retiring_smtp
+            and .role == ($role | ascii_downcase)
+            and (.scope == ($vault + "/secrets/notification-smtp-username")
+              or .scope == ($vault + "/secrets/notification-smtp-password"))
+          ) | not)
         | [.scope, .role]
       ] | sort == $allowed
     ' >/dev/null
@@ -75,8 +83,6 @@ for secret in \
   notification-hash-key \
   notification-encryption-keys-json \
   notification-hash-keys-json \
-  notification-smtp-username \
-  notification-smtp-password \
   notification-vapid-private-key
 do
   verify_secret "$secret"
@@ -127,13 +133,11 @@ verify_private_write() {
 
 verify_private_write notification-account-private-token "${NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION:-}"
 verify_private_write notification-engagement-send-token "${NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION:-}"
-verify_assignments "$api_principal" "${api_assignments[@]}"
+verify_assignments "$api_principal" false "${api_assignments[@]}"
 worker_assignments=(
   "${vault_id}/secrets/notification-database-url|${role_id}"
   "${vault_id}/secrets/notification-data-encryption-key|${role_id}"
   "${vault_id}/secrets/notification-encryption-keys-json|${role_id}"
-  "${vault_id}/secrets/notification-smtp-username|${role_id}"
-  "${vault_id}/secrets/notification-smtp-password|${role_id}"
   "${vault_id}/secrets/notification-vapid-private-key|${role_id}"
 )
 if [[ -n "${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION:-}" ]]; then
@@ -151,8 +155,9 @@ if [[ -n "${NOTIFICATION_WORKER_ELIGIBILITY_SECRET_VERSION:-}" ]]; then
   verify_secret notification-worker-eligibility-token
   worker_assignments+=("${eligibility_scope}|${role_id}")
 fi
-verify_assignments "$worker_principal" "${worker_assignments[@]}"
-verify_assignments "$migrate_principal" \
+# Terraform revokes these two exact worker grants after the runtime bindings are gone.
+verify_assignments "$worker_principal" true "${worker_assignments[@]}"
+verify_assignments "$migrate_principal" false \
   "${vault_id}/secrets/notification-database-url|${role_id}" \
   "${vault_id}/secrets/notification-migrate-database-url|${role_id}"
 

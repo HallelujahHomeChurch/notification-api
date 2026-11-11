@@ -209,9 +209,6 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       SES_FEEDBACK_CONFIG: ${{ vars.SES_FEEDBACK_CONFIG || 'null' }}
-      SMTP_ADDR: ${{ vars.SMTP_ADDR }}
-      SMTP_FROM: ${{ vars.SMTP_FROM }}
-      SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
       VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
       VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
@@ -249,9 +246,6 @@ jobs:
             AZURE_CLIENT_ID
             AZURE_TENANT_ID
             AZURE_SUBSCRIPTION_ID
-            SMTP_ADDR
-            SMTP_FROM
-            SMTP_AUTHENTICATION_ENABLED
             VAPID_PUBLIC_KEY
             VAPID_SUBJECT
             NOTIFICATION_TEMPLATE_DAILY_LIMIT
@@ -265,13 +259,6 @@ jobs:
               exit 1
             fi
           done
-          case "${SMTP_AUTHENTICATION_ENABLED}" in
-            true|false) ;;
-            *)
-              echo "SMTP_AUTHENTICATION_ENABLED must be true or false" >&2
-              exit 1
-              ;;
-          esac
           if ! [[ "${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" =~ ^[1-9][0-9]*$ ]]; then
             echo "NOTIFICATION_TEMPLATE_DAILY_LIMIT must be a positive integer" >&2
             exit 1
@@ -417,9 +404,6 @@ jobs:
               accountPrivateVersion="${NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION}" \
               engagementSendVersion="${NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION}" \
               provisionPermissions=false \
-              smtpAddr="${SMTP_ADDR}" \
-              smtpFrom="${SMTP_FROM}" \
-              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
               vapidPublicKey="${VAPID_PUBLIC_KEY}" \
               vapidSubject="${VAPID_SUBJECT}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
@@ -465,9 +449,6 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       SES_FEEDBACK_CONFIG: ${{ vars.SES_FEEDBACK_CONFIG || 'null' }}
-      SMTP_ADDR: ${{ vars.SMTP_ADDR }}
-      SMTP_FROM: ${{ vars.SMTP_FROM }}
-      SMTP_AUTHENTICATION_ENABLED: ${{ vars.SMTP_AUTHENTICATION_ENABLED }}
       VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
       VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
       NOTIFICATION_TEMPLATE_DAILY_LIMIT: ${{ vars.NOTIFICATION_TEMPLATE_DAILY_LIMIT }}
@@ -500,9 +481,6 @@ jobs:
             AZURE_CLIENT_ID
             AZURE_TENANT_ID
             AZURE_SUBSCRIPTION_ID
-            SMTP_ADDR
-            SMTP_FROM
-            SMTP_AUTHENTICATION_ENABLED
             VAPID_PUBLIC_KEY
             VAPID_SUBJECT
             NOTIFICATION_TEMPLATE_DAILY_LIMIT
@@ -517,13 +495,6 @@ jobs:
               exit 1
             fi
           done
-          case "${SMTP_AUTHENTICATION_ENABLED}" in
-            true|false) ;;
-            *)
-              echo "SMTP_AUTHENTICATION_ENABLED must be true or false" >&2
-              exit 1
-              ;;
-          esac
           if ! [[ "${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" =~ ^[1-9][0-9]*$ ]]; then
             echo "NOTIFICATION_TEMPLATE_DAILY_LIMIT must be a positive integer" >&2
             exit 1
@@ -656,9 +627,6 @@ jobs:
               accountPrivateVersion="${NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION}" \
               engagementSendVersion="${NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION}" \
               provisionPermissions=false \
-              smtpAddr="${SMTP_ADDR}" \
-              smtpFrom="${SMTP_FROM}" \
-              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
               vapidPublicKey="${VAPID_PUBLIC_KEY}" \
               vapidSubject="${VAPID_SUBJECT}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
@@ -692,9 +660,6 @@ jobs:
               notificationVaultName="${NOTIFICATION_VAULT_NAME}" \
               deployRuntime=false \
               provisionPermissions=false \
-              smtpAddr="${SMTP_ADDR}" \
-              smtpFrom="${SMTP_FROM}" \
-              smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
               vapidPublicKey="${VAPID_PUBLIC_KEY}" \
               vapidSubject="${VAPID_SUBJECT}" \
               notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
@@ -806,9 +771,6 @@ jobs:
                 accountPrivateVersion="${NOTIFICATION_ACCOUNT_PRIVATE_SECRET_VERSION}" \
                 engagementSendVersion="${NOTIFICATION_ENGAGEMENT_SEND_SECRET_VERSION}" \
                 provisionPermissions=false \
-                smtpAddr="${SMTP_ADDR}" \
-                smtpFrom="${SMTP_FROM}" \
-                smtpAuthenticationEnabled="${SMTP_AUTHENTICATION_ENABLED}" \
                 vapidPublicKey="${VAPID_PUBLIC_KEY}" \
                 vapidSubject="${VAPID_SUBJECT}" \
                 notificationTemplateDailyLimit="${NOTIFICATION_TEMPLATE_DAILY_LIMIT}" \
