@@ -2,7 +2,7 @@
   "resources": {
     "notification-api": {
       "EMAIL_PROVIDER": {
-        "value": "graph-transactional"
+        "value": "graph"
       },
       "NOTIFICATION_GRAPH_SENDER_MAILBOX_ID": {
         "value": "520af6ce-335a-4818-9f33-4b1cdfaabc40"

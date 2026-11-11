@@ -224,13 +224,6 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		leaseHeld = false
 		return message.Complete(ctx)
 	}
-	if useGraph && templates.DeliveryClassFor(claimed.TemplateID, claimed.TemplateVersion) != templates.DeliveryClassTransactional {
-		if err := w.repository.markRetry(ctx, claimed, "graph_bulk_disabled", 5*time.Minute, w.newID()); err != nil {
-			return err
-		}
-		leaseHeld = false
-		return message.Complete(ctx)
-	}
 	payload, err := w.render(claimed)
 	if err != nil {
 		if errors.Is(err, notificationcrypto.ErrKeyNotConfigured) {

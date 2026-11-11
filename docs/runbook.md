@@ -751,7 +751,7 @@ The [Exchange Online ADR](adr/0001-exchange-online-delivery-target.md) records t
 3. Under separate authorization, pause new email admission and dispatch, keep Web Push running, and drain in-flight email. Classify queued, accepted, uncertain and expired attempts. Keep accepted attempts closed. Allow re-pinning only for unexpired, provably unsubmitted or definitively rejected attempts covered by the approved preview.
 4. Fence older workers from Graph-pinned deliveries. Run a canary with approved recipients before restoring transactional traffic. Resume bulk after feedback correlation and daily headroom are verified. Observe worker/queue health, retry delays, unknown outcomes and durable receipt recovery.
 5. For rollback, pause and drain the affected email lane and restore a compatible worker and API pair through the release workflow. Keep additive schema and durable receipts. Keep bulk unknowns in reconciliation and bound transactional unknown retries to their pinned provider and original expiry.
-6. Consider ACS retirement only after at least seven days of observation, an approved campaign, and confirmation that live/retryable/in-flight ACS pins and rollback dependencies have drained. Retain historical receipt readers. Resource changes require a separate preview and authorization.
+6. Before retiring ACS, confirm that live, retryable, and in-flight ACS pins have drained and no deployment or rollback path still requires the resource. Use the observation window approved for the rollout. Retain historical receipt readers and review the exact resource deletion plan.
 
 ### Graph admission foundation
 
@@ -774,7 +774,7 @@ Review worker and API controls independently before each change.
 | Process | Reviewed configuration |
 | --- | --- |
 | Worker | `NOTIFICATION_GRAPH_WORKER_ENABLED=true`, `NOTIFICATION_GRAPH_SENDER_MAILBOX_ID`, `NOTIFICATION_GRAPH_WORKER_CLIENT_ID`, `NOTIFICATION_GRAPH_FROM`, optional `NOTIFICATION_GRAPH_FROM_NAME`, positive `NOTIFICATION_GRAPH_DAILY_BUDGET`, and optional smaller `NOTIFICATION_GRAPH_DAILY_RESERVE`. Keep the existing legacy `EMAIL_PROVIDER`. |
-| API | For a staged cutover, `EMAIL_PROVIDER=graph-transactional` and the same `NOTIFICATION_GRAPH_SENDER_MAILBOX_ID`. The API requires only the mailbox pin and rejects worker identity mode. |
+| API | Use `EMAIL_PROVIDER=graph-transactional` for transactional mail or `EMAIL_PROVIDER=graph` for all email. Set the same `NOTIFICATION_GRAPH_SENDER_MAILBOX_ID`. The API requires only the mailbox pin and rejects worker identity mode. |
 
 Release the Graph-capable worker with its named identity before changing API
 admission. In `graph-transactional` mode the API pins new transactional mail to
@@ -796,8 +796,8 @@ that the support inbox receives both replies.
 
 The worker routes each delivery by its persisted provider and validates the
 exact mailbox before obtaining a token. Existing SMTP/SES pins retain their
-provider and budget. Graph admissions accept transactional templates only.
-Graph bulk remains unavailable until verified feedback and a separate review.
+provider and budget. Graph batch deliveries use the shared Graph budget and
+retain the existing eligibility and technical suppression checks.
 
 Confirm a producer-to-provider p95 of at most 10 seconds with 10,000 bulk
 deliveries already queued and a Web Push lane present before enabling Graph bulk.
@@ -837,9 +837,9 @@ recipient, duplicate/replay, and forged DSN. Verify which Graph mailbox,
 message provenance, original submission and recipient fields are reliable.
 Implement bounded parsing and host-bound delta reads only after those facts
 are established with the scoped reader identity. The current store consumes
-verified evidence only and writes no technical suppression. Keep bulk disabled
-until actual correlation, key/cursor lifecycle, delivery monitoring and
-suppression safety pass.
+verified evidence only and writes no technical suppression. During an approved
+cutover without automated feedback, use Exchange message trace for incident
+reconciliation. A Graph 202 records acceptance and does not prove inbox delivery.
 
 ### Provider and reader compatibility
 
@@ -902,7 +902,6 @@ Repeat private API, queue, worker and Web Push checks and record the actual
 rollback revisions. Leave provider selection or optional status fields disabled
 if their acceptance evidence is missing.
 
-ACS retirement follows a separate preview after seven days of observation, an
-authorized campaign and confirmation that active/retryable ACS pins and rollback
-dependencies have drained. Preserve historic receipts. Leave SES disposition,
-DNS, mailbox roles and provider-resource deletion to their own changes.
+ACS retirement follows the reviewed resource preview after active and retryable
+ACS pins have drained. Preserve historic receipts and record the replacement
+rollback path before deleting the provider resources.

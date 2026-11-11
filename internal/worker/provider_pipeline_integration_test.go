@@ -302,13 +302,28 @@ func TestGraphWorkerRoutesByDurablePinWithLegacyEmailPresent(t *testing.T) {
 	ctx := t.Context()
 	legacyID := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
 	graphID := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
-	bulkID := insertWorkerDelivery(t, db, testKey, statusQueued, 0, nil)
-	for _, id := range []string{graphID, bulkID} {
-		if _, err := db.ExecContext(ctx, `UPDATE notification_deliveries SET provider='graph',graph_mailbox_id=$2 WHERE id=$1`, id, fixtureGraphMailboxID); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := db.ExecContext(ctx, `UPDATE notification_deliveries SET provider='graph',graph_mailbox_id=$2 WHERE id=$1`, graphID, fixtureGraphMailboxID); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE notification_messages SET template_id='engagement.newsletter',template_version=1 WHERE id=(SELECT message_id FROM notification_deliveries WHERE id=$1)`, bulkID); err != nil {
+	svc := service.New(store.New(db, testKey), service.Config{
+		EmailProvider: "graph", GraphMailboxID: fixtureGraphMailboxID, DataEncryptionKey: testKey, HashKey: testKey,
+	})
+	bulk, err := svc.Send(ctx, "engagement-api", "bulk-fixture", contracts.SendRequest{
+		TemplateID: "engagement.newsletter", Channel: "email", Locale: "en",
+		Target:         contracts.Target{Type: "email", Address: "bulk@example.test"},
+		Resource:       contracts.Resource{Type: "campaign", ID: uuid.NewString()},
+		EligibilityRef: &contracts.EligibilityRef{CampaignID: uuid.NewString(), RecipientID: uuid.NewString()},
+		Payload: map[string]string{
+			"subject": "Fixture", "body": "Fixture",
+			"unsubscribeUrl":         "https://www.alive.org.tw/en/newsletter/unsubscribe?token=opaque",
+			"oneClickUnsubscribeUrl": "https://www.alive.org.tw/api/engagement/v1/newsletter/unsubscribe?token=opaque",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bulkID string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM notification_deliveries WHERE message_id=$1`, bulk.MessageID).Scan(&bulkID); err != nil {
 		t.Fatal(err)
 	}
 	graphCalls := 0
@@ -319,19 +334,24 @@ func TestGraphWorkerRoutesByDurablePinWithLegacyEmailPresent(t *testing.T) {
 		}, nil
 	}}
 	smtp := &fakeProvider{}
-	worker := New(db, smtp, testKey).WithEmailLimits(db, EmailLimits{PerMinute: 20, PerHour: 100, GraphDailyBudget: 10}).WithGraphEmailProvider(graph)
+	eligible := &fakeEligibilityChecker{allowed: true}
+	worker := New(db, smtp, testKey).WithEmailLimits(db, EmailLimits{PerMinute: 20, PerHour: 100, GraphDailyBudget: 10}).
+		WithGraphEmailProvider(graph).WithEligibilityChecker(eligible)
 	for _, id := range []string{graphID, legacyID, bulkID} {
+		if _, err := db.ExecContext(ctx, `UPDATE notification_graph_email_budget SET next_send_at=clock_timestamp()`); err != nil {
+			t.Fatal(err)
+		}
 		message := &fakeMessage{id: id}
 		if err := worker.Process(ctx, message); err != nil || message.completed != 1 {
 			t.Fatalf("delivery %q complete=%d err=%v", id, message.completed, err)
 		}
 	}
-	if graphCalls != 1 || smtp.calls != 1 {
-		t.Fatalf("pinned calls: Graph=%d SMTP=%d", graphCalls, smtp.calls)
+	if graphCalls != 2 || smtp.calls != 1 || eligible.calls != 1 {
+		t.Fatalf("pinned calls: Graph=%d SMTP=%d eligibility=%d", graphCalls, smtp.calls, eligible.calls)
 	}
 	var status string
 	var failures int
-	if err := db.QueryRowContext(ctx, `SELECT status,failure_count FROM notification_deliveries WHERE id=$1`, bulkID).Scan(&status, &failures); err != nil || status != "queued" || failures != 0 {
+	if err := db.QueryRowContext(ctx, `SELECT status,failure_count FROM notification_deliveries WHERE id=$1`, bulkID).Scan(&status, &failures); err != nil || status != "sent" || failures != 0 {
 		t.Fatalf("Graph bulk status=%q failures=%d err=%v", status, failures, err)
 	}
 }

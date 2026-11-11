@@ -374,7 +374,7 @@ func (s postgresStore) markRetry(
 			    next_attempt_at=clock_timestamp()+($3::bigint*interval '1 microsecond'),
 			    last_error_code=$4,
 			    failure_count=failure_count+CASE
-			        WHEN channel='email' AND $4 IN ('rate_limited','email_paused','graph_bulk_disabled','legacy_provider_disabled') THEN 0
+			        WHEN channel='email' AND $4 IN ('rate_limited','email_paused','legacy_provider_disabled') THEN 0
 			        ELSE 1 END,
 			    lease_expires_at=NULL,
 			    updated_at=clock_timestamp()
