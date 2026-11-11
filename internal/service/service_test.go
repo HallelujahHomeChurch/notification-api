@@ -499,7 +499,7 @@ func TestSendPinsConfiguredEmailProvider(t *testing.T) {
 	}
 }
 
-func TestGraphAdmissionHoldsBulkWhileLegacyAdmissionContinues(t *testing.T) {
+func TestGraphAdmissionRoutesNewBulkAndPreservesLegacyReplay(t *testing.T) {
 	repo := &memoryRepository{}
 	cfg := Config{EmailProvider: "graph", GraphMailboxID: "11111111-1111-4111-8111-111111111111", DataEncryptionKey: testEncryptionKey, HashKey: testHashKey}
 	request := contracts.SendRequest{
@@ -523,8 +523,12 @@ func TestGraphAdmissionHoldsBulkWhileLegacyAdmissionContinues(t *testing.T) {
 	if err != nil || !replay.Replayed || replay.MessageID != admitted.MessageID {
 		t.Fatalf("legacy replay after switching Graph admission = %#v, %v", replay, err)
 	}
-	if _, err := graph.Send(t.Context(), "engagement-api", "graph-bulk", request); !errors.Is(err, ErrNotificationsDisabled) || len(repo.messages) != 1 {
-		t.Fatalf("Graph bulk messages=%d err=%v", len(repo.messages), err)
+	if _, err := graph.Send(t.Context(), "engagement-api", "graph-bulk", request); err != nil {
+		t.Fatalf("Graph bulk admission: %v", err)
+	}
+	bulk := repo.creates[len(repo.creates)-1]
+	if bulk.Provider != "graph" || bulk.GraphMailboxID != cfg.GraphMailboxID || bulk.ReplayOnly {
+		t.Fatalf("Graph bulk provider=%q mailbox=%q replayOnly=%v", bulk.Provider, bulk.GraphMailboxID, bulk.ReplayOnly)
 	}
 
 	cfg.EmailProvider = "graph-transactional"

@@ -224,8 +224,7 @@ func (s *Service) Send(
 			graphMailboxID = id.String()
 		}
 	}
-	replayOnly := definition.Channel == "email" && (s.config.EmailPaused ||
-		provider == "graph" && definition.DeliveryClass != templates.DeliveryClassTransactional)
+	replayOnly := definition.Channel == "email" && s.config.EmailPaused
 	created, err := s.repository.Create(ctx, store.CreateParams{
 		MessageID:         messageID,
 		DeliveryID:        uuid.NewString(),

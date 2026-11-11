@@ -261,22 +261,25 @@ func buildAPI(ctx context.Context, cfg config.Config) (apiComponents, error) {
 }
 
 func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, error) {
-	smtpConfig := providers.SMTPConfig{
-		Addr:     cfg.SMTPAddr,
-		Username: cfg.SMTPUsername,
-		Password: cfg.SMTPPassword,
-		From:     cfg.SMTPFrom,
-		FromName: cfg.SMTPFromName,
-		Logger:   log.New(os.Stdout, "", log.LstdFlags),
-	}
 	var emailProvider providers.Provider
-	if cfg.EmailProvider == "ses" {
+	switch cfg.EmailProvider {
+	case "ses":
 		ses, err := providers.NewSES(cfg.SES)
 		if err != nil {
 			return workerComponents{}, fmt.Errorf("validate SES config: %w", err)
 		}
 		emailProvider = ses
-	} else {
+	case "graph":
+		// Graph delivery is bound to each persisted mailbox pin.
+	default:
+		smtpConfig := providers.SMTPConfig{
+			Addr:     cfg.SMTPAddr,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+			FromName: cfg.SMTPFromName,
+			Logger:   log.New(os.Stdout, "", log.LstdFlags),
+		}
 		if err := providers.ValidateSMTPConfig(smtpConfig); err != nil {
 			return workerComponents{}, fmt.Errorf("validate SMTP config: %w", err)
 		}
@@ -334,9 +337,11 @@ func buildWorker(ctx context.Context, cfg config.Config) (workerComponents, erro
 		}
 		feedbackProcess = feedback.Run
 	}
-	deliveryWorker := worker.NewWithProviders(db, map[string]providers.Provider{
-		"email": emailProvider, "web_push": providers.NewWebPush(webPushConfig),
-	}, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{
+	deliveryProviders := map[string]providers.Provider{"web_push": providers.NewWebPush(webPushConfig)}
+	if emailProvider != nil {
+		deliveryProviders["email"] = emailProvider
+	}
+	deliveryWorker := worker.NewWithProviders(db, deliveryProviders, cfg.EncryptionKeys).WithEmailLimits(db, worker.EmailLimits{
 		PerMinute: cfg.SMTPEmailsPerMinute, PerHour: cfg.SMTPEmailsPerHour,
 		ReserveMinute: cfg.SMTPReservePerMinute, ReserveHour: cfg.SMTPReservePerHour,
 		GraphDailyBudget: cfg.GraphDailyBudget, GraphDailyReserve: cfg.GraphDailyReserve,

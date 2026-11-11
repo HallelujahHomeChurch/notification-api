@@ -217,8 +217,8 @@ func (w *Worker) processClaim(ctx context.Context, message queue.BrokerMessage, 
 		return message.Complete(ctx)
 	}
 	useGraph := claimed.Channel == "email" && claimed.Provider == "graph" && w.graphProvider != nil
-	if useGraph && templates.DeliveryClassFor(claimed.TemplateID, claimed.TemplateVersion) != templates.DeliveryClassTransactional {
-		if err := w.repository.markRetry(ctx, claimed, "graph_bulk_disabled", 5*time.Minute, w.newID()); err != nil {
+	if claimed.Channel == "email" && !useGraph && w.graphProvider != nil && w.providers["email"] == nil {
+		if err := w.repository.markRetry(ctx, claimed, "legacy_provider_disabled", 5*time.Minute, w.newID()); err != nil {
 			return err
 		}
 		leaseHeld = false
