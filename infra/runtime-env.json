@@ -2,6 +2,31 @@
   "resources": {
     "notification-api": {},
     "notification-migrate": {},
-    "notification-worker": {}
+    "notification-worker": {
+      "NOTIFICATION_GRAPH_WORKER_ENABLED": {
+        "value": "true"
+      },
+      "NOTIFICATION_GRAPH_SENDER_MAILBOX_ID": {
+        "value": "520af6ce-335a-4818-9f33-4b1cdfaabc40"
+      },
+      "NOTIFICATION_GRAPH_WORKER_CLIENT_ID": {
+        "value": "1ff5e427-38e4-4fb5-8887-a153b49ded73"
+      },
+      "NOTIFICATION_GRAPH_FROM": {
+        "value": "notifications@alive.org.tw"
+      },
+      "NOTIFICATION_GRAPH_FROM_NAME": {
+        "value": "哈利路亞家教會 帳號通知"
+      },
+      "NOTIFICATION_GRAPH_REPLY_TO": {
+        "value": "support@alive.org.tw"
+      },
+      "NOTIFICATION_GRAPH_DAILY_BUDGET": {
+        "value": "500"
+      },
+      "NOTIFICATION_GRAPH_DAILY_RESERVE": {
+        "value": "100"
+      }
+    }
   }
 }
