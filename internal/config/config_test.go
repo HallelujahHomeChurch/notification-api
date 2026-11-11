@@ -56,6 +56,29 @@ func TestGraphRuntimeControlsAreIndependent(t *testing.T) {
 	}
 }
 
+func TestGraphTransactionalAdmissionMode(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("EMAIL_PROVIDER", "graph-transactional")
+	cfg, err := Load()
+	if err != nil || cfg.EmailProvider != "graph-transactional" {
+		t.Fatalf("split admission config: provider=%q error=%v", cfg.EmailProvider, err)
+	}
+	api := validProductionModeConfig("api")
+	api.EmailProvider = cfg.EmailProvider
+	if err := api.Validate("api"); err == nil || !strings.Contains(err.Error(), "NOTIFICATION_GRAPH_SENDER_MAILBOX_ID") {
+		t.Fatalf("missing mailbox validation: %v", err)
+	}
+	api.Graph.SenderUserID = "11111111-1111-4111-8111-111111111111"
+	if err := api.Validate("api"); err != nil {
+		t.Fatal(err)
+	}
+	worker := validProductionModeConfig("worker")
+	worker.EmailProvider = cfg.EmailProvider
+	if err := worker.Validate("worker"); err == nil {
+		t.Fatal("worker accepted an API-only admission mode")
+	}
+}
+
 func TestEmailPauseDefaultsOff(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("NOTIFICATION_EMAIL_PAUSED", "")

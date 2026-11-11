@@ -526,6 +526,28 @@ func TestGraphAdmissionHoldsBulkWhileLegacyAdmissionContinues(t *testing.T) {
 	if _, err := graph.Send(t.Context(), "engagement-api", "graph-bulk", request); !errors.Is(err, ErrNotificationsDisabled) || len(repo.messages) != 1 {
 		t.Fatalf("Graph bulk messages=%d err=%v", len(repo.messages), err)
 	}
+
+	cfg.EmailProvider = "graph-transactional"
+	split := New(repo, cfg)
+	for _, tc := range []struct {
+		caller, key, provider, mailbox string
+		request                        contracts.SendRequest
+	}{
+		{"engagement-api", "split-bulk", "smtp", "", request},
+		{"account-api", "split-account", "graph", cfg.GraphMailboxID, validRequest()},
+		{"engagement-api", "split-push", "webpush", "", validWebPushRequest()},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			if _, err := split.Send(t.Context(), tc.caller, tc.key, tc.request); err != nil {
+				t.Fatal(err)
+			}
+			created := repo.creates[len(repo.creates)-1]
+			if created.Provider != tc.provider || created.GraphMailboxID != tc.mailbox || created.ReplayOnly {
+				t.Fatalf("provider=%q mailbox=%q replayOnly=%v", created.Provider, created.GraphMailboxID, created.ReplayOnly)
+			}
+		})
+	}
+
 	request.Payload["body"] = "Different body"
 	if _, err := graph.Send(t.Context(), "engagement-api", "legacy-bulk", request); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("legacy replay with a different payload = %v", err)
