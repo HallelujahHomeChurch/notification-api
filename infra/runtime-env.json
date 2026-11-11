@@ -1,6 +1,13 @@
 {
   "resources": {
-    "notification-api": {},
+    "notification-api": {
+      "EMAIL_PROVIDER": {
+        "value": "graph-transactional"
+      },
+      "NOTIFICATION_GRAPH_SENDER_MAILBOX_ID": {
+        "value": "520af6ce-335a-4818-9f33-4b1cdfaabc40"
+      }
+    },
     "notification-migrate": {},
     "notification-worker": {
       "NOTIFICATION_GRAPH_WORKER_ENABLED": {
