@@ -84,7 +84,10 @@ case "$1 $2" in
         fi
         ;;
       worker)
-		secrets=(notification-database-url notification-data-encryption-key notification-encryption-keys-json notification-smtp-username notification-smtp-password notification-vapid-private-key)
+		secrets=(notification-database-url notification-data-encryption-key notification-encryption-keys-json notification-vapid-private-key)
+        if [[ "${MOCK_RETIRED_SMTP_ROLES:-false}" == true ]]; then
+          secrets+=(notification-smtp-username notification-smtp-password)
+        fi
         if [[ "${MOCK_WORKER_ROLE:-false}" == true ]]; then
           secrets+=(notification-worker-eligibility-token)
         fi
@@ -148,4 +151,6 @@ if PATH="$tmp_dir:$PATH" MOCK_WRITE_SECRET_VERSION="$version" MOCK_WRITE_ROLE=fa
   echo "secret preflight accepted private writes without scoped reader roles" >&2
   exit 1
 fi
+PATH="$tmp_dir:$PATH" MOCK_RETIRED_SMTP_ROLES=true RESOURCE_GROUP=alive \
+  NOTIFICATION_VAULT_NAME=alive-notification-test "$repo_root/scripts/verify-secret-scope.sh" >/dev/null
 echo "secret scope self-test passed"

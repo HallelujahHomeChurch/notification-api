@@ -29,20 +29,14 @@ param engagementSendVersion string = ''
 param provisionPermissions bool = true
 param serviceBusNamespaceName string = 'alive-notifications-${uniqueString(subscription().id, resourceGroup().id)}'
 param queueName string = 'notifications-email'
-param smtpAddr string
-param smtpFrom string
-param smtpFromName string = '哈利路亞家教會'
 param vapidPublicKey string
 param vapidSubject string = 'mailto:support@alive.org.tw'
-param smtpAuthenticationEnabled bool = true
 @minValue(1)
 param notificationTemplateDailyLimit int = 1000
 param notificationsDisabled bool
 param notificationEmailPaused bool = false
 param activeEncryptionKeyID string = 'legacy-v1'
 param activeHashKeyID string = 'legacy-v1'
-param smtpUsernameSecretName string = 'notification-smtp-username'
-param smtpPasswordSecretName string = 'notification-smtp-password'
 param vapidPrivateKeySecretName string = 'notification-vapid-private-key'
 
 
@@ -59,7 +53,6 @@ type SesFeedbackConfig = {
 param sesFeedback SesFeedbackConfig?
 
 var sesFeedbackEnvironment = sesFeedback == null ? [] : [
-  { name: 'EMAIL_PROVIDER', value: 'smtp' }
   { name: 'SES_REGION', value: sesFeedback!.region }
   { name: 'SES_ROLE_ARN', value: sesFeedback!.roleArn }
   { name: 'SES_ENTRA_TOKEN_SCOPE', value: sesFeedback!.tokenScope }
@@ -79,16 +72,11 @@ var encryptionSecretUrl = '${vault.properties.vaultUri}secrets/notification-data
 var hashSecretUrl = '${vault.properties.vaultUri}secrets/notification-hash-key'
 var encryptionKeysSecretUrl = '${vault.properties.vaultUri}secrets/notification-encryption-keys-json'
 var hashKeysSecretUrl = '${vault.properties.vaultUri}secrets/notification-hash-keys-json'
-var smtpUsernameSecretUrl = '${vault.properties.vaultUri}secrets/${smtpUsernameSecretName}'
-var smtpPasswordSecretUrl = '${vault.properties.vaultUri}secrets/${smtpPasswordSecretName}'
 var vapidPrivateKeySecretUrl = '${vault.properties.vaultUri}secrets/${vapidPrivateKeySecretName}'
 var legacyDatabaseSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-database-url'
 var legacyEncryptionSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-data-encryption-key'
 var legacyHashSecretUrl = '${legacyVault.properties.vaultUri}secrets/notification-hash-key'
-var legacySMTPUsernameSecretUrl = '${legacyVault.properties.vaultUri}secrets/${smtpUsernameSecretName}'
-var legacySMTPPasswordSecretUrl = '${legacyVault.properties.vaultUri}secrets/${smtpPasswordSecretName}'
 var imageReference = '${registry.properties.loginServer}/alive/notification-api@${imageDigest}'
-var smtpFromParts = split(smtpFrom, '@')
 var commonEnvironment = [
   { name: 'ENVIRONMENT', value: 'production' }
   { name: 'PORT', value: '8081' }
@@ -115,24 +103,6 @@ resource vault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
 
 resource legacyVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: legacyVaultName
-}
-
-resource emailService 'Microsoft.Communication/emailServices@2023-03-31' existing = {
-  name: 'alive-email'
-}
-
-resource emailDomain 'Microsoft.Communication/emailServices/domains@2023-03-31' existing = {
-  parent: emailService
-  name: smtpFromParts[1]
-}
-
-resource emailSender 'Microsoft.Communication/emailServices/domains/senderUsernames@2023-03-31' = if (runtimePhase != 'worker') {
-  parent: emailDomain
-  name: smtpFromParts[0]
-  properties: {
-    username: smtpFromParts[0]
-    displayName: smtpFromName
-  }
 }
 
 resource serviceBus 'Microsoft.ServiceBus/namespaces@2024-01-01' existing = {
@@ -397,12 +367,7 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && 
           keyVaultUrl: '${vault.properties.vaultUri}secrets/notification-worker-eligibility-token/${workerEligibilityVersion}'
           identity: workerIdentity.id
         }
-      ], smtpAuthenticationEnabled ? [
-        { name: 'smtp-username', keyVaultUrl: legacySMTPUsernameSecretUrl, identity: workerIdentity.id }
-        { name: 'smtp-password', keyVaultUrl: legacySMTPPasswordSecretUrl, identity: workerIdentity.id }
-        { name: 'smtp-username-v2', keyVaultUrl: smtpUsernameSecretUrl, identity: workerIdentity.id }
-        { name: 'smtp-password-v2', keyVaultUrl: smtpPasswordSecretUrl, identity: workerIdentity.id }
-      ] : [])
+      ])
     }
     template: {
       revisionSuffix: empty(workerRevisionSuffix) ? null : workerRevisionSuffix
@@ -417,19 +382,13 @@ resource worker 'Microsoft.App/containerApps@2025-01-01' = if (deployRuntime && 
             { name: 'NOTIFICATION_DATA_ENCRYPTION_KEY', secretRef: 'data-encryption-key-v2' }
             { name: 'NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID', value: activeEncryptionKeyID }
             { name: 'NOTIFICATION_ENCRYPTION_KEYS_JSON', secretRef: 'encryption-keys-json-v2' }
-            { name: 'SMTP_ADDR', value: smtpAddr }
-            { name: 'SMTP_FROM', value: smtpFrom }
-            { name: 'SMTP_FROM_NAME', value: smtpFromName }
             { name: 'VAPID_PUBLIC_KEY', value: vapidPublicKey }
             { name: 'VAPID_PRIVATE_KEY', secretRef: 'vapid-private-key' }
             { name: 'VAPID_SUBJECT', value: vapidSubject }
             { name: 'NOTIFICATION_EMAIL_PAUSED', value: toLower(string(notificationEmailPaused)) }
           ], empty(workerEligibilityVersion) ? [] : [
             { name: 'NOTIFICATION_WORKER_ELIGIBILITY_TOKEN', secretRef: 'notification-worker-eligibility-token' }
-          ], smtpAuthenticationEnabled ? [
-            { name: 'SMTP_USERNAME', secretRef: 'smtp-username-v2' }
-            { name: 'SMTP_PASSWORD', secretRef: 'smtp-password-v2' }
-          ] : [], sesFeedbackEnvironment), entry => !contains(runtimeOverrides['notification-worker'], entry.name)), configuredEnv['notification-worker'])
+          ], sesFeedbackEnvironment), entry => !contains(runtimeOverrides['notification-worker'], entry.name)), configuredEnv['notification-worker'])
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
