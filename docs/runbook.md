@@ -775,7 +775,19 @@ set worker and API controls independently.
 | Process | Reviewed configuration |
 | --- | --- |
 | Worker | `NOTIFICATION_GRAPH_WORKER_ENABLED=true`, `NOTIFICATION_GRAPH_SENDER_MAILBOX_ID`, `NOTIFICATION_GRAPH_WORKER_CLIENT_ID`, `NOTIFICATION_GRAPH_FROM`, optional `NOTIFICATION_GRAPH_FROM_NAME`, positive `NOTIFICATION_GRAPH_DAILY_BUDGET`, and optional smaller `NOTIFICATION_GRAPH_DAILY_RESERVE`. Keep the existing legacy `EMAIL_PROVIDER`. |
-| API | `EMAIL_PROVIDER=graph` and the same `NOTIFICATION_GRAPH_SENDER_MAILBOX_ID`. The API requires only the mailbox pin and rejects worker identity mode. |
+| API | For a staged cutover, `EMAIL_PROVIDER=graph-transactional` and the same `NOTIFICATION_GRAPH_SENDER_MAILBOX_ID`. The API requires only the mailbox pin and rejects worker identity mode. |
+
+Release the Graph-capable worker with its named identity before changing API
+admission. In `graph-transactional` mode the API pins new transactional mail to
+Graph and new bulk mail to SMTP. Keep the worker's legacy provider set to
+`smtp` in this mode. Returning API admission to `smtp` affects new work.
+Keep Graph dispatch available until existing Graph pins have drained or been
+reconciled.
+
+Set the worker's optional `NOTIFICATION_GRAPH_REPLY_TO` to a single monitored
+support address. Keep `NOTIFICATION_GRAPH_FROM` and the mailbox pin on the
+dedicated sender. During the canary, reply from Gmail and Outlook and confirm
+that the support inbox receives both replies.
 
 The worker routes each delivery by its persisted provider and validates the
 exact mailbox before obtaining a token. Existing SMTP/SES pins retain their

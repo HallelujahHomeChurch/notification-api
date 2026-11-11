@@ -101,6 +101,9 @@ func writeMultipartMessage(writer io.Writer, from string, payload DeliveryPayloa
 
 func messageHeaders(from string, payload DeliveryPayload, extra ...string) []string {
 	headers := []string{"From: " + from, "To: " + payload.Recipient, "Subject: " + mime.QEncoding.Encode("UTF-8", payload.Subject), "Message-ID: " + payload.MessageID, "MIME-Version: 1.0"}
+	if payload.replyTo != "" {
+		headers = append(headers, "Reply-To: "+payload.replyTo)
+	}
 	if payload.ListUnsubscribe != "" {
 		headers = append(headers, "List-Unsubscribe: "+payload.ListUnsubscribe)
 		if payload.OneClickUnsubscribe {

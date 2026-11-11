@@ -210,6 +210,12 @@ func (s *Service) Send(
 	provider, graphMailboxID := "webpush", ""
 	if definition.Channel == "email" {
 		provider = s.config.EmailProvider
+		if provider == "graph-transactional" {
+			provider = "graph"
+			if definition.DeliveryClass == templates.DeliveryClassBulk {
+				provider = "smtp"
+			}
+		}
 		if provider == "graph" {
 			id, err := uuid.Parse(s.config.GraphMailboxID)
 			if err != nil || id == uuid.Nil || id.String() != s.config.GraphMailboxID {

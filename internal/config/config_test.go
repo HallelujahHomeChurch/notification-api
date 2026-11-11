@@ -56,6 +56,39 @@ func TestGraphRuntimeControlsAreIndependent(t *testing.T) {
 	}
 }
 
+func TestGraphTransactionalAdmissionMode(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("EMAIL_PROVIDER", "graph-transactional")
+	cfg, err := Load()
+	if err != nil || cfg.EmailProvider != "graph-transactional" {
+		t.Fatalf("split admission config: provider=%q error=%v", cfg.EmailProvider, err)
+	}
+	api := validProductionModeConfig("api")
+	api.EmailProvider = cfg.EmailProvider
+	if err := api.Validate("api"); err == nil || !strings.Contains(err.Error(), "NOTIFICATION_GRAPH_SENDER_MAILBOX_ID") {
+		t.Fatalf("missing mailbox validation: %v", err)
+	}
+	api.Graph.SenderUserID = "11111111-1111-4111-8111-111111111111"
+	if err := api.Validate("api"); err != nil {
+		t.Fatal(err)
+	}
+	worker := validProductionModeConfig("worker")
+	worker.EmailProvider = cfg.EmailProvider
+	if err := worker.Validate("worker"); err == nil {
+		t.Fatal("worker accepted an API-only admission mode")
+	}
+}
+
+func TestGraphWorkerLoadsReplyTo(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("NOTIFICATION_GRAPH_WORKER_ENABLED", "true")
+	t.Setenv("NOTIFICATION_GRAPH_REPLY_TO", "support@example.test")
+	cfg, err := Load()
+	if err != nil || cfg.Graph.ReplyTo != "support@example.test" {
+		t.Fatalf("Graph Reply-To = %q, err = %v", cfg.Graph.ReplyTo, err)
+	}
+}
+
 func TestEmailPauseDefaultsOff(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("NOTIFICATION_EMAIL_PAUSED", "")
@@ -563,6 +596,7 @@ func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
 		"SES_FEEDBACK_DLQ_URL", "SES_FEEDBACK_QUEUE_URL", "SES_FEEDBACK_TOPIC_ARN", "EMAIL_PROVIDER", "SES_REGION", "SES_ROLE_ARN", "SES_ENTRA_TOKEN_SCOPE", "SES_CONFIGURATION_SET", "SES_FROM", "AZURE_CLIENT_ID",
+		"NOTIFICATION_GRAPH_WORKER_ENABLED", "NOTIFICATION_GRAPH_REPLY_TO",
 		"ENVIRONMENT", "PORT", "DATABASE_URL", "NOTIFICATION_WORKER_ELIGIBILITY_TOKEN", "NOTIFICATION_ALLOWED_CALLERS", "NOTIFICATION_ENGAGEMENT_STATUS_TOKEN", "NOTIFICATION_ACCOUNT_PRIVATE_TOKEN", "NOTIFICATION_ENGAGEMENT_SEND_TOKEN",
 		"NOTIFICATION_ALLOW_DEV_CALLER_HEADER", "NOTIFICATION_DATA_ENCRYPTION_KEY", "NOTIFICATION_HASH_KEY",
 		"NOTIFICATION_ACTIVE_ENCRYPTION_KEY_ID", "NOTIFICATION_ENCRYPTION_KEYS_JSON",

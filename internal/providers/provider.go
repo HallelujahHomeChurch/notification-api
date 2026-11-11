@@ -29,6 +29,7 @@ type DeliveryPayload struct {
 	MessageID           string
 	ListUnsubscribe     string
 	OneClickUnsubscribe bool
+	replyTo             string
 }
 
 type ProviderReceipt struct {

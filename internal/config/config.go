@@ -165,6 +165,7 @@ func Load() (Config, error) {
 		graph.ManagedIdentityClientID = os.Getenv("NOTIFICATION_GRAPH_WORKER_CLIENT_ID")
 		graph.From = os.Getenv("NOTIFICATION_GRAPH_FROM")
 		graph.FromName = os.Getenv("NOTIFICATION_GRAPH_FROM_NAME")
+		graph.ReplyTo = os.Getenv("NOTIFICATION_GRAPH_REPLY_TO")
 		graphDailyBudget, err = intEnv("NOTIFICATION_GRAPH_DAILY_BUDGET", 0)
 		if err != nil {
 			return Config{}, err
@@ -238,8 +239,10 @@ func Load() (Config, error) {
 }
 
 func (c Config) validateLoaded() error {
-	if c.EmailProvider != "" && c.EmailProvider != "smtp" && c.EmailProvider != "ses" && c.EmailProvider != "graph" {
-		return fmt.Errorf("EMAIL_PROVIDER must be smtp, ses or graph")
+	switch c.EmailProvider {
+	case "", "smtp", "ses", "graph", "graph-transactional":
+	default:
+		return fmt.Errorf("EMAIL_PROVIDER must be smtp, ses, graph or graph-transactional")
 	}
 	if c.Environment != EnvironmentDevelopment && c.Environment != EnvironmentProduction {
 		return fmt.Errorf("ENVIRONMENT must be development or production")
@@ -269,7 +272,7 @@ func (c Config) Validate(mode string) error {
 		if c.GraphWorkerEnabled {
 			return fmt.Errorf("NOTIFICATION_GRAPH_WORKER_ENABLED is worker-only")
 		}
-		if c.EmailProvider == "graph" {
+		if c.EmailProvider == "graph" || c.EmailProvider == "graph-transactional" {
 			id, err := uuid.Parse(c.Graph.SenderUserID)
 			if err != nil || id == uuid.Nil || id.String() != c.Graph.SenderUserID {
 				return fmt.Errorf("NOTIFICATION_GRAPH_SENDER_MAILBOX_ID must be a canonical nonzero UUID")

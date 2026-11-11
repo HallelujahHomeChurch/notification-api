@@ -24,6 +24,7 @@ type GraphConfig struct {
 	ManagedIdentityClientID string
 	From                    string
 	FromName                string
+	ReplyTo                 string
 	Logger                  *log.Logger
 }
 
@@ -39,6 +40,9 @@ func ValidateGraphConfig(config GraphConfig) error {
 	}
 	if !plainAddress(config.From) || strings.ContainsAny(config.FromName, "\r\n") {
 		return errors.New("invalid Graph sender")
+	}
+	if config.ReplyTo != "" && (strings.ContainsAny(config.ReplyTo, "\r\n") || !plainAddress(config.ReplyTo)) {
+		return errors.New("invalid Graph reply-to address")
 	}
 	return nil
 }
@@ -72,6 +76,7 @@ func (g *Graph) Prepare(ctx context.Context, payload DeliveryPayload) (func(cont
 	if err := validateEmailPayload(payload); err != nil {
 		return nil, g.failure(ErrorInvalidEndpoint, "validate", 0, "", 0)
 	}
+	payload.replyTo = g.config.ReplyTo
 	var mime bytes.Buffer
 	if err := writeEmailMIME(&mime, g.config.From, g.config.FromName, payload); err != nil {
 		return nil, g.failure(ErrorInvalidEndpoint, "message", 0, "", 0)
