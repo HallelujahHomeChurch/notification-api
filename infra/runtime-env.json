@@ -1,6 +1,9 @@
 {
   "resources": {
     "notification-api": {
+      "DB_MAX_OPEN_CONNS": {
+        "value": "10"
+      },
       "EMAIL_PROVIDER": {
         "value": "graph"
       },
@@ -10,6 +13,9 @@
     },
     "notification-migrate": {},
     "notification-worker": {
+      "DB_MAX_OPEN_CONNS": {
+        "value": "10"
+      },
       "EMAIL_PROVIDER": {
         "value": "graph"
       },
