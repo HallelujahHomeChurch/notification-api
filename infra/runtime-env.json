@@ -37,6 +37,14 @@
       "NOTIFICATION_GRAPH_DAILY_RESERVE": {
         "value": "500"
       },
+      "SES_REGION": null,
+      "SES_ROLE_ARN": null,
+      "SES_ENTRA_TOKEN_SCOPE": null,
+      "SES_FROM": null,
+      "SES_CONFIGURATION_SET": null,
+      "SES_FEEDBACK_QUEUE_URL": null,
+      "SES_FEEDBACK_DLQ_URL": null,
+      "SES_FEEDBACK_TOPIC_ARN": null,
       "SMTP_ADDR": null,
       "SMTP_FROM": null,
       "SMTP_FROM_NAME": null,
